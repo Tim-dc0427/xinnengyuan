@@ -1,0 +1,1 @@
+import{s as e,l as a,p as o,_ as s,R as t,L as n}from"./index-DYQjj2Un.js";const r={class:"page-container"},u=e({__name:"ScenarioHub",setup(c){return(_,p)=>(n(),a("div",r,[o(s(t))]))}});export{u as default};

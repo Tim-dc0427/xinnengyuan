@@ -1,0 +1,238 @@
+import { v4 as uuid } from 'uuid'
+import type { Knex } from 'knex'
+
+export async function seed(knex: Knex): Promise<void> {
+  await knex('storage_entities').del()
+  await knex('load_entities').del()
+
+  const buses = await knex('grid_buses').select('id', 'name', 'voltage_level', 'zone', 'longitude', 'latitude')
+  const busMap: Record<string, any> = {}
+  for (const b of buses) {
+    const bus = b as any
+    busMap[bus.name] = bus.id
+  }
+
+  const now = new Date().toISOString()
+
+  // ==================== 负荷实体 ====================
+  interface LoadDef {
+    name: string; loadType: string; busName: string
+    peakLoadKw: number; annualConsumptionMwh: number
+    zone: string; voltageLevel: string
+    longitude: number; latitude: number; address: string
+  }
+
+  const loadDefs: LoadDef[] = [
+    {
+      name: '钱塘区临江工业园负荷',
+      loadType: 'INDUSTRIAL',
+      busName: '钱塘变220kV',
+      peakLoadKw: 80000,
+      annualConsumptionMwh: 350000,
+      zone: '钱塘区',
+      voltageLevel: '220kV',
+      longitude: 120.57,
+      latitude: 30.28,
+      address: '杭州市钱塘区临江街道',
+    },
+    {
+      name: '余杭区未来科技城负荷',
+      loadType: 'COMMERCIAL',
+      busName: '余杭变220kV',
+      peakLoadKw: 45000,
+      annualConsumptionMwh: 180000,
+      zone: '余杭区',
+      voltageLevel: '220kV',
+      longitude: 120.02,
+      latitude: 30.28,
+      address: '杭州市余杭区未来科技城',
+    },
+    {
+      name: '萧山区居民负荷聚合',
+      loadType: 'RESIDENTIAL',
+      busName: '萧山变220kV',
+      peakLoadKw: 30000,
+      annualConsumptionMwh: 120000,
+      zone: '萧山区',
+      voltageLevel: '220kV',
+      longitude: 120.26,
+      latitude: 30.18,
+      address: '杭州市萧山区',
+    },
+    {
+      name: '临安区农业灌溉负荷',
+      loadType: 'AGRICULTURAL',
+      busName: '临安变110kV',
+      peakLoadKw: 5000,
+      annualConsumptionMwh: 8000,
+      zone: '临安区',
+      voltageLevel: '110kV',
+      longitude: 119.72,
+      latitude: 30.23,
+      address: '杭州市临安区',
+    },
+    {
+      name: '滨江区市政照明负荷',
+      loadType: 'MUNICIPAL',
+      busName: '滨江变220kV',
+      peakLoadKw: 8000,
+      annualConsumptionMwh: 15000,
+      zone: '滨江区',
+      voltageLevel: '220kV',
+      longitude: 120.20,
+      latitude: 30.21,
+      address: '杭州市滨江区',
+    },
+  ]
+
+  const insertedLoads: any[] = []
+  for (const def of loadDefs) {
+    const busId = busMap[def.busName]
+    if (!busId) {
+      console.log(`  ⚠ Bus "${def.busName}" not found, skipping load ${def.name}`)
+      continue
+    }
+    insertedLoads.push({
+      id: uuid(),
+      name: def.name,
+      load_type: def.loadType,
+      bus_id: busId,
+      voltage_level: def.voltageLevel,
+      peak_load_kw: def.peakLoadKw,
+      annual_consumption_mwh: def.annualConsumptionMwh,
+      zone: def.zone,
+      address: def.address,
+      longitude: def.longitude,
+      latitude: def.latitude,
+      status: 'active',
+      created_at: now,
+    })
+  }
+
+  if (insertedLoads.length > 0) {
+    await knex('load_entities').insert(insertedLoads)
+    for (const l of insertedLoads) {
+      console.log(`  ✓ 负荷: ${l.name} (${l.peak_load_kw}kW)`)
+    }
+  }
+
+  // ==================== 储能实体 ====================
+  interface StorageDef {
+    name: string; storageType: string; busName: string
+    ratedPowerKw: number; ratedCapacityKwh: number; efficiencyPct: number
+    chargeMode: string; zone: string; voltageLevel: string
+    longitude: number; latitude: number
+  }
+
+  const storageDefs: StorageDef[] = [
+    {
+      name: '钱塘储能站一期',
+      storageType: 'BATTERY',
+      busName: '钱塘变220kV',
+      ratedPowerKw: 50000,
+      ratedCapacityKwh: 200000,
+      efficiencyPct: 92,
+      chargeMode: 'PEAK_SHAVING',
+      zone: '钱塘区',
+      voltageLevel: '220kV',
+      longitude: 120.56,
+      latitude: 30.27,
+    },
+    {
+      name: '余杭储能站',
+      storageType: 'BATTERY',
+      busName: '余杭变220kV',
+      ratedPowerKw: 30000,
+      ratedCapacityKwh: 100000,
+      efficiencyPct: 90,
+      chargeMode: 'FREQ_REGULATION',
+      zone: '余杭区',
+      voltageLevel: '220kV',
+      longitude: 120.03,
+      latitude: 30.29,
+    },
+    {
+      name: '临安抽水蓄能站',
+      storageType: 'PUMPED_HYDRO',
+      busName: '临安变110kV',
+      ratedPowerKw: 100000,
+      ratedCapacityKwh: 800000,
+      efficiencyPct: 78,
+      chargeMode: 'ARBITRAGE',
+      zone: '临安区',
+      voltageLevel: '110kV',
+      longitude: 119.70,
+      latitude: 30.24,
+    },
+  ]
+
+  const insertedStorages: any[] = []
+  for (const def of storageDefs) {
+    const busId = busMap[def.busName]
+    if (!busId) {
+      console.log(`  ⚠ Bus "${def.busName}" not found, skipping storage ${def.name}`)
+      continue
+    }
+    insertedStorages.push({
+      id: uuid(),
+      name: def.name,
+      storage_type: def.storageType,
+      bus_id: busId,
+      rated_power_kw: def.ratedPowerKw,
+      rated_capacity_kwh: def.ratedCapacityKwh,
+      efficiency_pct: def.efficiencyPct,
+      charge_mode: def.chargeMode,
+      voltage_level: def.voltageLevel,
+      zone: def.zone,
+      longitude: def.longitude,
+      latitude: def.latitude,
+      status: 'active',
+      created_at: now,
+    })
+  }
+
+  if (insertedStorages.length > 0) {
+    await knex('storage_entities').insert(insertedStorages)
+    for (const s of insertedStorages) {
+      console.log(`  ✓ 储能: ${s.name} (${s.rated_power_kw}kW/${s.rated_capacity_kwh}kWh)`)
+    }
+  }
+
+  // ==================== 接入关系：负荷→母线、储能→母线 ====================
+  const connAttrs: any[] = []
+
+  for (const l of insertedLoads) {
+    connAttrs.push({
+      id: uuid(),
+      source_node_type: 'LOAD',
+      source_node_id: l.id,
+      target_node_type: 'GRID',
+      target_node_id: l.bus_id,
+      flow_direction: 'REVERSE',
+      max_capacity_kw: l.peak_load_kw,
+      control_logic: JSON.stringify({ mode: 'demand_response', description: `${l.name} 接入控制` }),
+      status: 'active',
+      created_at: now,
+    })
+  }
+
+  for (const s of insertedStorages) {
+    connAttrs.push({
+      id: uuid(),
+      source_node_type: 'STORAGE',
+      source_node_id: s.id,
+      target_node_type: 'GRID',
+      target_node_id: s.bus_id,
+      flow_direction: 'BIDIRECTIONAL',
+      max_capacity_kw: s.rated_power_kw,
+      control_logic: JSON.stringify({ mode: s.charge_mode?.toLowerCase() || 'peak_shaving', description: `${s.name} 充放电控制` }),
+      status: 'active',
+      created_at: now,
+    })
+  }
+
+  if (connAttrs.length > 0) {
+    await knex('resource_connection_attrs').insert(connAttrs)
+    console.log(`  ✓ ${connAttrs.length} connection attrs created (loads + storages)`)
+  }
+}

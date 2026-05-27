@@ -1,0 +1,107 @@
+import type { Knex } from 'knex'
+
+export async function up(knex: Knex): Promise<void> {
+  await knex.schema.createTable('interactive_scenarios', (t) => {
+    t.text('id').primary()
+    t.text('name').notNullable()
+    t.text('type').notNullable()
+    t.text('description')
+    t.text('config')
+    t.text('control_logic')
+    t.text('tags')
+    t.text('status').defaultTo('draft')
+    t.text('created_by')
+    t.text('created_at')
+    t.text('updated_at')
+  })
+  await knex.raw('CREATE INDEX IF NOT EXISTS idx_isc_name ON interactive_scenarios(name)')
+  await knex.raw('CREATE INDEX IF NOT EXISTS idx_isc_type ON interactive_scenarios(type)')
+  await knex.raw('CREATE INDEX IF NOT EXISTS idx_isc_status ON interactive_scenarios(status)')
+
+  await knex.schema.createTable('scenario_versions', (t) => {
+    t.text('id').primary()
+    t.text('scenario_id').notNullable().references('id').inTable('interactive_scenarios').onDelete('CASCADE')
+    t.integer('version_number').notNullable()
+    t.text('config_snapshot')
+    t.text('control_logic_snapshot')
+    t.text('changelog')
+    t.text('created_by')
+    t.text('created_at')
+  })
+  await knex.raw('CREATE INDEX IF NOT EXISTS idx_sv_scenario ON scenario_versions(scenario_id)')
+
+  await knex.schema.createTable('scenario_strategies', (t) => {
+    t.text('id').primary()
+    t.text('scenario_id').notNullable().references('id').inTable('interactive_scenarios').onDelete('CASCADE')
+    t.text('name').notNullable()
+    t.text('strategy_type').notNullable()
+    t.text('config')
+    t.text('constraints')
+    t.text('economic_targets')
+    t.text('generated_by_algorithm').defaultTo('0')
+    t.text('status').defaultTo('draft')
+    t.text('created_at')
+    t.text('updated_at')
+  })
+  await knex.raw('CREATE INDEX IF NOT EXISTS idx_sst_scenario ON scenario_strategies(scenario_id)')
+
+  await knex.schema.createTable('scenario_simulations', (t) => {
+    t.text('id').primary()
+    t.text('scenario_id').notNullable().references('id').inTable('interactive_scenarios').onDelete('CASCADE')
+    t.text('strategy_id').references('id').inTable('scenario_strategies')
+    t.text('status').defaultTo('pending')
+    t.text('boundary_conditions')
+    t.text('time_range')
+    t.integer('progress').defaultTo(0)
+    t.text('started_at')
+    t.text('completed_at')
+    t.text('created_by')
+  })
+  await knex.raw('CREATE INDEX IF NOT EXISTS idx_ssim_scenario ON scenario_simulations(scenario_id)')
+
+  await knex.schema.createTable('simulation_metrics', (t) => {
+    t.text('id').primary()
+    t.text('simulation_id').notNullable().references('id').inTable('scenario_simulations').onDelete('CASCADE')
+    t.text('timestamp').notNullable()
+    t.text('metric_type').notNullable()
+    t.text('unit')
+    t.float('value').notNullable()
+    t.float('threshold')
+    t.integer('is_violation').defaultTo(0)
+  })
+  await knex.raw('CREATE INDEX IF NOT EXISTS idx_sm_sim ON simulation_metrics(simulation_id)')
+
+  await knex.schema.createTable('scenario_evaluations', (t) => {
+    t.text('id').primary()
+    t.text('simulation_id').notNullable().references('id').inTable('scenario_simulations').onDelete('CASCADE')
+    t.text('strategy_id').references('id').inTable('scenario_strategies')
+    t.text('execution_log')
+    t.text('evaluation_report')
+    t.float('effectiveness_score')
+    t.text('issues')
+    t.text('suggestions')
+    t.text('created_at')
+  })
+
+  await knex.schema.createTable('scenario_interventions', (t) => {
+    t.text('id').primary()
+    t.text('scenario_id').notNullable().references('id').inTable('interactive_scenarios').onDelete('CASCADE')
+    t.text('simulation_id').references('id').inTable('scenario_simulations')
+    t.text('operation_type').notNullable()
+    t.text('operation_params')
+    t.text('operator').notNullable()
+    t.text('reason')
+    t.text('operated_at')
+  })
+  await knex.raw('CREATE INDEX IF NOT EXISTS idx_sint_scenario ON scenario_interventions(scenario_id)')
+}
+
+export async function down(knex: Knex): Promise<void> {
+  await knex.schema.dropTableIfExists('scenario_interventions')
+  await knex.schema.dropTableIfExists('scenario_evaluations')
+  await knex.schema.dropTableIfExists('simulation_metrics')
+  await knex.schema.dropTableIfExists('scenario_simulations')
+  await knex.schema.dropTableIfExists('scenario_strategies')
+  await knex.schema.dropTableIfExists('scenario_versions')
+  await knex.schema.dropTableIfExists('interactive_scenarios')
+}

@@ -1,0 +1,1 @@
+import{s as e,l as a,p as t,_ as o,R as s,L as n}from"./index-DCStS4XM.js";const r={class:"page-container"},d=e({__name:"IndicatorOverview",setup(c){return(_,i)=>(n(),a("div",r,[t(o(s))]))}});export{d as default};

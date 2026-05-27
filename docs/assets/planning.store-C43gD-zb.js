@@ -1,0 +1,1 @@
+import{t as i,N as o}from"./index-DYQjj2Un.js";import{k as s}from"./planning-CGXQ67XT.js";const c=i("planning",()=>{const a=o([]);function t(e){a.value=e}async function n(){try{a.value=await s()}catch{a.value=[]}}return{candidates:a,setCandidates:t,loadCandidates:n}});export{c as u};
