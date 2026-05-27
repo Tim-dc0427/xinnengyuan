@@ -3,11 +3,8 @@ import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 
 export default defineConfig({
-  base: '/xinnengyuan/',
+  base: '/',
   plugins: [vue()],
-  build: {
-    outDir: '../docs',
-  },
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
