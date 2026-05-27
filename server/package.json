@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js",
+    "start": "tsx src/index.ts",
+    "start:prod": "tsx src/common/db/run-migrate.ts && tsx src/index.ts",
     "migrate": "tsx src/common/db/run-migrate.ts",
     "migrate:rollback": "knex migrate:rollback --knexfile src/common/db/knexfile.ts",
     "seed": "tsx src/common/db/run-seed.ts",
@@ -16,6 +17,7 @@
   "dependencies": {
     "@new-energy/shared": "*",
     "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^12.10.0",
     "bullmq": "^5.34.0",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
@@ -25,6 +27,7 @@
     "jsonwebtoken": "^9.0.2",
     "knex": "^3.1.0",
     "pg": "^8.13.0",
+    "tsx": "^4.19.0",
     "uuid": "^11.0.0",
     "winston": "^3.17.0",
     "ws": "^8.18.0",
@@ -39,7 +42,7 @@
     "@types/uuid": "^10.0.0",
     "@types/ws": "^8.5.13",
     "supertest": "^7.0.0",
-    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
     "vitest": "^2.1.0"
   }
 }

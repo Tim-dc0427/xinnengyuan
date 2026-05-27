@@ -6,10 +6,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const isDev = process.env.NODE_ENV !== 'production'
 
+const dbPath = process.env.DB_PATH || path.join(__dirname, '..', '..', 'data.db')
+
 export const db = knex({
   client: 'better-sqlite3',
   connection: {
-    filename: path.join(__dirname, '..', '..', 'data.db'),
+    filename: dbPath,
   },
   useNullAsDefault: true,
   pool: {
