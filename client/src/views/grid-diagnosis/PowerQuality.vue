@@ -30,6 +30,7 @@ const historyEvents = ref([
 
 <template>
   <div class="page-container">
+    <div class="chart-panel-title">供电质量</div>
     <div class="chart-panel">
       <div class="chart-panel-title">并网点电压波动监测</div>
       <ChartContainer :option="voltageChart" height="350px" />

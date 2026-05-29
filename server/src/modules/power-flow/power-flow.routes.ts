@@ -43,6 +43,7 @@ powerFlowRoutes.post('/history/cleanup', auth(['admin', 'planner']), ctrl.cleanu
 
 // Curve Templates (version controlled)
 powerFlowRoutes.get('/model-params/curve-templates', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.listCurveTemplates)
+powerFlowRoutes.get('/model-params/curve-templates/all', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.listAllCurveTemplates)
 powerFlowRoutes.post('/model-params/curve-templates', auth(['admin', 'planner']), ctrl.createCurveTemplate)
 powerFlowRoutes.put('/model-params/curve-templates/:id', auth(['admin', 'planner']), ctrl.updateCurveTemplate)
 powerFlowRoutes.delete('/model-params/curve-templates/:id', auth(['admin', 'planner']), ctrl.deleteCurveTemplate)

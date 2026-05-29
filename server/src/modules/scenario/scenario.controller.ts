@@ -44,6 +44,11 @@ export class ScenarioController {
     res.json({ code: 200, message: '复制成功', data })
   }
 
+  batchCopyScenarios = async (req: Request, res: Response) => {
+    const data = await this.service.batchCopyScenarios(req.body.ids)
+    res.json({ code: 200, message: `已复制 ${data.copied} 个场景`, data })
+  }
+
   getScenarioVersions = async (req: Request, res: Response) => {
     const data = await this.service.getScenarioVersions(req.params.id)
     res.json({ code: 200, message: 'ok', data })
@@ -123,8 +128,30 @@ export class ScenarioController {
     res.json({ code: 200, message: '模拟已停止', data })
   }
 
+  pauseSimulation = async (req: Request, res: Response) => {
+    const data = await this.service.pauseSimulation(req.params.id)
+    res.json({ code: 200, message: '模拟已暂停', data })
+  }
+
+  resumeSimulation = async (req: Request, res: Response) => {
+    const data = await this.service.resumeSimulation(req.params.id)
+    res.json({ code: 200, message: '模拟已恢复', data })
+  }
+
+  updateSimulationParams = async (req: Request, res: Response) => {
+    const data = await this.service.updateSimulationParams(req.params.id, req.body)
+    res.json({ code: 200, message: '参数已更新', data })
+  }
+
   getSimulationResults = async (req: Request, res: Response) => {
     const data = await this.service.getSimulationResults(req.params.id)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
+  getSimulationLive = async (req: Request, res: Response) => {
+    const sinceStep = parseInt(req.query.since_step as string, 10) || 0
+    const data = await this.service.getSimulationLive(req.params.id, sinceStep)
+    if (!data) return res.status(404).json({ code: 404, message: '模拟记录不存在' })
     res.json({ code: 200, message: 'ok', data })
   }
 
@@ -146,6 +173,14 @@ export class ScenarioController {
     res.json({ code: 200, message: '评估报告已生成', data })
   }
 
+  exportEvaluation = async (req: Request, res: Response) => {
+    const format = (req.query.format as string) === 'pdf' ? 'pdf' : 'word'
+    const result = await this.service.exportEvaluation(req.params.id, format)
+    res.setHeader('Content-Type', result.contentType)
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(result.filename)}"`)
+    res.send(result.buffer)
+  }
+
   // ==================== 人工干预 ====================
 
   listInterventions = async (req: Request, res: Response) => {
@@ -156,6 +191,11 @@ export class ScenarioController {
   createIntervention = async (req: Request, res: Response) => {
     const data = await this.service.createIntervention(req.body, (req as any).user!.id)
     res.json({ code: 200, message: '干预记录已创建', data })
+  }
+
+  exportInterventions = async (req: Request, res: Response) => {
+    const data = await this.service.exportInterventions(req.query as any)
+    res.json({ code: 200, message: 'ok', data })
   }
 
   getRunningSimulations = async (_req: Request, res: Response) => {

@@ -161,6 +161,7 @@ onUnmounted(() => stopPolling())
 
 <template>
   <div class="task-management">
+    <div class="chart-panel-title">异步计算及进度跟踪</div>
     <div class="chart-panel">
       <div class="chart-panel-title">异步计算及进度跟踪</div>
       <div class="filter-bar">

@@ -500,9 +500,6 @@ async function saveCurrentAsVariant(name: string) {
     const roi = await roiAnalysis({
       capacityKw: computedAbsorptionKw.value || 50000,
       investment: computedTotalInvestment.value * 10000 || 47300000,
-      storageConfig: editingStorage.value,
-      reactiveCompConfig: editingReactive.value,
-      lineModification: editingLineMod.value,
     })
     irrPct = roi.financialIndicators.irrPct
     npv = roi.financialIndicators.npv
@@ -592,6 +589,7 @@ onMounted(() => {
 
 <template>
   <div>
+    <div class="chart-panel-title">消纳方案智能编制</div>
     <div class="sub-tabs" style="margin-bottom:12px">
       <span :class="['sub-tab', { active: activeTab === 'generation' }]" @click="activeTab = 'generation'">方案编制</span>
       <span :class="['sub-tab', { active: activeTab === 'detail' }]" @click="activeTab = 'detail'">方案详情</span>

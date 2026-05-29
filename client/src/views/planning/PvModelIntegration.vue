@@ -1,18 +1,43 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import StatCard from '@/components/common/StatCard.vue'
-import { fetchPvStations, createPvStation, updatePvStation, deletePvStation, fetchCostLibrary, createCostLibraryItem } from '@/api/planning'
-import type { PvStation, PvCostLibraryItem } from '@new-energy/shared'
+import { ref, onMounted, computed, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  fetchPvStations, createPvStation, updatePvStation, deletePvStation,
+  fetchCostLibrary, upsertCostLibraryItem,
+  fetchPvModelTypes, createPvModelType, updatePvModelType, deletePvModelType,
+  fetchModelTypeFields, saveModelTypeFields,
+  fetchFieldLibrary, createFieldLibraryItem,
+} from '@/api/planning'
+import type { PvModelType, PvModelTypeField } from '@new-energy/shared'
 
 const loading = ref(false)
-const stations = ref<PvStation[]>([])
-const costLibrary = ref<PvCostLibraryItem[]>([])
+const stations = ref<any[]>([])
+const costData = ref<{ unitCostPerKw?: number; remark?: string } | null>(null)
+const modelTypes = ref<PvModelType[]>([])
 const dialogVisible = ref(false)
 const costDialogVisible = ref(false)
-const editingStation = ref<Partial<PvStation> | null>(null)
-const stationForm = ref<Partial<PvStation>>({})
-const costForm = ref<Partial<PvCostLibraryItem>>({})
-const activeTab = ref<'stations' | 'cost'>('stations')
+const costEditForm = ref({ unitCostPerKw: 0, remark: '' })
+const editingStation = ref<any>(null)
+const stationForm = ref<Record<string, any>>({ name: '', modelTypeId: '', customFields: {} })
+const activeTab = ref<'stations' | 'cost' | 'tools'>('stations')
+
+// ==================== 规划工具 ====================
+const selectedModelType = ref<PvModelType | null>(null)
+const modelTypeFields = ref<PvModelTypeField[]>([])
+const typeDialogVisible = ref(false)
+const typeEditMode = ref(false)
+const typeForm = ref({ name: '', code: '', description: '', sortOrder: 0 })
+
+const fieldDialogVisible = ref(false)
+const fieldEditIdx = ref(-1)
+const fieldForm = ref({ fieldCode: '', fieldName: '', fieldType: 'text', fieldOptions: '', isRequired: false, category: '基础信息' })
+
+const fieldTypeOptions = [
+  { label: '文本', value: 'text' },
+  { label: '数字', value: 'number' },
+  { label: '下拉选择', value: 'select' },
+  { label: '日期', value: 'date' },
+]
 
 async function loadStations() {
   loading.value = true
@@ -23,35 +48,94 @@ async function loadStations() {
   }
 }
 
-async function loadCostLibrary() {
+const costModelTypeId = ref('')
+
+async function loadCostData() {
+  if (!costModelTypeId.value) return
   try {
-    costLibrary.value = await fetchCostLibrary()
-  } catch { /* ignore */ }
+    const list = await fetchCostLibrary({ modelTypeId: costModelTypeId.value })
+    if (list.length > 0) {
+      const item: any = list[0]
+      costData.value = { unitCostPerKw: item.unit_cost_per_kw ?? item.unitCostPerKw, remark: item.remark }
+    } else {
+      costData.value = null
+    }
+  } catch { costData.value = null }
 }
+
+function openCostEdit() {
+  costEditForm.value = {
+    unitCostPerKw: costData.value?.unitCostPerKw || 0,
+    remark: costData.value?.remark || '',
+  }
+  costDialogVisible.value = true
+}
+
+async function saveCostEdit() {
+  await upsertCostLibraryItem({
+    modelTypeId: costModelTypeId.value,
+    unitCostPerKw: costEditForm.value.unitCostPerKw,
+    remark: costEditForm.value.remark,
+  })
+  costDialogVisible.value = false
+  await loadCostData()
+}
+
+async function loadModelTypes() {
+  try {
+    modelTypes.value = await fetchPvModelTypes()
+    if (!costModelTypeId.value && modelTypes.value.length > 0) {
+      costModelTypeId.value = modelTypes.value[0].id
+    }
+  } catch { modelTypes.value = [] }
+}
+
+// ==================== 电站 CRUD ====================
+const selectedTypeFields = computed(() => {
+  const typeId = stationForm.value.modelTypeId
+  if (!typeId) return []
+  const t = modelTypes.value.find((mt: PvModelType) => mt.id === typeId)
+  return t?.fields || []
+})
+
+watch(() => stationForm.value.modelTypeId, () => {
+  stationForm.value.customFields = {}
+})
+
+watch(costModelTypeId, () => {
+  loadCostData()
+})
 
 function openNewStation() {
   editingStation.value = null
+  stationForm.value = { name: '', modelTypeId: '', customFields: {} }
+  dialogVisible.value = true
+}
+
+function openEditStation(row: any) {
+  editingStation.value = row
   stationForm.value = {
-    name: '', capacityKw: 50000, panelType: 'mono-si',
-    ratedVoltageKv: 110, longitude: 116.4, latitude: 39.9,
-    landType: 'desert', landAreaMu: 1000, status: 'planning',
-    electricalParams: { efficiency: 20.5, temperatureCoefficient: -0.35 },
-    equipmentList: [],
+    name: row.name,
+    modelTypeId: row.model_type_id || '',
+    customFields: parseCustomFields(row),
   }
   dialogVisible.value = true
 }
 
-function openEditStation(row: PvStation) {
-  editingStation.value = row
-  stationForm.value = { ...row }
-  dialogVisible.value = true
-}
-
 async function saveStation() {
+  if (!stationForm.value.modelTypeId) {
+    ElMessage.warning('请选择模型类型')
+    return
+  }
+  const payload: any = {
+    name: stationForm.value.name,
+    modelTypeId: stationForm.value.modelTypeId,
+    customFields: stationForm.value.customFields || {},
+  }
   if (editingStation.value?.id) {
-    await updatePvStation(editingStation.value.id, stationForm.value)
+    await updatePvStation(editingStation.value.id, payload)
   } else {
-    await createPvStation(stationForm.value)
+    await createPvStation(payload)
   }
   dialogVisible.value = false
   await loadStations()
@@ -62,99 +146,253 @@ async function removeStation(id: string) {
   await loadStations()
 }
 
-function openNewCost() {
-  costForm.value = { modelName: '', modelType: 'pv_module', manufacturer: '', unitCostPerKw: 0, ratedPowerKw: 0, efficiencyPct: 0, lifespanYears: 25 }
-  costDialogVisible.value = true
+// ==================== 模型类型 CRUD ====================
+function openTypeCreate() {
+  typeEditMode.value = false
+  typeForm.value = { name: '', code: 'TYPE_' + Date.now().toString(36).toUpperCase(), description: '', sortOrder: modelTypes.value.length }
+  typeDialogVisible.value = true
 }
 
-async function saveCostItem() {
-  await createCostLibraryItem(costForm.value)
-  costDialogVisible.value = false
-  await loadCostLibrary()
+function openTypeEdit(row: PvModelType) {
+  typeEditMode.value = true
+  typeForm.value = { name: row.name, code: row.code, description: row.description || '', sortOrder: row.sort_order || 0 }
+  typeDialogVisible.value = true
 }
 
-const panelTypeOptions = [
-  { value: 'mono-si', label: '单晶硅' },
-  { value: 'poly-si', label: '多晶硅' },
-  { value: 'thin-film', label: '薄膜' },
-  { value: 'hjt', label: 'HJT异质结' },
-  { value: 'bifacial', label: '双面双玻' },
-]
+async function handleTypeSave() {
+  try {
+    if (typeEditMode.value && selectedModelType.value) {
+      await updatePvModelType(selectedModelType.value.id, typeForm.value)
+      ElMessage.success('类型更新成功')
+    } else {
+      await createPvModelType(typeForm.value)
+      ElMessage.success('类型创建成功')
+    }
+    typeDialogVisible.value = false
+    await loadModelTypes()
+  } catch { ElMessage.error('操作失败') }
+}
 
-const landTypeOptions = [
-  { value: 'desert', label: '荒漠' },
-  { value: 'gobi', label: '戈壁' },
-  { value: 'agricultural', label: '农用地' },
-  { value: 'industrial', label: '工业用地' },
-  { value: 'mountain', label: '山地' },
-]
+async function handleTypeDelete(row: PvModelType) {
+  try {
+    await ElMessageBox.confirm(`确定删除类型「${row.name}」？关联字段一并删除。`, '确认删除', { type: 'warning' })
+    await deletePvModelType(row.id)
+    ElMessage.success('已删除')
+    if (selectedModelType.value?.id === row.id) selectedModelType.value = null
+    await loadModelTypes()
+  } catch { /* cancelled */ }
+}
 
-const stationStatusOptions = [
-  { value: 'planning', label: '规划中' },
-  { value: 'construction', label: '建设中' },
-  { value: 'operating', label: '运营中' },
-  { value: 'retired', label: '已退役' },
-]
+async function selectTypeForFields(row: PvModelType) {
+  selectedModelType.value = row
+  modelTypeFields.value = await fetchModelTypeFields(row.id)
+}
 
-const modelTypeOptions = [
-  { value: 'pv_module', label: '光伏组件' },
-  { value: 'inverter', label: '逆变器' },
-  { value: 'transformer', label: '变压器' },
-  { value: 'cable', label: '电缆' },
-  { value: 'switchgear', label: '开关柜' },
-]
+// ==================== 字段库 ====================
+const libraryDialogVisible = ref(false)
+const fieldLibrary = ref<Array<{ id: string; field_code: string; field_name: string; field_type: string; field_options?: string; category?: string }>>([])
+const librarySearch = ref('')
+const libraryLoading = ref(false)
 
-onMounted(() => {
+const libraryCategories = ['基础信息', '电气参数', '地理坐标', '土地属性', '设备台账']
+const libraryActiveCategory = ref('基础信息')
+
+const filteredFieldLibrary = computed(() => {
+  const usedCodes = new Set(modelTypeFields.value.map((f: any) => f.field_code || f.fieldCode))
+  return fieldLibrary.value.filter(f => !usedCodes.has(f.field_code) && f.category === libraryActiveCategory.value)
+})
+
+async function openFieldLibrary() {
+  librarySearch.value = ''
+  libraryActiveCategory.value = '基础信息'
+  librarySelected.value = []
+  libraryLoading.value = true
+  libraryDialogVisible.value = true
+  try {
+    fieldLibrary.value = await fetchFieldLibrary()
+  } finally {
+    libraryLoading.value = false
+  }
+}
+
+async function handleLibrarySearch() {
+  libraryLoading.value = true
+  try {
+    fieldLibrary.value = await fetchFieldLibrary(librarySearch.value || undefined)
+  } finally {
+    libraryLoading.value = false
+  }
+}
+
+// ==================== 字段操作（自动保存） ====================
+async function doSaveFields(fields: any[]) {
+  if (!selectedModelType.value) return
+  await saveModelTypeFields(selectedModelType.value.id, fields.map((f: any, i: number) => ({
+    fieldCode: f.field_code || f.fieldCode,
+    fieldName: f.field_name || f.fieldName,
+    fieldType: f.field_type || f.fieldType,
+    fieldOptions: f.field_options || f.fieldOptions,
+    isRequired: (f.is_required === 1 || f.isRequired === true),
+    sortOrder: f.sort_order ?? i,
+  })))
+  await loadModelTypes()
+  // 刷新当前选中类型的字段列表
+  modelTypeFields.value = await fetchModelTypeFields(selectedModelType.value.id)
+}
+
+const librarySelected = ref<string[]>([])
+
+function toggleLibraryField(code: string) {
+  const idx = librarySelected.value.indexOf(code)
+  if (idx >= 0) {
+    librarySelected.value.splice(idx, 1)
+  } else {
+    librarySelected.value.push(code)
+  }
+}
+
+function isLibrarySelected(code: string) {
+  return librarySelected.value.includes(code)
+}
+
+async function handleBatchAddFields() {
+  if (librarySelected.value.length === 0) return
+  const list = [...modelTypeFields.value]
+  for (const code of librarySelected.value) {
+    const f = fieldLibrary.value.find(item => item.field_code === code)
+    if (!f) continue
+    list.push({
+      field_code: f.field_code,
+      field_name: f.field_name,
+      field_type: f.field_type,
+      field_options: f.field_options || null,
+      is_required: 0,
+      sort_order: list.length,
+    } as any)
+  }
+  libraryDialogVisible.value = false
+  try {
+    await doSaveFields(list)
+  } catch { ElMessage.error('添加失败') }
+}
+
+function openFieldCreate() {
+  fieldEditIdx.value = -1
+  fieldForm.value = { fieldCode: '', fieldName: '', fieldType: 'text', fieldOptions: '', isRequired: false, category: '基础信息' }
+  libraryDialogVisible.value = false
+  fieldDialogVisible.value = true
+}
+
+function openFieldEdit(idx: number, f: PvModelTypeField) {
+  fieldEditIdx.value = idx
+  fieldForm.value = {
+    fieldCode: f.field_code,
+    fieldName: f.field_name,
+    fieldType: f.field_type,
+    fieldOptions: f.field_options || '',
+    isRequired: f.is_required === 1,
+    category: (f as any).category || '基础信息',
+  }
+  fieldDialogVisible.value = true
+}
+
+async function handleFieldSave() {
+  const list = [...modelTypeFields.value]
+  const item = {
+    fieldCode: fieldForm.value.fieldCode,
+    fieldName: fieldForm.value.fieldName,
+    fieldType: fieldForm.value.fieldType,
+    fieldOptions: fieldForm.value.fieldOptions || undefined,
+    isRequired: fieldForm.value.isRequired,
+    sortOrder: fieldEditIdx.value >= 0 ? list[fieldEditIdx.value].sort_order : list.length,
+  }
+  if (fieldEditIdx.value >= 0) {
+    list.splice(fieldEditIdx.value, 1, { ...list[fieldEditIdx.value], ...item } as any)
+  } else {
+    list.push(item as any)
+    createFieldLibraryItem({
+      fieldCode: item.fieldCode,
+      fieldName: item.fieldName,
+      fieldType: item.fieldType,
+      fieldOptions: item.fieldOptions,
+      category: fieldForm.value.category,
+    }).catch(() => {})
+  }
+  fieldDialogVisible.value = false
+  try {
+    await doSaveFields(list)
+  } catch { ElMessage.error('保存失败') }
+}
+
+async function handleFieldDelete(idx: number) {
+  const list = [...modelTypeFields.value]
+  list.splice(idx, 1)
+  try {
+    await doSaveFields(list)
+  } catch { ElMessage.error('删除失败') }
+}
+
+async function handleClearAllFields() {
+  if (modelTypeFields.value.length === 0) return
+  try {
+    await ElMessageBox.confirm('确定清空该模型的所有字段？此操作不可恢复。', '确认清空', { type: 'warning' })
+    await doSaveFields([])
+    ElMessage.success('已清空')
+  } catch { /* cancelled */ }
+}
+
+function getModelTypeName(typeId: string) {
+  return modelTypes.value.find((mt: PvModelType) => mt.id === typeId)?.name || ''
+}
+
+function parseCustomFields(row: any): Record<string, any> {
+  try { return row.custom_fields ? JSON.parse(row.custom_fields) : {} } catch { return {} }
+}
+
+function renderCustomFieldValue(row: any, fieldCode: string): string {
+  const cf = parseCustomFields(row)
+  return cf[fieldCode] ?? '-'
+}
+
+onMounted(async () => {
   loadStations()
-  loadCostLibrary()
+  await loadModelTypes()
+  loadCostData()
 })
 </script>
 
 <template>
   <div>
-    <!-- Stat Cards -->
-    <div class="stat-card-row">
-      <StatCard title="光伏电站" :value="stations.length" unit="座" icon="Connection" color="#267F7B" />
-      <StatCard title="总装机容量" :value="stations.reduce((s: number, i: any) => s + i.capacityKw, 0) / 10000" unit="万kW" icon="TrendCharts" color="#67C23A" />
-      <StatCard title="造价库型号" :value="costLibrary.length" unit="种" icon="Collection" color="#E6A23C" />
-      <StatCard title="平均单位造价" value="1,800" unit="元/kW" icon="Money" color="#F56C6C" />
-    </div>
-
-    <!-- Tabs -->
+    <div class="chart-panel-title">集中式光伏模型集成</div>
     <div class="chart-panel">
       <div class="panel-header">
         <div class="sub-tabs">
           <span :class="['sub-tab', { active: activeTab === 'stations' }]" @click="activeTab = 'stations'">光伏电站管理</span>
           <span :class="['sub-tab', { active: activeTab === 'cost' }]" @click="activeTab = 'cost'">设备综合造价库</span>
+          <span :class="['sub-tab', { active: activeTab === 'tools' }]" @click="activeTab = 'tools'">规划工具</span>
         </div>
         <el-button v-if="activeTab === 'stations'" type="primary" size="small" @click="openNewStation">新建电站</el-button>
-        <el-button v-else type="primary" size="small" @click="openNewCost">新增造价条目</el-button>
       </div>
 
       <!-- Station Table -->
       <el-table v-if="activeTab === 'stations'" :data="stations" v-loading="loading" stripe size="small">
         <el-table-column prop="name" label="电站名称" min-width="160" />
-        <el-table-column label="容量" width="110">
-          <template #default="{ row }">{{ (row.capacityKw / 1000).toFixed(1) }} MW</template>
-        </el-table-column>
-        <el-table-column label="组件类型" width="110">
-          <template #default="{ row }">{{ panelTypeOptions.find(o => o.value === row.panelType)?.label || row.panelType }}</template>
-        </el-table-column>
-        <el-table-column prop="ratedVoltageKv" label="电压等级" width="100">
-          <template #default="{ row }">{{ row.ratedVoltageKv }} kV</template>
-        </el-table-column>
-        <el-table-column label="坐标" width="150">
-          <template #default="{ row }">{{ row.longitude?.toFixed(2) }}, {{ row.latitude?.toFixed(2) }}</template>
-        </el-table-column>
-        <el-table-column label="土地属性" width="100">
-          <template #default="{ row }">{{ landTypeOptions.find(o => o.value === row.landType)?.label || row.landType }}</template>
-        </el-table-column>
-        <el-table-column label="状态" width="90">
+        <el-table-column label="模型类型" width="150">
           <template #default="{ row }">
-            <el-tag :type="row.status === 'operating' ? 'success' : row.status === 'construction' ? 'warning' : 'info'" size="small">
-              {{ stationStatusOptions.find(o => o.value === row.status)?.label }}
-            </el-tag>
+            <el-tag size="small" type="info">{{ getModelTypeName(row.model_type_id) || '未设置' }}</el-tag>
           </template>
+        </el-table-column>
+        <el-table-column label="装机容量" width="120">
+          <template #default="{ row }">{{ renderCustomFieldValue(row, 'total_capacity') }} MWp</template>
+        </el-table-column>
+        <el-table-column label="并网电压" width="90">
+          <template #default="{ row }">{{ renderCustomFieldValue(row, 'grid_voltage') }}</template>
+        </el-table-column>
+        <el-table-column label="项目状态" width="100">
+          <template #default="{ row }">{{ renderCustomFieldValue(row, 'project_status') }}</template>
+        </el-table-column>
+        <el-table-column label="创建时间" width="110">
+          <template #default="{ row }">{{ row.created_at?.slice(0, 10) || '-' }}</template>
         </el-table-column>
         <el-table-column label="操作" width="140" fixed="right">
           <template #default="{ row }">
@@ -164,73 +402,130 @@ onMounted(() => {
         </el-table-column>
       </el-table>
 
-      <!-- Cost Library Table -->
-      <el-table v-else :data="costLibrary" stripe size="small">
-        <el-table-column prop="modelName" label="型号名称" min-width="160" />
-        <el-table-column label="类型" width="100">
-          <template #default="{ row }">{{ modelTypeOptions.find(o => o.value === row.modelType)?.label || row.modelType }}</template>
-        </el-table-column>
-        <el-table-column prop="manufacturer" label="厂商" width="120" />
-        <el-table-column prop="unitCostPerKw" label="单位造价" width="110">
-          <template #default="{ row }">{{ row.unitCostPerKw?.toLocaleString() }} 元/kW</template>
-        </el-table-column>
-        <el-table-column prop="ratedPowerKw" label="额定功率" width="100">
-          <template #default="{ row }">{{ row.ratedPowerKw }} kW</template>
-        </el-table-column>
-        <el-table-column prop="efficiencyPct" label="效率" width="80">
-          <template #default="{ row }">{{ row.efficiencyPct }}%</template>
-        </el-table-column>
-        <el-table-column prop="lifespanYears" label="寿命" width="70">
-          <template #default="{ row }">{{ row.lifespanYears }}年</template>
-        </el-table-column>
-        <el-table-column prop="remark" label="备注" min-width="120" />
-      </el-table>
+      <!-- Cost Library -->
+      <template v-if="activeTab === 'cost'">
+        <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px">
+          <span style="font-size:13px;color:#606266">光伏模型：</span>
+          <el-select v-model="costModelTypeId" size="small" style="width:200px">
+            <el-option v-for="t in modelTypes" :key="t.id" :label="t.name" :value="t.id" />
+          </el-select>
+        </div>
+        <div class="inner-panel">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <span style="font-size:14px;font-weight:600;color:#303133">综合造价评估</span>
+            <el-button size="small" type="primary" @click="openCostEdit">编辑</el-button>
+          </div>
+          <div style="display:flex;gap:40px">
+            <div>
+              <div style="font-size:12px;color:#909399;margin-bottom:4px">综合单位造价</div>
+              <div style="font-size:22px;font-weight:600;color:#303133">
+                {{ costData?.unitCostPerKw != null ? costData.unitCostPerKw.toLocaleString() : '-' }}
+                <span style="font-size:13px;font-weight:400;color:#909399">元/kW</span>
+              </div>
+            </div>
+            <div>
+              <div style="font-size:12px;color:#909399;margin-bottom:4px">备注</div>
+              <div style="font-size:14px;color:#606266">{{ costData?.remark || '-' }}</div>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- 规划工具 -->
+      <template v-if="activeTab === 'tools'">
+        <div class="grid-2">
+          <div class="inner-panel">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <span style="font-size:14px;font-weight:600;color:#303133">光伏模型类型</span>
+              <el-button type="primary" size="small" @click="openTypeCreate">新增类型</el-button>
+            </div>
+            <el-table :data="modelTypes" stripe size="small" highlight-current-row @row-click="selectTypeForFields">
+              <el-table-column prop="name" label="类型名称" width="140" />
+              <el-table-column prop="code" label="编码" width="180" />
+              <el-table-column prop="description" label="描述" min-width="160" show-overflow-tooltip />
+              <el-table-column label="操作" width="140">
+                <template #default="{ row }">
+                  <el-button size="small" link type="primary" @click.stop="openTypeEdit(row)">编辑</el-button>
+                  <el-button size="small" link @click.stop="handleTypeDelete(row)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <div class="inner-panel" v-if="selectedModelType">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <span style="font-size:14px;font-weight:600;color:#303133">
+                {{ selectedModelType.name }} — 自定义字段
+              </span>
+              <div style="display:flex;gap:8px">
+                <el-button type="primary" size="small" @click="openFieldLibrary">添加字段</el-button>
+                <el-button size="small" @click="handleClearAllFields" :disabled="modelTypeFields.length === 0">一键删除</el-button>
+              </div>
+            </div>
+            <el-table :data="modelTypeFields" stripe size="small">
+              <el-table-column prop="field_name" label="字段名" width="130" />
+              <el-table-column prop="field_code" label="字段编码" width="130" />
+              <el-table-column label="字段类型" width="100">
+                <template #default="{ row }">
+                  {{ fieldTypeOptions.find(o => o.value === row.field_type)?.label || row.field_type }}
+                </template>
+              </el-table-column>
+              <el-table-column label="必填" width="60">
+                <template #default="{ row }">{{ row.is_required ? '是' : '否' }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="120">
+                <template #default="{ row, $index }">
+                  <el-button size="small" link type="primary" @click="openFieldEdit($index, row)">编辑</el-button>
+                  <el-button size="small" link @click="handleFieldDelete($index)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+          <div class="inner-panel" v-else style="display:flex;align-items:center;justify-content:center;color:#909399;font-size:14px">
+            选择左侧类型以查看和管理其字段
+          </div>
+        </div>
+      </template>
     </div>
 
     <!-- Station Dialog -->
-    <el-dialog v-model="dialogVisible" :title="editingStation ? '编辑光伏电站' : '新建光伏电站'" width="700px" destroy-on-close>
-      <el-form :model="stationForm" label-width="110px" size="small">
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="电站名称" required><el-input v-model="stationForm.name" /></el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="装机容量" required><el-input v-model="stationForm.capacityKw" type="number"><template #append>kW</template></el-input></el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="组件类型"><el-select v-model="stationForm.panelType" style="width:100%">
-              <el-option v-for="o in panelTypeOptions" :key="o.value" :label="o.label" :value="o.value" />
-            </el-select></el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="电压等级"><el-input v-model="stationForm.ratedVoltageKv" type="number"><template #append>kV</template></el-input></el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="经度"><el-input v-model="stationForm.longitude" type="number" /></el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="纬度"><el-input v-model="stationForm.latitude" type="number" /></el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="土地属性"><el-select v-model="stationForm.landType" style="width:100%">
-              <el-option v-for="o in landTypeOptions" :key="o.value" :label="o.label" :value="o.value" />
-            </el-select></el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="占地面积"><el-input v-model="stationForm.landAreaMu" type="number"><template #append>亩</template></el-input></el-form-item>
-          </el-col>
-        </el-row>
-        <el-form-item label="状态">
-          <el-radio-group v-model="stationForm.status">
-            <el-radio v-for="o in stationStatusOptions" :key="o.value" :value="o.value">{{ o.label }}</el-radio>
-          </el-radio-group>
+    <el-dialog v-model="dialogVisible" :title="editingStation ? '编辑光伏电站' : '新建光伏电站'" width="650px" destroy-on-close>
+      <el-form :model="stationForm" label-width="120px" size="small">
+        <el-form-item label="电站名称" required>
+          <el-input v-model="stationForm.name" placeholder="请输入电站名称" />
         </el-form-item>
+        <el-form-item label="模型类型" required>
+          <el-select v-model="stationForm.modelTypeId" style="width:100%" placeholder="请选择模型类型">
+            <el-option v-for="t in modelTypes" :key="t.id" :label="t.name" :value="t.id" />
+          </el-select>
+        </el-form-item>
+
+        <!-- 动态字段 -->
+        <template v-if="selectedTypeFields.length > 0">
+          <el-divider style="margin:8px 0" />
+          <el-form-item v-for="f in selectedTypeFields" :key="f.field_code" :label="f.field_name" :required="f.is_required === 1">
+            <template v-if="f.field_type === 'number'">
+              <el-input-number v-model="stationForm.customFields[f.field_code]" :precision="2" style="width:100%" />
+            </template>
+            <template v-else-if="f.field_type === 'date'">
+              <el-date-picker v-model="stationForm.customFields[f.field_code]" type="date" style="width:100%" value-format="YYYY-MM-DD" />
+            </template>
+            <template v-else-if="f.field_type === 'select'">
+              <el-select v-model="stationForm.customFields[f.field_code]" style="width:100%" clearable>
+                <el-option
+                  v-for="opt in (() => { try { return JSON.parse(f.field_options || '[]') } catch { return [] } })()"
+                  :key="opt" :label="opt" :value="opt"
+                />
+              </el-select>
+            </template>
+            <template v-else>
+              <el-input v-model="stationForm.customFields[f.field_code]" />
+            </template>
+          </el-form-item>
+        </template>
+        <div v-else-if="stationForm.modelTypeId" style="color:#909399;font-size:13px;text-align:center;padding:20px 0">
+          该模型类型暂无自定义字段
+        </div>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -238,42 +533,109 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <!-- Cost Library Dialog -->
-    <el-dialog v-model="costDialogVisible" title="新增造价条目" width="600px" destroy-on-close>
-      <el-form :model="costForm" label-width="110px" size="small">
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="型号名称" required><el-input v-model="costForm.modelName" /></el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="设备类型"><el-select v-model="costForm.modelType" style="width:100%">
-              <el-option v-for="o in modelTypeOptions" :key="o.value" :label="o.label" :value="o.value" />
-            </el-select></el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="制造商"><el-input v-model="costForm.manufacturer" /></el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="单位造价" required><el-input v-model="costForm.unitCostPerKw" type="number"><template #append>元/kW</template></el-input></el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="20">
-          <el-col :span="8">
-            <el-form-item label="额定功率"><el-input v-model="costForm.ratedPowerKw" type="number"><template #append>kW</template></el-input></el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="效率"><el-input v-model="costForm.efficiencyPct" type="number"><template #append>%</template></el-input></el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="寿命"><el-input v-model="costForm.lifespanYears" type="number"><template #append>年</template></el-input></el-form-item>
-          </el-col>
-        </el-row>
+    <!-- Cost Edit Dialog -->
+    <el-dialog v-model="costDialogVisible" title="编辑综合造价" width="450px" destroy-on-close>
+      <el-form :model="costEditForm" label-width="130px" size="small">
+        <el-form-item label="综合单位造价" required>
+          <el-input-number v-model="costEditForm.unitCostPerKw" :min="0" style="width:100%" />
+          <span style="font-size:12px;color:#909399">元/kW</span>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="costEditForm.remark" type="textarea" :rows="2" />
+        </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="costDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveCostItem">保存</el-button>
+        <el-button size="small" @click="costDialogVisible = false">取消</el-button>
+        <el-button size="small" type="primary" @click="saveCostEdit">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 模型类型编辑弹窗 -->
+    <el-dialog :title="typeEditMode ? '编辑模型类型' : '新增模型类型'" v-model="typeDialogVisible" width="480px">
+      <el-form :model="typeForm" label-width="80px" size="small">
+        <el-form-item label="类型名称" required>
+          <el-input v-model="typeForm.name" />
+        </el-form-item>
+        <el-form-item label="编码" required>
+          <el-input v-model="typeForm.code" :disabled="typeEditMode" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="typeForm.description" />
+        </el-form-item>
+        <el-form-item label="排序">
+          <el-input-number v-model="typeForm.sortOrder" :min="0" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button size="small" @click="typeDialogVisible = false">取消</el-button>
+        <el-button size="small" type="primary" @click="handleTypeSave">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 字段库弹窗 -->
+    <el-dialog title="从字段库选取" v-model="libraryDialogVisible" width="700px">
+      <div style="display:flex;gap:12px;margin-bottom:12px">
+        <el-input v-model="librarySearch" placeholder="搜索字段编码或名称" size="small" clearable @clear="handleLibrarySearch" @keyup.enter="handleLibrarySearch" style="width:280px" />
+        <el-button size="small" type="primary" @click="handleLibrarySearch">搜索</el-button>
+      </div>
+      <div class="sub-tabs" style="margin-bottom:12px">
+        <span v-for="cat in libraryCategories" :key="cat"
+          :class="['sub-tab', { active: libraryActiveCategory === cat }]"
+          @click="libraryActiveCategory = cat">{{ cat }}</span>
+      </div>
+      <el-table :data="filteredFieldLibrary" stripe size="small" max-height="360" v-loading="libraryLoading"
+        @row-click="(row: any) => toggleLibraryField(row.field_code)" :row-class-name="({ row }: any) => isLibrarySelected(row.field_code) ? 'lib-row-selected' : ''">
+        <el-table-column width="50">
+          <template #default="{ row }">
+            <el-checkbox :model-value="isLibrarySelected(row.field_code)" @change="toggleLibraryField(row.field_code)" />
+          </template>
+        </el-table-column>
+        <el-table-column prop="field_code" label="字段编码" width="180" />
+        <el-table-column prop="field_name" label="字段名称" width="200" />
+        <el-table-column label="字段类型" width="90">
+          <template #default="{ row }">
+            {{ fieldTypeOptions.find(o => o.value === row.field_type)?.label || row.field_type }}
+          </template>
+        </el-table-column>
+      </el-table>
+      <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center">
+        <span style="color:#909399;font-size:13px">已选 {{ librarySelected.length }} 个字段</span>
+        <div style="display:flex;gap:8px">
+          <el-button size="small" @click="openFieldCreate">新建字段</el-button>
+          <el-button size="small" type="primary" @click="handleBatchAddFields" :disabled="librarySelected.length === 0">批量添加</el-button>
+        </div>
+      </div>
+    </el-dialog>
+
+    <!-- 字段编辑弹窗 -->
+    <el-dialog :title="fieldEditIdx >= 0 ? '编辑字段' : '添加字段'" v-model="fieldDialogVisible" width="480px">
+      <el-form :model="fieldForm" label-width="90px" size="small">
+        <el-form-item label="字段编码" required>
+          <el-input v-model="fieldForm.fieldCode" placeholder="如：voltage_level" />
+        </el-form-item>
+        <el-form-item label="字段名称" required>
+          <el-input v-model="fieldForm.fieldName" placeholder="如：并网电压等级(kV)" />
+        </el-form-item>
+        <el-form-item label="字段类型" required>
+          <el-select v-model="fieldForm.fieldType" style="width:100%">
+            <el-option v-for="o in fieldTypeOptions" :key="o.value" :label="o.label" :value="o.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="所属分类" required>
+          <el-select v-model="fieldForm.category" style="width:100%">
+            <el-option v-for="cat in libraryCategories" :key="cat" :label="cat" :value="cat" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="fieldForm.fieldType === 'select'" label="选项列表">
+          <el-input v-model="fieldForm.fieldOptions" type="textarea" :rows="2" placeholder='JSON数组，如：["35","110","220"]' />
+        </el-form-item>
+        <el-form-item label="是否必填">
+          <el-switch v-model="fieldForm.isRequired" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button size="small" @click="fieldDialogVisible = false">取消</el-button>
+        <el-button size="small" type="primary" @click="handleFieldSave">确定</el-button>
       </template>
     </el-dialog>
   </div>
@@ -307,4 +669,7 @@ onMounted(() => {
   border-color: #267F7B;
 }
 .sub-tab.active + .sub-tab { border-left-color: #267F7B; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.inner-panel { background: #fff; border: 1px solid #ebeef5; border-radius: 4px; padding: 16px; }
+:deep(.lib-row-selected) { background-color: #ecf5ff; }
 </style>

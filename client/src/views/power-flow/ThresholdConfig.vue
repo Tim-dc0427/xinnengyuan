@@ -95,6 +95,7 @@ onMounted(loadData)
 
 <template>
   <div class="page-container">
+    <div class="chart-panel-title">阈值配置</div>
     <div class="chart-panel">
       <div class="panel-header">
         <div class="chart-panel-title">指标阈值自定义配置</div>

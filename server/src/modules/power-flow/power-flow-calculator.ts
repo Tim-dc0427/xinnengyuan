@@ -620,13 +620,27 @@ export function calculatePowerFlow(
     const qgMw = Number(((P[i] > 0 || Q[i] > 0) ? (Q[i] + qLoad / S_BASE) * S_BASE : 0).toFixed(2))
     const pdMw = load ? load.pdMw : 0
     const qdMvar = load ? load.qdMvar : 0
-    // 反向潮流：负荷节点有功为正（注入>负荷）时判定为反向
-    const reversePower = bus.busType === 'pq' && (Psch[i] > 0.001)
 
-    // 三相不平衡度估算（基于负荷不平衡度 × 电压偏差）
-    const loadFactor = load ? Math.sqrt(load.pdMw ** 2 + load.qdMvar ** 2) / 100 : 0
-    const voltDev = Math.abs(vMag - 1) * 100
-    const threePhaseImbalance = Number(Math.min(voltDev * 0.3 + loadFactor * 0.5, 8).toFixed(2))
+    // 反向潮流：PQ节点净注入为正（出力>负荷），或光伏装机超过本地负荷80%时标记
+    let reversePower = bus.busType === 'pq' && (Psch[i] > 0.001)
+    if (!reversePower && gen?.isPV && gen.installedCapacityMw && load && gen.installedCapacityMw > load.pdMw * 0.8) {
+      reversePower = true
+    }
+
+    // 三相不平衡度：优先用分相负荷数据计算，无分相数据时用电压偏差估算
+    let threePhaseImbalance = 0
+    if (load && load.pdAMw != null && load.pdBMw != null && load.pdCMw != null) {
+      const pa = load.pdAMw, pb = load.pdBMw, pc = load.pdCMw
+      const pavg = (pa + pb + pc) / 3
+      if (pavg > 0.001) {
+        const maxDev = Math.max(Math.abs(pa - pavg), Math.abs(pb - pavg), Math.abs(pc - pavg))
+        threePhaseImbalance = Number((maxDev / pavg * 100).toFixed(2))
+      }
+    } else {
+      const actualKv = vMag * bus.baseKv
+      const voltDevPct = Math.abs(actualKv - bus.baseKv) / bus.baseKv * 100
+      threePhaseImbalance = Number(Math.min(voltDevPct * 0.2, 5).toFixed(2))
+    }
 
     return {
       busId: bus.id,

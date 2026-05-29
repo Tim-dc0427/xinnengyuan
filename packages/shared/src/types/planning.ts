@@ -53,6 +53,7 @@ export interface PvCostLibraryItem {
   lifespanYears: number
   technicalParams: Record<string, number>
   remark: string
+  modelTypeId?: string
   createdAt: string
 }
 
@@ -299,10 +300,11 @@ export interface InvestmentResult {
 export interface CostComparison {
   pvTotalCost: number
   pvUnitCost: number
-  traditionalCoalCost: number
-  traditionalCoalUnitCost: number
-  traditionalTransmissionCost: number
+  traditionalTotalCost: number
+  traditionalUnitCost: number
   costAdvantagePct: number
+  pvBreakdown?: { equipmentCost: number; constructionCost: number; landCost: number; otherCost: number } | null
+  traditionalBreakdown?: { equipmentCost: number; constructionCost: number; landCost: number; otherCost: number } | null
   comparisonChart: {
     labels: string[]
     pvValues: number[]
@@ -372,6 +374,29 @@ export interface EquipmentLifecycleRecord {
   description: string
   attachments: string[]
   eventData: Record<string, any>
+}
+
+// ==================== PV Model Types (规划工具) ====================
+export interface PvModelType {
+  id: string
+  name: string
+  code: string
+  description?: string
+  sort_order?: number
+  fields?: PvModelTypeField[]
+  created_at?: string
+}
+
+export interface PvModelTypeField {
+  id: string
+  type_id: string
+  field_code: string
+  field_name: string
+  field_type: string
+  field_options?: string
+  is_required: number
+  sort_order: number
+  created_at?: string
 }
 
 // ==================== Legacy types ====================

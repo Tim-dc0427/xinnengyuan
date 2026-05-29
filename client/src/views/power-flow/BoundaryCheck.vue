@@ -13,17 +13,14 @@ const confirmText = ref('')
 const voltageLevel = ref('')
 const region = ref('')
 const voltageLevelOptions = ['', '220kV', '110kV', '10kV']
-const regionOptions = ['', 'A（西部：仓前/未来城）', 'B（中部：余杭/闲林）', 'C（东部：乔司）']
-const regionValueMap: Record<string, string> = {
-  'A（西部：仓前/未来城）': 'A', 'B（中部：余杭/闲林）': 'B', 'C（东部：乔司）': 'C',
-}
+const regionOptions = ref(['', '余杭区', '萧山区', '滨江区', '西湖区', '拱墅区', '上城区', '钱塘区', '临平区', '富阳区', '临安区', '桐庐县', '建德市', '淳安县'])
 
 async function handleCheck() {
   loading.value = true
   try {
     const params: Record<string, string> = {}
     if (voltageLevel.value) params.voltageLevel = voltageLevel.value
-    if (region.value) params.region = regionValueMap[region.value] || region.value
+    if (region.value) params.region = region.value
     result.value = await checkBoundaryReasonability(params)
   } finally {
     loading.value = false
@@ -47,6 +44,7 @@ function confirmData() {
 
 <template>
   <div class="page-container">
+    <div class="chart-panel-title">边界条件合理性校验</div>
     <div class="filter-bar">
       <span style="font-size:14px;font-weight:600;color:#303133">边界条件合理性校验</span>
       <el-select v-model="voltageLevel" placeholder="电压等级" clearable size="small" style="width:130px;margin-left:16px">

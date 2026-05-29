@@ -1,19 +1,26 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { fetchScenarios, fetchStrategies, createStrategy, updateStrategy, deleteStrategy, generateStrategy } from '@/api/scenario'
 
+const route = useRoute()
 const strategies = ref<any[]>([])
 const scenarios = ref<any[]>([])
 const loading = ref(false)
 const filterScenarioId = ref('')
 const filterType = ref('')
+interface RuleItem { name: string; condition: string; action: string; priority: number }
+interface ScheduleItem { timeRange: string; action: string; deviceType: string; deviceName?: string; targetValue: number; unit: string; reason?: string }
+
 const dialogVisible = ref(false)
 const editingId = ref('')
 const form = ref<any>({
-  scenario_id: '', name: '', strategy_type: 'comprehensive',
-  constraints: { voltageUpperLimit: 1.07, voltageLowerLimit: 0.93, lineLoadRateLimit: 0.9 },
-  economic_targets: { targetConsumptionRate: 0.95, maxOperationCostPerKwh: 0.42 },
-  status: 'draft',
+  scenario_id: '', name: '', strategy_type: 'comprehensive', status: 'draft',
+  control_rules: [] as RuleItem[],
+  schedule: [] as ScheduleItem[],
+  constraints: { voltageUpperLimit: 235, voltageLowerLimit: 205, lineLoadRateLimit: 0.9, devicePowerLimitPct: 100 },
+  economic_targets: { optimizationMode: 'cost_first', targetConsumptionRate: 0.95, maxOperationCostPerKwh: 0.42 },
 })
 const generating = ref(false)
 const detailVisible = ref(false)
@@ -46,32 +53,70 @@ async function loadScenarios() {
 
 function openCreate() {
   editingId.value = ''
-  form.value = { scenario_id: '', name: '', strategy_type: 'comprehensive', constraints: {}, economic_targets: {}, status: 'draft' }
+  form.value = {
+    scenario_id: '', name: '', strategy_type: 'comprehensive', status: 'draft',
+    control_rules: [],
+    schedule: [],
+    constraints: { voltageUpperLimit: 235, voltageLowerLimit: 205, lineLoadRateLimit: 0.9, devicePowerLimitPct: 100 },
+    economic_targets: { optimizationMode: 'cost_first', targetConsumptionRate: 0.95, maxOperationCostPerKwh: 0.42 },
+  }
   dialogVisible.value = true
 }
 
 function openEdit(row: any) {
   editingId.value = row.id
+  const c = row.config || {}
   form.value = {
     scenario_id: row.scenario_id,
     name: row.name,
     strategy_type: row.strategy_type,
-    constraints: row.constraints || {},
-    economic_targets: row.economic_targets || {},
     status: row.status,
+    control_rules: c.control_rules || [],
+    schedule: c.schedule || [],
+    constraints: c.constraints || { voltageUpperLimit: 235, voltageLowerLimit: 205, lineLoadRateLimit: 0.9, devicePowerLimitPct: 100 },
+    economic_targets: c.economic_targets || { optimizationMode: 'cost_first', targetConsumptionRate: 0.95, maxOperationCostPerKwh: 0.42 },
   }
   dialogVisible.value = true
 }
 
+function buildConfig() {
+  return {
+    control_rules: form.value.control_rules,
+    schedule: form.value.schedule,
+    constraints: form.value.constraints,
+    economic_targets: form.value.economic_targets,
+  }
+}
+
 async function save() {
   if (!form.value.name || !form.value.scenario_id) return
+  const payload = {
+    scenario_id: form.value.scenario_id,
+    name: form.value.name,
+    strategy_type: form.value.strategy_type,
+    status: form.value.status,
+    config: buildConfig(),
+  }
   if (editingId.value) {
-    await updateStrategy(editingId.value, form.value)
+    await updateStrategy(editingId.value, payload)
   } else {
-    await createStrategy(form.value)
+    await createStrategy(payload)
   }
   dialogVisible.value = false
   await loadData()
+}
+
+function addRule() {
+  form.value.control_rules.push({ name: '', condition: '', action: '', priority: form.value.control_rules.length + 1 })
+}
+function removeRule(idx: number) {
+  form.value.control_rules.splice(idx, 1)
+}
+function addSchedule() {
+  form.value.schedule.push({ timeRange: '', action: '', deviceType: '', targetValue: 0, unit: 'kW' })
+}
+function removeSchedule(idx: number) {
+  form.value.schedule.splice(idx, 1)
 }
 
 async function remove(id: string) {
@@ -84,8 +129,10 @@ async function autoGenerate() {
   if (!sid) return
   generating.value = true
   try {
-    await generateStrategy(sid)
+    const result = await generateStrategy(sid)
     await loadData()
+    const scheduleCount = result?.config?.schedule?.length || 0
+    ElMessage.success(`策略已自动生成，包含 ${scheduleCount} 条调度指令`)
   } finally {
     generating.value = false
   }
@@ -97,6 +144,9 @@ function showDetail(row: any) {
 }
 
 onMounted(() => {
+  if (route.query.scenario_id) {
+    filterScenarioId.value = route.query.scenario_id as string
+  }
   loadScenarios()
   loadData()
 })
@@ -104,6 +154,7 @@ onMounted(() => {
 
 <template>
   <div>
+    <div class="chart-panel-title">互动场景策略管理</div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
       <div style="display:flex;gap:8px;align-items:center">
         <el-select v-model="filterScenarioId" placeholder="关联场景" clearable style="width:180px" size="small" @change="loadData">
@@ -152,16 +203,22 @@ onMounted(() => {
       </el-table-column>
     </el-table>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? '编辑策略' : '新增策略'" width="560px">
+    <el-dialog v-model="dialogVisible" :title="editingId ? '编辑策略' : '新增策略'" width="720px">
       <el-form :model="form" label-position="top" size="small">
-        <el-form-item label="关联场景">
-          <el-select v-model="form.scenario_id" :disabled="!!editingId">
-            <el-option v-for="s in scenarios" :key="s.id" :label="s.name" :value="s.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="策略名称">
-          <el-input v-model="form.name" />
-        </el-form-item>
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="关联场景">
+              <el-select v-model="form.scenario_id" :disabled="!!editingId">
+                <el-option v-for="s in scenarios" :key="s.id" :label="s.name" :value="s.id" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="策略名称">
+              <el-input v-model="form.name" />
+            </el-form-item>
+          </el-col>
+        </el-row>
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="策略类型">
@@ -179,15 +236,87 @@ onMounted(() => {
             </el-form-item>
           </el-col>
         </el-row>
-        <el-form-item label="安全约束(电压上限 p.u.)">
-          <el-input-number v-model="form.constraints.voltageUpperLimit" :min="0.9" :max="1.2" :step="0.01" size="small" style="width:100%" />
-        </el-form-item>
-        <el-form-item label="安全约束(电压下限 p.u.)">
-          <el-input-number v-model="form.constraints.voltageLowerLimit" :min="0.8" :max="1.1" :step="0.01" size="small" style="width:100%" />
-        </el-form-item>
-        <el-form-item label="经济性目标(消纳率 %)">
-          <el-input-number v-model="form.economic_targets.targetConsumptionRate" :min="0" :max="1" :step="0.01" size="small" style="width:100%" />
-        </el-form-item>
+
+        <el-divider style="margin:4px 0 12px" />
+
+        <!-- 一、协同策略（控制规则） -->
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#267F7B">协同策略（控制规则）</div>
+        <div style="margin-bottom:8px">
+          <el-button size="small" @click="addRule">添加规则</el-button>
+        </div>
+        <div v-for="(rule, idx) in form.control_rules" :key="idx" style="padding:10px;margin-bottom:6px;background:#fafafa;border:1px solid #f0f0f0;border-radius:4px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+            <span style="font-size:12px;font-weight:600">规则 {{ idx + 1 }}</span>
+            <el-button size="small" link type="danger" @click="removeRule(idx)">删除</el-button>
+          </div>
+          <el-row :gutter="8">
+            <el-col :span="6"><span style="font-size:11px;color:#909399">名称</span><el-input v-model="rule.name" size="small" placeholder="如：光伏超发消纳" /></el-col>
+            <el-col :span="7"><span style="font-size:11px;color:#909399">触发条件</span><el-input v-model="rule.condition" size="small" placeholder="如：光伏出力 > 80%" /></el-col>
+            <el-col :span="8"><span style="font-size:11px;color:#909399">执行动作</span><el-input v-model="rule.action" size="small" placeholder="如：储能充电→限制光伏" /></el-col>
+            <el-col :span="3"><span style="font-size:11px;color:#909399">优先级</span><el-input-number v-model="rule.priority" :min="1" :max="99" size="small" style="width:100%" /></el-col>
+          </el-row>
+        </div>
+
+        <el-divider style="margin:12px 0" />
+
+        <!-- 二、调度方案（执行计划） -->
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#267F7B">调度方案（执行计划）</div>
+        <div style="margin-bottom:8px">
+          <el-button size="small" @click="addSchedule">添加时段</el-button>
+        </div>
+        <div v-for="(s, idx) in form.schedule" :key="idx" style="padding:10px;margin-bottom:6px;background:#fafafa;border:1px solid #f0f0f0;border-radius:4px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+            <span style="font-size:12px;font-weight:600">时段 {{ idx + 1 }}</span>
+            <el-button size="small" link type="danger" @click="removeSchedule(idx)">删除</el-button>
+          </div>
+          <el-row :gutter="8">
+            <el-col :span="5"><span style="font-size:11px;color:#909399">时间范围</span><el-input v-model="s.timeRange" size="small" placeholder="如：10:00-12:00" /></el-col>
+            <el-col :span="5"><span style="font-size:11px;color:#909399">设备类型</span>
+              <el-select v-model="s.deviceType" size="small" style="width:100%">
+                <el-option label="储能" value="storage" />
+                <el-option label="光伏" value="pv" />
+                <el-option label="负荷" value="load" />
+                <el-option label="电网" value="grid" />
+              </el-select>
+            </el-col>
+            <el-col :span="7"><span style="font-size:11px;color:#909399">动作</span><el-input v-model="s.action" size="small" placeholder="如：放电补电" /></el-col>
+            <el-col :span="4"><span style="font-size:11px;color:#909399">目标值</span><el-input-number v-model="s.targetValue" :min="0" size="small" style="width:100%" /></el-col>
+            <el-col :span="3"><span style="font-size:11px;color:#909399">单位</span>
+              <el-select v-model="s.unit" size="small" style="width:100%">
+                <el-option label="kW" value="kW" />
+                <el-option label="kWh" value="kWh" />
+                <el-option label="%" value="%" />
+              </el-select>
+            </el-col>
+          </el-row>
+        </div>
+
+        <el-divider style="margin:12px 0" />
+
+        <!-- 三、安全约束 -->
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#E6A23C">安全约束（硬限值）</div>
+        <el-row :gutter="12">
+          <el-col :span="6"><span style="font-size:11px;color:#909399">电压上限(kV)</span><el-input-number v-model="form.constraints.voltageUpperLimit" :min="200" :max="264" :step="1" size="small" style="width:100%" /></el-col>
+          <el-col :span="6"><span style="font-size:11px;color:#909399">电压下限(kV)</span><el-input-number v-model="form.constraints.voltageLowerLimit" :min="176" :max="242" :step="1" size="small" style="width:100%" /></el-col>
+          <el-col :span="6"><span style="font-size:11px;color:#909399">线路负载率上限(%)</span><el-input-number v-model="form.constraints.lineLoadRateLimit" :min="0" :max="1" :step="0.05" size="small" style="width:100%" /></el-col>
+          <el-col :span="6"><span style="font-size:11px;color:#909399">设备功率上限(%)</span><el-input-number v-model="form.constraints.devicePowerLimitPct" :min="0" :max="100" size="small" style="width:100%" /></el-col>
+        </el-row>
+
+        <el-divider style="margin:12px 0" />
+
+        <!-- 四、经济目标 -->
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#409EFF">经济性目标</div>
+        <el-row :gutter="12">
+          <el-col :span="8"><span style="font-size:11px;color:#909399">优化模式</span>
+            <el-select v-model="form.economic_targets.optimizationMode" size="small" style="width:100%">
+              <el-option label="成本优先" value="cost_first" />
+              <el-option label="消纳优先" value="consumption_first" />
+              <el-option label="平衡模式" value="balanced" />
+            </el-select>
+          </el-col>
+          <el-col :span="8"><span style="font-size:11px;color:#909399">目标消纳率(%)</span><el-input-number v-model="form.economic_targets.targetConsumptionRate" :min="0" :max="1" :step="0.01" size="small" style="width:100%" /></el-col>
+          <el-col :span="8"><span style="font-size:11px;color:#909399">最大运营成本(¥/kWh)</span><el-input-number v-model="form.economic_targets.maxOperationCostPerKwh" :min="0" :step="0.01" size="small" style="width:100%" /></el-col>
+        </el-row>
       </el-form>
       <template #footer>
         <el-button size="small" @click="dialogVisible = false">取消</el-button>
@@ -205,8 +334,8 @@ onMounted(() => {
         </el-descriptions>
         <div style="margin-top:16px;font-weight:600;font-size:13px">安全约束</div>
         <el-descriptions :column="1" border size="small" style="margin-top:8px">
-          <el-descriptions-item label="电压上限">{{ detail.constraints?.voltageUpperLimit }} p.u.</el-descriptions-item>
-          <el-descriptions-item label="电压下限">{{ detail.constraints?.voltageLowerLimit }} p.u.</el-descriptions-item>
+          <el-descriptions-item label="电压上限">{{ detail.constraints?.voltageUpperLimit }} kV</el-descriptions-item>
+          <el-descriptions-item label="电压下限">{{ detail.constraints?.voltageLowerLimit }} kV</el-descriptions-item>
           <el-descriptions-item label="负载率上限">{{ detail.constraints?.lineLoadRateLimit ? (detail.constraints.lineLoadRateLimit * 100) + '%' : '-' }}</el-descriptions-item>
         </el-descriptions>
         <div style="margin-top:16px;font-weight:600;font-size:13px">经济性目标</div>
@@ -214,6 +343,28 @@ onMounted(() => {
           <el-descriptions-item label="目标消纳率">{{ detail.economic_targets?.targetConsumptionRate ? (detail.economic_targets.targetConsumptionRate * 100) + '%' : '-' }}</el-descriptions-item>
           <el-descriptions-item label="最大运营成本">{{ detail.economic_targets?.maxOperationCostPerKwh ? '¥' + detail.economic_targets.maxOperationCostPerKwh + '/kWh' : '-' }}</el-descriptions-item>
         </el-descriptions>
+        <template v-if="detail.config?.schedule && Array.isArray(detail.config.schedule) && detail.config.schedule.length">
+          <div style="margin-top:16px;font-weight:600;font-size:13px">按时间展示（共 {{ detail.config.schedule.length }} 条）</div>
+          <div style="max-height:300px;overflow-y:auto;margin-top:8px">
+            <el-timeline>
+              <el-timeline-item
+                v-for="(item, idx) in detail.config.schedule"
+                :key="idx"
+                :timestamp="item.timeRange"
+                placement="top"
+                size="small"
+              >
+                <div style="font-size:12px;line-height:1.6">
+                  <span style="font-weight:600">{{ item.deviceName || item.deviceType }}</span>
+                  <span style="color:#909399;margin-left:8px">{{ item.deviceType }}</span>
+                  <el-tag size="small" style="margin-left:8px">{{ item.action }}</el-tag>
+                  <span style="margin-left:8px">{{ item.targetValue }} {{ item.unit }}</span>
+                  <div v-if="item.reason" style="color:#909399;margin-top:2px">{{ item.reason }}</div>
+                </div>
+              </el-timeline-item>
+            </el-timeline>
+          </div>
+        </template>
       </template>
     </el-dialog>
   </div>

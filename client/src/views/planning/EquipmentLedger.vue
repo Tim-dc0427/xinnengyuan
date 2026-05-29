@@ -3,7 +3,6 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import {
-  fetchPvStations,
   fetchEquipmentByStation,
   createEquipmentItem,
   updateEquipmentItem,
@@ -11,7 +10,8 @@ import {
   fetchLifecycleRecords,
   createLifecycleRecord,
 } from '@/api/planning'
-import type { PvStation, EquipmentLedgerItem, EquipmentLifecycleRecord } from '@new-energy/shared'
+import { fetchPowerPlants } from '@/api/resource'
+import type { EquipmentLedgerItem, EquipmentLifecycleRecord } from '@new-energy/shared'
 import {
   equipmentTypeOptions,
   equipmentTypeLabels,
@@ -21,7 +21,7 @@ import {
 import type { EquipmentFieldDef, ModelPreset } from '@/config/equipmentFields'
 
 const loading = ref(false)
-const stations = ref<PvStation[]>([])
+const stations = ref<any[]>([])
 const selectedStationId = ref('')
 const equipment = ref<EquipmentLedgerItem[]>([])
 const currentRecord = ref<EquipmentLedgerItem | null>(null)
@@ -131,7 +131,12 @@ watch(() => formData.value?.equipmentType, (newType) => {
 
 async function loadStations() {
   try {
-    stations.value = await fetchPvStations()
+    const rows = await fetchPowerPlants()
+    stations.value = rows.map((r: any) => ({
+      id: r.id,
+      name: r.station_name || r.name,
+      capacityKw: (r.installed_capacity_mw || 0) * 1000,
+    }))
   } catch {
     stations.value = []
   }
@@ -301,6 +306,7 @@ onMounted(() => {
 
 <template>
   <div>
+    <div class="chart-panel-title">设备台账动态管理</div>
     <!-- Station Selector -->
     <div class="chart-panel" style="margin-bottom:16px">
       <div class="chart-panel-title">选择光伏电站</div>

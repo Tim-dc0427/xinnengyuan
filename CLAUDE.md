@@ -16,6 +16,36 @@
 | 后端 | Express 5 + TypeScript + better-sqlite3 + Knex |
 | 共享 | packages/shared (类型定义、常量、工具函数) |
 | 数据库 | SQLite3 (多数据库: 电网数据、任务队列、配置) |
+| 图编辑 | @antv/x6 v3 (内置所有插件，见下方注意事项) |
+
+## 依赖管理原则
+
+安装外来依赖或插件遇到版本冲突时：
+1. **优先查找不适配原因**，确认当前版本的替代能力（检查源码、npm registry、官方文档）
+2. **找寻适配当前版本的方案**（如内置功能、导出路径变化等）
+3. **以一次性完成完整安装为目标**，避免遗留多个版本
+4. 只有完全走不通（包未发布、源码级不兼容）才换版本
+
+### @antv/x6 v3 插件注意事项
+
+x6 v3.x 所有插件（History、Selection、Keyboard、Clipboard、Scroller、Snapline、Dnd、MiniMap、Stencil、Transform、Export）已内置到核心包的 `lib/plugin/` 目录，从主入口直接导出：
+
+```ts
+// 正确 — 全部从 @antv/x6 导入
+import { Graph, Shape, History, Selection, Keyboard, Clipboard, Scroller, Snapline } from '@antv/x6'
+
+// 错误 — 不要安装独立的 @antv/x6-plugin-* 包
+// npm 上的 v3.0.0 是空壳（无编译产物），v2.x 依赖 @antv/x6@2.x 不兼容 v3
+```
+
+插件通过 `g.use()` 注册：
+```ts
+const g = new Graph({ container, ... })
+g.use(new History({ enabled: true }))
+g.use(new Selection({ enabled: true, multiple: true, rubberband: true, movable: true }))
+g.use(new Scroller({ enabled: true }))
+g.use(new Snapline({ enabled: true, sharp: true }))
+```
 
 ## 项目结构 (Monorepo)
 
@@ -153,6 +183,7 @@ cd client && npm run build
 - 数据库查询使用 Knex query builder
 - 异步任务使用 `setImmediate` 非阻塞执行 + SQLite 进度持久化
 - CSS 使用 scoped style，不引入大型 CSS 框架
+- **电压必须用实际值(kV)**：模拟计算、约束存储、指标写入、前端展示全链路使用 kV 而非标幺值(p.u.)。基准电压从电网接入点(nodeType='GRID')的 voltageLevel 获取，约束值<5 视为旧标幺值自动×基准电压转换。
 
 ### 种子数据管理（重要约定）
 
@@ -165,10 +196,24 @@ cd client && npm run build
   4. 查询层直接返回数据库原始数据，不做二次加工
 - **种子文件的删除顺序**：必须按外键依赖反向顺序删除（先删子表再删父表），新增关联表后要同步更新相关种子文件中的删除列表
 
+### 集中式光伏数据源铁律
+
+- **`solar_pv_stations` 是集中式光伏电站的唯一数据源**：任何涉及集中式光伏的查询必须从该表出发，不得从 `power_plants` 或其他表间接获取
+- **需要扩展字段时**：新建关联表通过 `station_id` 外键引用 `solar_pv_stations.id`，**禁止**建平行表重复存储同一个光伏电站
+- **`power_plants` 仅维护非光伏电源类型**：如储能、风电等，不得再存入光伏类型电站
+- **数据溯源路径必须清晰**：`solar_pv_stations` → 关联表 → 子表，链式可追溯，所有 `station_id` 外键最终都能追溯到 `solar_pv_stations.id`
+
+## 代码修改方式（重要约定）
+
+- **数据写入**：含中文的批量数据写入数据库，用 Node 脚本（knex + better-sqlite3）直接操作 SQLite。不要用 curl 传中文 JSON（编码会损坏）。
+- **代码修改**：用 Edit 工具精准修改源码。**禁止用 Node 脚本做字符串替换来改代码**（多次导致语法错误、文件裁坏、编码匹配失败）。
+- 各司其职，不要混用。
+
 ## UI 规范（重要约定）
 
 - **极致简洁**：不做任何多余的样式装饰，保留最符合实际后台的样式即可
 - **白底灰框文字**：配色使用基础灰白，不要彩色点缀、渐变背景、装饰条
 - **功能控件**：只放操作核心数据所必需的控件（按钮、输入框、下拉框），不要启用/禁用开关、图标装饰等无关元素
 - **无说明文字**：界面上不要加解释性文字，用户自己能看懂
+- **页面左上角统一展示当前子菜单名称**：每个功能页面模板最顶部放置 `<div class="chart-panel-title">{{ 页面功能名称 }}</div>`，名称与路由 `meta.title` 一致。Hub 型路由容器（仅含 `<RouterView />`）不需要
 - **如需例外**：只有用户明确要求加 UI 样式（如"加个图标"、"加个颜色"）时才做，否则默认极简

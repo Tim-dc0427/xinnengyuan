@@ -42,7 +42,16 @@ const menuItems: MenuItem[] = [
   {
     title: '成果管理', icon: Collection,
     children: [
-      { path: '/achievement/projects', title: '规划项目库' },
+      {
+        title: '规划项目库',
+        children: [
+          { path: '/achievement/projects/type-mgmt', title: '光伏项目类型兼容' },
+          { path: '/achievement/projects/access-conditions', title: '接入条件数字化管理' },
+          { path: '/achievement/projects/feasibility', title: '并网可行性综合分析' },
+          { path: '/achievement/projects/effectiveness', title: '项目成效验证评估' },
+          { path: '/achievement/projects/traceability', title: '项目留痕与追溯' },
+        ],
+      },
     ],
   },
   {

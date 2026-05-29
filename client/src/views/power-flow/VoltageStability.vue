@@ -10,18 +10,16 @@ const nodeList = ref<any[]>([])
 const filterText = ref('')
 
 const voltageLevelOptions = ['', '220kV', '110kV', '10kV']
-const regionOptions = ['', 'A（西部：仓前/未来城）', 'B（中部：余杭/闲林）', 'C（东部：乔司）']
-const regionValueMap: Record<string, string> = {
-  'A（西部：仓前/未来城）': 'A',
-  'B（中部：余杭/闲林）': 'B',
-  'C（东部：乔司）': 'C',
-}
+const regionOptions = ref<string[]>([''])
 
 const weakNodes = computed(() => nodeList.value.filter((n: any) => n.isWeakNode))
 const filteredList = computed(() => {
-  if (!filterText.value) return nodeList.value
+  let list = nodeList.value
+  if (region.value) list = list.filter((n: any) => n.zone === region.value)
+  if (voltageLevel.value) list = list.filter((n: any) => n.voltageLevel === voltageLevel.value)
+  if (!filterText.value) return list
   const kw = filterText.value.toLowerCase()
-  return nodeList.value.filter((n: any) =>
+  return list.filter((n: any) =>
     n.nodeId?.toLowerCase().includes(kw) || n.name?.toLowerCase().includes(kw) || n.zone?.toLowerCase().includes(kw)
   )
 })
@@ -42,8 +40,12 @@ async function loadData() {
   try {
     const params: Record<string, string> = {}
     if (voltageLevel.value) params.voltageLevel = voltageLevel.value
-    if (region.value) params.region = regionValueMap[region.value] || region.value
+    if (region.value) params.region = region.value
     nodeList.value = (await fetchNodeStability(params)) || []
+    // 从数据中提取所有区县
+    const zones = new Set<string>()
+    nodeList.value.forEach((n: any) => { if (n.zone) zones.add(n.zone) })
+    regionOptions.value = ['', ...Array.from(zones).sort()]
   } catch {
     nodeList.value = []
   } finally {
@@ -69,6 +71,7 @@ onMounted(loadData)
 
 <template>
   <div class="page-container">
+    <div class="chart-panel-title">节点电压稳定性</div>
     <div class="filter-bar">
       <el-select v-model="voltageLevel" placeholder="电压等级" clearable size="small" style="width:150px" @change="loadData">
         <el-option v-for="v in voltageLevelOptions" :key="v" :label="v || '全部'" :value="v" />

@@ -83,6 +83,7 @@ onMounted(() => {
 
 <template>
   <div>
+    <div class="chart-panel-title">布点规划智能推荐</div>
     <el-tabs v-model="activeTab">
       <el-tab-pane label="综合评估" name="evaluation">
         <EvaluationTab />

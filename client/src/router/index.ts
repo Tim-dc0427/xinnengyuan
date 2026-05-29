@@ -78,12 +78,44 @@ const routes: RouteRecordRaw[] = [
           },
         ],
       },
-      // Module 3: Achievement
+      // Module 3: Achievement — 规划项目库 (Hub + 5 children)
       {
         path: 'achievement/projects',
-        name: 'ProjectPortfolio',
         component: () => import('@/views/achievement/ProjectPortfolio.vue'),
         meta: { title: '规划项目库', roles: ['admin', 'planner', 'operator', 'viewer'] },
+        redirect: '/achievement/projects/type-mgmt',
+        children: [
+          {
+            path: 'type-mgmt',
+            name: 'ProjectTypeManagement',
+            component: () => import('@/views/achievement/ProjectTypeManagement.vue'),
+            meta: { title: '光伏项目类型兼容', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+          {
+            path: 'access-conditions',
+            name: 'AccessConditionManagement',
+            component: () => import('@/views/achievement/AccessConditionManagement.vue'),
+            meta: { title: '接入条件数字化管理', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+          {
+            path: 'feasibility',
+            name: 'FeasibilityAnalysis',
+            component: () => import('@/views/achievement/FeasibilityAnalysis.vue'),
+            meta: { title: '并网可行性综合分析', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+          {
+            path: 'effectiveness',
+            name: 'EffectivenessVerification',
+            component: () => import('@/views/achievement/EffectivenessVerification.vue'),
+            meta: { title: '项目成效验证评估', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+          {
+            path: 'traceability',
+            name: 'ProjectTraceability',
+            component: () => import('@/views/achievement/ProjectTraceability.vue'),
+            meta: { title: '项目留痕与追溯', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+        ],
       },
       // Module 4: Power Flow
       {
@@ -226,6 +258,12 @@ const routes: RouteRecordRaw[] = [
             component: () => import('@/views/power-flow/ParamManagement.vue'),
             meta: { title: '参数管理', roles: ['admin', 'planner'] },
           },
+          {
+            path: 'versioning',
+            name: 'ParamVersioning',
+            component: () => import('@/views/power-flow/ParamVersioning.vue'),
+            meta: { title: '参数版本控制', roles: ['admin', 'planner'] },
+          },
         ],
       },
       // Module 5: Resource
@@ -302,8 +340,10 @@ const routes: RouteRecordRaw[] = [
   },
 ]
 
+const base = import.meta.env.BASE_URL
+
 export const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(base),
   routes,
 })
 

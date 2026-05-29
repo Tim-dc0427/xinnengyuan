@@ -6,12 +6,8 @@ import type { PvGridTopology, TopoNode, TopoEdge } from '@new-energy/shared'
 async function resolveNodeName(nodeType: string, nodeId: string): Promise<string> {
   switch (nodeType) {
     case 'SOURCE': {
-      const pv = await db('solar_pv_stations')
-        .join('power_plants', 'solar_pv_stations.plant_id', 'power_plants.id')
-        .where('power_plants.id', nodeId)
-        .select('power_plants.name')
-        .first()
-      return (pv as any)?.name || nodeId
+      const pv = await db('solar_pv_stations').where('id', nodeId).select('station_name').first()
+      return (pv as any)?.station_name || nodeId
     }
     case 'GRID': {
       const bus = await db('grid_buses').where('id', nodeId).select('name').first()
@@ -37,23 +33,22 @@ export class TopologyService {
 
     // 1. SOURCE 节点：光伏电站
     const pvRows = await db('solar_pv_stations')
-      .join('power_plants', 'solar_pv_stations.plant_id', 'power_plants.id')
       .select(
-        'power_plants.id as plant_id',
-        'power_plants.name as plant_name',
-        'solar_pv_stations.bus_id',
-        'solar_pv_stations.installed_capacity_mw',
-        'solar_pv_stations.grid_connection_voltage_kv',
-        'solar_pv_stations.longitude',
-        'solar_pv_stations.latitude',
+        'id as station_id',
+        'station_name as plant_name',
+        'bus_id',
+        'installed_capacity_mw',
+        'grid_connection_voltage_kv',
+        'longitude',
+        'latitude',
       )
     const pvBusIds = pvRows.map((r: any) => r.bus_id)
     for (const r of pvRows as any[]) {
       nodes.push({
-        id: `NODE_SOURCE_${r.plant_id}`,
+        id: `NODE_SOURCE_${r.station_id}`,
         name: r.plant_name,
         nodeType: 'SOURCE',
-        plantId: r.plant_id,
+        plantId: r.station_id,
         busId: r.bus_id,
         voltageLevel: r.grid_connection_voltage_kv ? `${r.grid_connection_voltage_kv}kV` : undefined,
         posX: r.longitude,
@@ -189,14 +184,13 @@ export class TopologyService {
     switch (nodeType) {
       case 'SOURCE':
         return db('solar_pv_stations')
-          .join('power_plants', 'solar_pv_stations.plant_id', 'power_plants.id')
           .select(
-            'power_plants.id as node_id',
-            'power_plants.name as node_name',
-            'solar_pv_stations.installed_capacity_mw',
-            'solar_pv_stations.grid_connection_voltage_kv',
+            'id as node_id',
+            'station_name as node_name',
+            'installed_capacity_mw',
+            'grid_connection_voltage_kv',
           )
-          .orderBy('power_plants.name')
+          .orderBy('station_name')
       case 'GRID':
         return db('grid_buses')
           .select('id as node_id', 'name as node_name', 'voltage_level', 'zone')
@@ -216,25 +210,11 @@ export class TopologyService {
 
   // ==================== 源(SOURCE)节点创建 ====================
   async createSourceNode(data: any) {
-    const plantId = uuid()
-    const spvId = uuid()
+    const id = uuid()
     const now = new Date().toISOString()
-    await db('power_plants').insert({
-      id: plantId,
-      name: data.name,
-      plant_type: 'solar',
-      capacity_kw: data.capacityKw || 0,
-      voltage_level: data.voltageLevel || '',
-      zone: data.zone || '',
-      longitude: data.longitude || null,
-      latitude: data.latitude || null,
-      status: 'active',
-      created_at: now,
-    })
     await db('solar_pv_stations').insert({
-      id: spvId,
+      id,
       station_name: data.name,
-      plant_id: plantId,
       bus_id: data.busId || null,
       installed_capacity_mw: (data.capacityKw || 0) / 1000,
       grid_connection_voltage_kv: data.voltageLevel ? parseFloat(data.voltageLevel) : null,
@@ -243,7 +223,7 @@ export class TopologyService {
       status: 'active',
       created_at: now,
     })
-    return db('power_plants').where('id', plantId).first()
+    return db('solar_pv_stations').where('id', id).first()
   }
 
   // ==================== 网(GRID)节点创建 ====================

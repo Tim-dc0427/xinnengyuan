@@ -2,10 +2,9 @@ import { v4 as uuid } from 'uuid'
 import type { Knex } from 'knex'
 
 export async function seed(knex: Knex): Promise<void> {
-  const plants = await knex('power_plants').select('id', 'name', 'capacity_kw')
-  const pvPlants = plants.filter((p: any) => p.name.includes('光伏'))
-  if (pvPlants.length === 0) {
-    console.log('No PV plants found, skipping PV measurement seed.')
+  const stations = await knex('solar_pv_stations').select('id', 'plant_id', 'station_name', 'installed_capacity_mw', 'grid_connection_voltage_kv')
+  if (stations.length === 0) {
+    console.log('No solar PV stations found, skipping PV measurement seed.')
     return
   }
 
@@ -15,13 +14,9 @@ export async function seed(knex: Knex): Promise<void> {
   const intervalMin = 15
   const batchSize = 100
 
-  for (const plant of pvPlants) {
-    const capacityKw = (plant as any).capacity_kw || 50000
-    // 根据容量判断并网电压等级
-    let gridKv: number
-    if (capacityKw >= 200000) gridKv = 230        // 220kV 接入
-    else if (capacityKw >= 40000) gridKv = 115     // 110kV 接入
-    else gridKv = 10.5                              // 10kV 接入
+  for (const station of stations) {
+    const capacityKw = (station as any).installed_capacity_mw * 1000
+    const gridKv = (station as any).grid_connection_voltage_kv || 110
 
     const records: any[] = []
 
@@ -75,7 +70,8 @@ export async function seed(knex: Knex): Promise<void> {
       records.push({
         id: uuid(),
         time: t.toISOString(),
-        plant_id: (plant as any).id,
+        plant_id: (station as any).plant_id || '',
+        station_id: (station as any).id,
         active_power_kw: powerKw,
         reactive_power_kvar: Math.round(powerKw * (0.08 + Math.random() * 0.04)),
         voltage_v: Number((gridKv * 1000 * (0.98 + Math.random() * 0.04)).toFixed(1)),
@@ -96,6 +92,6 @@ export async function seed(knex: Knex): Promise<void> {
       await knex('pv_output_measurements').insert(records.slice(i, i + batchSize))
     }
 
-    console.log(`  ✓ ${(plant as any).name}: ${records.length} records (${(capacityKw / 1000).toFixed(0)}MW, ${gridKv}kV)`)
+    console.log(`  ✓ ${(station as any).station_name}: ${records.length} records (${(capacityKw / 1000).toFixed(0)}MW, ${gridKv}kV)`)
   }
 }

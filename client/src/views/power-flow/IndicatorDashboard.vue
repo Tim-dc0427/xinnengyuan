@@ -15,12 +15,8 @@ const threePhaseList = ref<ThreePhaseItem[]>([])
 const filterText = ref('')
 
 const voltageLevelOptions = ['', '220kV', '110kV', '10kV']
-const regionOptions = ['', 'A（西部：仓前/未来城）', 'B（中部：余杭/闲林）', 'C（东部：乔司）']
-const regionValueMap: Record<string, string> = {
-  'A（西部：仓前/未来城）': 'A',
-  'B（中部：余杭/闲林）': 'B',
-  'C（东部：乔司）': 'C',
-}
+const regionOptions = ref<string[]>([''])
+const allZones = ref<string[]>([])
 
 // 合并节点数据 + 三相不平衡数据为统一列表
 const indicatorList = computed(() => {
@@ -47,11 +43,14 @@ const indicatorList = computed(() => {
   })
 })
 
-// 搜索过滤
+// 搜索过滤 + 区域 + 电压等级
 const filteredList = computed(() => {
-  if (!filterText.value) return indicatorList.value
+  let list = indicatorList.value
+  if (region.value) list = list.filter((n: any) => n.zone === region.value)
+  if (voltageLevel.value) list = list.filter((n: any) => n.voltageLevel === voltageLevel.value)
+  if (!filterText.value) return list
   const kw = filterText.value.toLowerCase()
-  return indicatorList.value.filter((n: any) =>
+  return list.filter((n: any) =>
     n.name.toLowerCase().includes(kw) || n.zone?.toLowerCase().includes(kw) || n.voltageLevel?.toLowerCase().includes(kw)
   )
 })
@@ -79,7 +78,7 @@ async function loadData() {
   try {
     const params: Record<string, string> = {}
     if (voltageLevel.value) params.voltageLevel = voltageLevel.value
-    if (region.value) params.region = regionValueMap[region.value] || region.value
+    if (region.value) params.region = region.value
 
     const [indRes, tpRes] = await Promise.all([
       fetchIndicators(params),
@@ -87,6 +86,13 @@ async function loadData() {
     ])
     indicators.value = indRes
     threePhaseList.value = tpRes as any
+
+    // 从数据中提取所有区县
+    const zones = new Set<string>()
+    const nodes = indRes?.node_results || []
+    nodes.forEach((n: any) => { if (n.zone) zones.add(n.zone) })
+    allZones.value = Array.from(zones).sort()
+    regionOptions.value = ['', ...allZones.value]
   } catch {
     // keep stale data
   } finally {
@@ -116,6 +122,7 @@ onUnmounted(() => {
 
 <template>
   <div>
+    <div class="chart-panel-title">综合概览</div>
     <!-- 筛选栏 -->
     <div class="filter-bar">
       <el-select v-model="voltageLevel" placeholder="电压等级" clearable size="small" style="width:140px" @change="loadData">

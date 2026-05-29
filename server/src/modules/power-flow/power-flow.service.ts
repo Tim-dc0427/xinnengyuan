@@ -94,12 +94,20 @@ export class PowerFlowService {
     nodeResults: any[]; branchResults: any[]; totalLoadMw: number; totalGenMw: number
     totalLossMw: number; lossPercent: number; converged: boolean; iterations: number
   }> {
-    const [busRows, branchRows, genRows, loadRows] = await Promise.all([
+    const [busRows, branchRows, genRows, loadRows, pvRows] = await Promise.all([
       db('grid_buses').orderBy('voltage_level', 'desc').orderBy('name'),
       db('grid_branches'),
       db('grid_generators'),
       db('grid_loads'),
+      db('solar_pv_stations').where('status', 'active').select('bus_id', 'installed_capacity_mw'),
     ])
+
+    // 构建光伏母线 → 装机容量映射
+    const pvBusCapacity = new Map<string, number>()
+    for (const pv of pvRows) {
+      const prev = pvBusCapacity.get(pv.bus_id) || 0
+      pvBusCapacity.set(pv.bus_id, prev + (pv.installed_capacity_mw || 0))
+    }
 
     const input: PowerFlowInput = {
       buses: busRows.map((b: any) => ({
@@ -111,12 +119,19 @@ export class PowerFlowService {
         branchType: b.branch_type, rOhm: b.r_ohm, xOhm: b.x_ohm,
         bUf: b.b_uf ?? 0, tapRatio: b.tap_ratio ?? null,
       })),
-      generators: genRows.map((g: any) => ({
-        busId: g.bus_id, pgMw: g.pg_mw, vgKv: g.vg_kv,
-        qmaxMvar: g.qmax_mvar, qminMvar: g.qmin_mvar,
-      })),
+      generators: genRows.map((g: any) => {
+        const pvCap = pvBusCapacity.get(g.bus_id)
+        return {
+          busId: g.bus_id, pgMw: g.pg_mw, vgKv: g.vg_kv,
+          qmaxMvar: g.qmax_mvar, qminMvar: g.qmin_mvar,
+          isPV: pvCap !== undefined,
+          installedCapacityMw: pvCap || 0,
+        }
+      }),
       loads: loadRows.map((l: any) => ({
         busId: l.bus_id, pdMw: l.pd_mw, qdMvar: l.qd_mvar,
+        pdAMw: l.pd_a_mw, pdBMw: l.pd_b_mw, pdCMw: l.pd_c_mw,
+        qdAMvar: l.qd_a_mvar, qdBMvar: l.qd_b_mvar, qdCMvar: l.qd_c_mvar,
       })),
     }
 
@@ -180,12 +195,12 @@ export class PowerFlowService {
     const matchedBusIds = await this.getMatchedBusIds(query.voltageLevel, query.region)
     const busSet = new Set(matchedBusIds)
 
-    // 加载实际光伏关联节点（grid_generators 中标记了光伏的发电机所连母线）
-    const pvRows = await db('grid_generators')
-      .where('remark', 'like', '%光伏%')
-      .select('bus_id', 'remark')
+    // 光伏关联节点：从 solar_pv_stations 获取实际并网的母线
+    const pvRows = await db('solar_pv_stations')
+      .where('status', 'active')
+      .select('bus_id', 'station_name')
     const pvBusIds = new Set(pvRows.map((r: any) => r.bus_id))
-    const pvGenMap = new Map(pvRows.map((r: any) => [r.bus_id, r.remark]))
+    const pvGenMap = new Map(pvRows.map((r: any) => [r.bus_id, r.station_name]))
 
     // 先尝试从 calc_results 取最新结果
     const record = await db('calc_results')
@@ -209,19 +224,21 @@ export class PowerFlowService {
 
     return nodeResults.map((n: any) => {
       const vPu = n.voltagePu ?? 1.0
+      const baseKv = n.baseKv ?? 10
+      const actualKv = vPu * baseKv
       const imbl = n.threePhaseImbalance ?? 0
-      // 根据潮流计算结果和三相不平衡度构造三相幅值
-      const imbalanceFactor = imbl / 100 // 转为小数
+      const imbalanceFactor = imbl / 100
       return {
         id: n.busId || n.nodeId,
         nodeId: n.nodeId,
         name: n.name,
         zone: n.zone,
         voltageLevel: n.voltageLevel,
+        baseKv,
         imbalancePct: imbl,
-        phaseA: Number((vPu * (1 + imbalanceFactor * 0.3)).toFixed(4)),
-        phaseB: Number((vPu * (1 + imbalanceFactor * 0.1)).toFixed(4)),
-        phaseC: Number((vPu * (1 - imbalanceFactor * 0.2)).toFixed(4)),
+        phaseA: Number((actualKv * (1 + imbalanceFactor * 0.3)).toFixed(4)),
+        phaseB: Number((actualKv * (1 + imbalanceFactor * 0.1)).toFixed(4)),
+        phaseC: Number((actualKv * (1 - imbalanceFactor * 0.2)).toFixed(4)),
         pvRelated: pvBusIds.has(n.busId || n.nodeId),
         plantName: pvGenMap.get(n.busId || n.nodeId) || '',
       }
@@ -244,9 +261,9 @@ export class PowerFlowService {
 
   // ==================== Data Validation ====================
   async checkCompleteness(params: any) {
-    const { plantId, startDate, endDate } = params
+    const { stationId, startDate, endDate } = params
     const records = await db('pv_output_measurements')
-      .where('plant_id', plantId)
+      .where('station_id', stationId)
       .whereBetween('time', [startDate, endDate])
       .orderBy('time', 'asc')
 
@@ -721,21 +738,21 @@ export class PowerFlowService {
       await this.updateProgress(taskId, 18, '应用时间窗口光伏数据...')
       // 时间窗口逻辑：如果有光伏站，从 pv_output_measurements 查询对应时间段数据
       try {
-        const pvStations = await db('solar_pv_stations').select('bus_id', 'plant_id', 'installed_capacity_mw')
+        const pvStations = await db('solar_pv_stations').select('bus_id', 'id', 'installed_capacity_mw')
         if (pvStations.length > 0) {
           const tw = batchParams.timeWindow
           const measurements = await db('pv_output_measurements')
             .where('time', '>=', tw.start)
             .where('time', '<=', tw.end)
-            .select('plant_id', 'active_power_kw')
+            .select('station_id', 'active_power_kw')
             .avg('active_power_kw as avg_kw')
-            .groupBy('plant_id')
+            .groupBy('station_id')
 
           const plantAvgMap = new Map<string, number>()
-          measurements.forEach((m: any) => plantAvgMap.set(m.plant_id, (m.avg_kw || 0) / 1000))
+          measurements.forEach((m: any) => plantAvgMap.set(m.station_id, (m.avg_kw || 0) / 1000))
 
           for (const pv of pvStations) {
-            const avgMw = plantAvgMap.get(pv.plant_id)
+            const avgMw = plantAvgMap.get(pv.id)
             if (avgMw !== undefined) {
               const gen = input.generators.find((g: any) => g.busId === pv.bus_id)
               if (gen) {
@@ -1411,6 +1428,12 @@ export class PowerFlowService {
   // ==================== Curve Templates (版本控制) ====================
   async listCurveTemplates() {
     return db('output_curve_templates').where('is_active', 1).orWhere('is_active', null).orderBy('weather_type', 'asc').orderBy('name', 'asc')
+  }
+
+  async listAllCurveTemplates(rootId?: string) {
+    const qb = db('output_curve_templates').orderBy('version', 'desc')
+    if (rootId) qb.where('root_id', rootId)
+    return qb
   }
 
   async createCurveTemplate(data: any, userId: string) {
@@ -2654,8 +2677,8 @@ export class PowerFlowService {
       )
       .join('grid_buses as gb', 'gb.id', 'spv.bus_id')
       .joinRaw(
-        `LEFT JOIN pv_output_measurements m ON m.plant_id = spv.plant_id
-         AND m.time = (SELECT max(time) FROM pv_output_measurements WHERE plant_id = spv.plant_id)`,
+        `LEFT JOIN pv_output_measurements m ON m.station_id = spv.id
+         AND m.time = (SELECT max(time) FROM pv_output_measurements WHERE station_id = spv.id)`,
       )
       .where('spv.status', 'active')
 

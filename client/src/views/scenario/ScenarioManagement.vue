@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import {
   fetchScenarios, createScenario, updateScenario, deleteScenario,
   batchDeleteScenarios, copyScenario, fetchScenarioVersions, restoreVersion, exportScenarios,
-  previewScenario,
+  previewScenario as callPreviewScenario, batchCopyScenarios,
 } from '@/api/scenario'
 import { fetchNodesByType } from '@/api/resource'
+import type { ScenarioTopology } from '@new-energy/shared'
+import GridEditorTab from './components/GridEditorTab.vue'
+import PreviewTopology from './components/PreviewTopology.vue'
 
 const NODE_TYPE_OPTIONS = [
   { value: 'SOURCE', label: '源(光伏电站)' },
@@ -30,9 +33,32 @@ const filterDateEnd = ref('')
 const filterTag = ref('')
 const selectedIds = ref<string[]>([])
 
-// 预览
+// 独立预览弹窗
+const previewVisible = ref(false)
 const previewing = ref(false)
 const previewData = ref<any>(null)
+const previewScenario = ref<any>(null)
+
+// 编辑面板内实时预览
+const editPreviewData = ref<any>(null)
+const editPreviewing = ref(false)
+let previewTimer: ReturnType<typeof setTimeout> | null = null
+
+function debouncedPreview() {
+  if (previewTimer) clearTimeout(previewTimer)
+  previewTimer = setTimeout(async () => {
+    if (!dialogVisible.value) return
+    editPreviewing.value = true
+    try {
+      const data = await callPreviewScenario(buildConfig())
+      editPreviewData.value = data
+    } catch {
+      editPreviewData.value = null
+    } finally {
+      editPreviewing.value = false
+    }
+  }, 500)
+}
 
 // 源网荷储节点(按类型缓存)
 const nodesByType = ref<Record<string, any[]>>({})
@@ -55,14 +81,21 @@ const detail = ref<any>(null)
 const versionsVisible = ref(false)
 const versions = ref<any[]>([])
 const versionsScenarioId = ref('')
+const versionsScenarioData = ref<any>(null)
 
 const typeOptions = [
-  { value: 'custom', label: '自定义场景' },
+  { value: 'industrial_park', label: '工业园区' },
+  { value: 'residential', label: '居民小区' },
+  { value: 'commercial', label: '商业综合体' },
+  { value: 'custom', label: '自定义' },
+]
+
+const scenarioConditionOptions = [
   { value: 'peak_load', label: '高峰负荷' },
   { value: 'extreme_weather', label: '极端天气' },
   { value: 'maintenance', label: '线路检修' },
   { value: 'solar_high', label: '光伏高发' },
-  { value: 'emergency', label: '应急场景' },
+  { value: 'normal', label: '常规' },
 ]
 
 // 表单
@@ -79,17 +112,32 @@ function defaultDeviceParams(nodeType: string) {
   }
 }
 
-const formBasic = ref({ name: '', type: 'custom', description: '', tags: [] as string[], status: 'draft' })
+const formBasic = ref({ name: '', type: 'custom', description: '', tags: [] as string[], status: 'draft', scenario_condition: 'normal', version_limit: 10 })
 const formAccessPoints = ref<AccessPoint[]>([])
 const formControlRules = ref<ControlRule[]>([])
 const formDataSource = ref({ type: 'realtime', dataTypes: [] as string[] })
+const gridTopology = ref<ScenarioTopology>({ nodes: [], edges: [] })
+const topologyTabSeen = ref(false)
 const tagInput = ref('')
 
 function buildConfig() {
+  // 拓扑编辑器优先：有拓扑节点时从拓扑派生 accessPoints
+  const accessPoints = gridTopology.value.nodes.length > 0
+    ? gridTopology.value.nodes.map(n => ({
+        nodeType: n.nodeType,
+        nodeId: n.nodeId || '',
+        nodeName: n.nodeName,
+        connectedCapacity: n.connectedCapacity || 0,
+        voltageLevel: parseInt((n.voltageLevel || '110').replace('kV', ''), 10) || 110,
+        connectionType: 'AC',
+        params: n.params || defaultDeviceParams(n.nodeType),
+      }))
+    : formAccessPoints.value
   return {
-    accessPoints: formAccessPoints.value,
+    accessPoints,
     controlRules: formControlRules.value,
     dataSource: formDataSource.value,
+    topology: gridTopology.value,
   }
 }
 
@@ -104,6 +152,13 @@ function loadConfig(config: any) {
       type: config.dataSource.type || 'realtime',
       dataTypes: config.dataSource.dataTypes || [],
     }
+  }
+  if (config.topology) {
+    gridTopology.value = config.topology
+  } else if (config.accessPoints?.length) {
+    gridTopology.value = { nodes: [], edges: [] }
+  } else {
+    gridTopology.value = { nodes: [], edges: [] }
   }
 }
 
@@ -168,13 +223,18 @@ function removeTag(tag: string) {
 
 function openCreate() {
   editingId.value = ''
-  formBasic.value = { name: '', type: 'custom', description: '', tags: [], status: 'draft' }
+  formBasic.value = { name: '', type: 'custom', description: '', tags: [], status: 'draft', scenario_condition: 'normal', version_limit: 10 }
   formAccessPoints.value = []
   formControlRules.value = []
   formDataSource.value = { type: 'realtime', dataTypes: [] }
+  gridTopology.value = { nodes: [], edges: [] }
+  topologyTabSeen.value = false
   activeTab.value = 'basic'
-  previewData.value = null
   dialogVisible.value = true
+}
+
+function onTopologyUpdate(topology: ScenarioTopology) {
+  gridTopology.value = topology
 }
 
 function openEdit(row: any) {
@@ -182,6 +242,8 @@ function openEdit(row: any) {
   formBasic.value = {
     name: row.name, type: row.type, description: row.description || '',
     tags: row.tags || [], status: row.status || 'draft',
+    scenario_condition: row.scenario_condition || 'normal',
+    version_limit: row.version_limit ?? 10,
   }
   loadConfig(row.config)
   if (!formAccessPoints.value.length) formAccessPoints.value = []
@@ -208,12 +270,17 @@ async function save() {
   } finally { saving.value = false }
 }
 
+function openPreview(row: any) {
+  previewScenario.value = row
+  previewData.value = null
+  previewVisible.value = true
+}
+
 async function runPreview() {
   previewing.value = true
   previewData.value = null
   try {
-    const config: any = buildConfig()
-    const data = await previewScenario(config)
+    const data = await callPreviewScenario(previewScenario.value.config || {})
     previewData.value = data
   } finally { previewing.value = false }
 }
@@ -226,6 +293,13 @@ async function remove(id: string) {
 async function batchDelete() {
   if (!selectedIds.value.length) return
   await batchDeleteScenarios(selectedIds.value)
+  selectedIds.value = []
+  await loadData()
+}
+
+async function batchCopy() {
+  if (!selectedIds.value.length) return
+  await batchCopyScenarios(selectedIds.value)
   selectedIds.value = []
   await loadData()
 }
@@ -255,6 +329,7 @@ async function showDetail(row: any) {
 
 async function showVersions(row: any) {
   versionsScenarioId.value = row.id
+  versionsScenarioData.value = row
   versions.value = await fetchScenarioVersions(row.id)
   versionsVisible.value = true
 }
@@ -273,6 +348,28 @@ function resetSearch() {
   loadData()
 }
 
+// 编辑面板实时预览：监听接入点变化
+watch(
+  () => formAccessPoints.value,
+  () => {
+    if (dialogVisible.value && formAccessPoints.value.length > 0) {
+      debouncedPreview()
+    }
+  },
+  { deep: true },
+)
+
+// 关闭对话框时清理预览
+watch(dialogVisible, (val) => {
+  if (!val) {
+    editPreviewData.value = null
+    if (previewTimer) {
+      clearTimeout(previewTimer)
+      previewTimer = null
+    }
+  }
+})
+
 onMounted(() => {
   loadData()
   loadResources()
@@ -281,6 +378,7 @@ onMounted(() => {
 
 <template>
   <div>
+    <div class="chart-panel-title">互动场景管理</div>
     <!-- 搜索 -->
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;flex-wrap:wrap;gap:8px">
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
@@ -301,6 +399,7 @@ onMounted(() => {
       </div>
       <div style="display:flex;gap:6px">
         <el-button v-if="selectedIds.length" size="small" @click="batchExport">导出({{ selectedIds.length }})</el-button>
+        <el-button v-if="selectedIds.length" size="small" @click="batchCopy">批量复制({{ selectedIds.length }})</el-button>
         <el-button v-if="selectedIds.length" size="small" type="danger" @click="batchDelete">批量删除({{ selectedIds.length }})</el-button>
         <el-button type="primary" size="small" @click="openCreate">创建场景</el-button>
       </div>
@@ -329,12 +428,13 @@ onMounted(() => {
         </template>
       </el-table-column>
       <el-table-column prop="created_at" label="创建时间" width="150" />
-      <el-table-column label="操作" width="260" fixed="right">
+      <el-table-column label="操作" width="320" fixed="right">
         <template #default="{ row }">
           <el-button size="small" link type="primary" @click="showDetail(row)">详情</el-button>
           <el-button size="small" link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button size="small" link @click="showVersions(row)">版本</el-button>
           <el-button size="small" link @click="copy(row.id)">复制</el-button>
+          <el-button size="small" link @click="openPreview(row)">预览</el-button>
           <el-button size="small" link type="danger" @click="remove(row.id)">删除</el-button>
         </template>
       </el-table-column>
@@ -346,7 +446,7 @@ onMounted(() => {
 
     <!-- 创建/编辑对话框 -->
     <el-dialog v-model="dialogVisible" :title="editingId ? '编辑场景' : '搭建互动场景'" width="860px" @close="activeTab='basic'">
-      <el-tabs v-model="activeTab">
+      <el-tabs v-model="activeTab" @tab-change="(name: string) => { if (name === 'topology') topologyTabSeen = true }">
         <el-tab-pane label="基本信息" name="basic">
           <el-form :model="formBasic" label-position="top" size="small">
             <el-row :gutter="16">
@@ -359,6 +459,20 @@ onMounted(() => {
               <el-col :span="5">
                 <el-form-item label="状态">
                   <el-select v-model="formBasic.status"><el-option label="草稿" value="draft" /><el-option label="已发布" value="active" /></el-select>
+                </el-form-item>
+              </el-col>
+            </el-row>
+            <el-row :gutter="16">
+              <el-col :span="8">
+                <el-form-item label="场景条件">
+                  <el-select v-model="formBasic.scenario_condition">
+                    <el-option v-for="c in scenarioConditionOptions" :key="c.value" :label="c.label" :value="c.value" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="8">
+                <el-form-item label="版本保留上限">
+                  <el-input-number v-model="formBasic.version_limit" :min="1" :max="100" size="small" style="width:100%" />
                 </el-form-item>
               </el-col>
             </el-row>
@@ -488,16 +602,129 @@ onMounted(() => {
           </el-form>
         </el-tab-pane>
 
-        <el-tab-pane label="运行预览" name="preview" @tab-click="runPreview">
-          <div v-if="!previewData && !previewing" style="text-align:center;padding:40px;color:#909399">
-            <p>基于当前配置参数进行快速运行效果预览</p>
-            <el-button type="primary" size="small" @click="runPreview">开始预览</el-button>
+        <el-tab-pane label="网架图编辑" name="topology">
+          <GridEditorTab
+            v-if="topologyTabSeen"
+            :config="buildConfig()"
+            :nodes-by-type="nodesByType"
+            @update:topology="onTopologyUpdate"
+          />
+        </el-tab-pane>
+      </el-tabs>
+
+      <!-- 实时预览 -->
+      <div v-if="formAccessPoints.length > 0" style="margin-top:16px;border-top:1px solid #ebeef5;padding-top:12px">
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#303133">实时预览</div>
+        <div v-loading="editPreviewing" style="min-height:60px">
+          <template v-if="editPreviewData && !editPreviewing">
+            <el-row :gutter="12">
+              <el-col :span="6">
+                <div style="padding:8px;background:#fafafa;border-radius:4px;text-align:center">
+                  <div style="font-size:18px;font-weight:600" :style="{color: editPreviewData.indicators.voltage.status === '越限' ? '#f56c6c' : '#303133'}">
+                    {{ editPreviewData.indicators.voltage.min }}~{{ editPreviewData.indicators.voltage.max }}
+                  </div>
+                  <div style="font-size:11px;color:#909399">电压范围 (kV)</div>
+                </div>
+              </el-col>
+              <el-col :span="6">
+                <div style="padding:8px;background:#fafafa;border-radius:4px;text-align:center">
+                  <div style="font-size:18px;font-weight:600" :style="{color: editPreviewData.indicators.frequency.status === '越限' ? '#f56c6c' : '#303133'}">
+                    {{ editPreviewData.indicators.frequency.avg }}
+                  </div>
+                  <div style="font-size:11px;color:#909399">频率 (Hz)</div>
+                </div>
+              </el-col>
+              <el-col :span="6">
+                <div style="padding:8px;background:#fafafa;border-radius:4px;text-align:center">
+                  <div style="font-size:18px;font-weight:600" :style="{color: editPreviewData.indicators.loadRate.status === '越限' ? '#f56c6c' : '#303133'}">
+                    {{ editPreviewData.indicators.loadRate.peak }}%
+                  </div>
+                  <div style="font-size:11px;color:#909399">峰值负载率</div>
+                </div>
+              </el-col>
+              <el-col :span="6">
+                <div style="padding:8px;background:#fafafa;border-radius:4px;text-align:center">
+                  <div style="font-size:18px;font-weight:600" :style="{color: editPreviewData.indicators.consumptionRate.status === '偏低' ? '#e6a23c' : '#303133'}">
+                    {{ editPreviewData.indicators.consumptionRate.value }}%
+                  </div>
+                  <div style="font-size:11px;color:#909399">消纳率</div>
+                </div>
+              </el-col>
+            </el-row>
+          </template>
+          <div v-else-if="!editPreviewing" style="text-align:center;padding:16px;color:#c0c4cc;font-size:12px">
+            预览结果将在此显示
           </div>
-          <div v-loading="previewing" style="min-height:120px" />
-          <div v-if="previewData && !previewing">
-            <div style="margin-bottom:12px;display:flex;align-items:center;gap:8px">
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button size="small" @click="dialogVisible = false">取消</el-button>
+        <el-button size="small" type="primary" :loading="saving" @click="save">{{ editingId ? '更新' : '创建' }}</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 详情对话框 -->
+    <el-dialog v-model="detailVisible" title="场景详情" width="700px">
+      <template v-if="detail">
+        <el-descriptions :column="2" border size="small">
+          <el-descriptions-item label="名称" :span="2">{{ detail.name }}</el-descriptions-item>
+          <el-descriptions-item label="类型">{{ typeOptions.find(t => t.value === detail.type)?.label }}</el-descriptions-item>
+          <el-descriptions-item label="状态">{{ detail.status === 'active' ? '已发布' : '草稿' }}</el-descriptions-item>
+          <el-descriptions-item label="描述" :span="2">{{ detail.description || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="标签" :span="2">
+            <el-tag v-for="tag in (detail.tags || [])" :key="tag" size="small" style="margin-right:4px">{{ tag }}</el-tag>
+          </el-descriptions-item>
+        </el-descriptions>
+        <div v-if="detail.config?.accessPoints?.length" style="margin-top:12px;font-size:13px;font-weight:600">接入点配置</div>
+        <el-table v-if="detail.config?.accessPoints?.length" :data="detail.config.accessPoints" stripe size="small" style="margin-top:8px">
+          <el-table-column label="类型" width="110"><template #default="{ row }">{{ NODE_TYPE_OPTIONS.find(nt => nt.value === row.nodeType)?.label || row.nodeType }}</template></el-table-column>
+          <el-table-column prop="nodeName" label="节点名称" min-width="140" show-overflow-tooltip />
+          <el-table-column label="接入容量(kW)" width="110"><template #default="{ row }">{{ row.connectedCapacity }}</template></el-table-column>
+          <el-table-column label="电压等级(kV)" width="100"><template #default="{ row }">{{ row.voltageLevel }}</template></el-table-column>
+        </el-table>
+        <div v-if="detail.config?.controlRules?.length" style="margin-top:12px;font-size:13px;font-weight:600">协同规则</div>
+        <el-table v-if="detail.config?.controlRules?.length" :data="detail.config.controlRules" stripe size="small" style="margin-top:8px">
+          <el-table-column prop="name" label="规则名称" min-width="140" show-overflow-tooltip />
+          <el-table-column prop="condition" label="触发条件" min-width="120" show-overflow-tooltip />
+          <el-table-column prop="action" label="执行动作" min-width="120" show-overflow-tooltip />
+          <el-table-column prop="priority" label="优先级" width="70" align="center" />
+        </el-table>
+      </template>
+    </el-dialog>
+
+    <!-- 预览弹窗 -->
+    <el-dialog v-model="previewVisible" title="场景预览" width="900px" @opened="runPreview">
+      <template v-if="previewScenario">
+        <div style="margin-bottom:12px;display:flex;gap:16px;align-items:center">
+          <span style="font-size:14px;font-weight:600">{{ previewScenario.name }}</span>
+          <el-tag size="small">{{ typeOptions.find(t => t.value === previewScenario.type)?.label || previewScenario.type }}</el-tag>
+          <el-tag :type="previewScenario.status === 'active' ? 'success' : 'warning'" size="small">{{ previewScenario.status === 'active' ? '已发布' : '草稿' }}</el-tag>
+        </div>
+
+        <!-- 网架图 -->
+        <div style="margin-bottom:12px">
+          <div style="font-size:12px;font-weight:600;margin-bottom:6px;color:#606266">网架拓扑</div>
+          <PreviewTopology v-if="previewScenario.config?.topology?.nodes?.length" :topology="previewScenario.config.topology" />
+          <div v-else-if="previewScenario.config?.accessPoints?.length" style="font-size:12px;color:#909399;padding:20px;text-align:center;background:#fafafa;border:1px solid #e0e0e0;border-radius:4px">
+            旧版场景（无网架图数据），{{ previewScenario.config.accessPoints.length }} 个接入点
+          </div>
+          <div v-else style="font-size:12px;color:#c0c4cc;padding:20px;text-align:center;background:#fafafa;border:1px solid #e0e0e0;border-radius:4px">
+            无拓扑数据
+          </div>
+        </div>
+
+        <el-divider style="margin:12px 0" />
+
+        <!-- 仿真结果 -->
+        <div v-loading="previewing" style="min-height:80px">
+          <div v-if="!previewData && !previewing" style="text-align:center;padding:20px;color:#909399">
+            <el-button type="primary" size="small" @click="runPreview">开始仿真预览</el-button>
+          </div>
+          <template v-if="previewData && !previewing">
+            <div style="margin-bottom:10px;display:flex;align-items:center;gap:8px">
               <span :style="{color: previewData.overallStatus === '正常' ? '#67c23a' : previewData.overallStatus === '关注' ? '#e6a23c' : '#f56c6c', fontWeight: 600, fontSize: 14}">{{ previewData.overallStatus }}</span>
-              <el-button size="small" @click="runPreview">刷新预览</el-button>
+              <el-button size="small" @click="runPreview">刷新</el-button>
             </div>
             <el-row :gutter="12">
               <el-col :span="6">
@@ -541,46 +768,16 @@ onMounted(() => {
               <div style="font-size:13px;font-weight:600;margin-bottom:6px">优化建议</div>
               <div v-for="(s, i) in previewData.suggestions" :key="i" style="padding:4px 10px;margin-bottom:2px;font-size:12px;color:#606266">· {{ s }}</div>
             </div>
-          </div>
-        </el-tab-pane>
-      </el-tabs>
-      <template #footer>
-        <el-button size="small" @click="dialogVisible = false">取消</el-button>
-        <el-button size="small" type="primary" :loading="saving" @click="save">{{ editingId ? '更新' : '创建' }}</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 详情对话框 -->
-    <el-dialog v-model="detailVisible" title="场景详情" width="700px">
-      <template v-if="detail">
-        <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="名称" :span="2">{{ detail.name }}</el-descriptions-item>
-          <el-descriptions-item label="类型">{{ typeOptions.find(t => t.value === detail.type)?.label }}</el-descriptions-item>
-          <el-descriptions-item label="状态">{{ detail.status === 'active' ? '已发布' : '草稿' }}</el-descriptions-item>
-          <el-descriptions-item label="描述" :span="2">{{ detail.description || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="标签" :span="2">
-            <el-tag v-for="tag in (detail.tags || [])" :key="tag" size="small" style="margin-right:4px">{{ tag }}</el-tag>
-          </el-descriptions-item>
-        </el-descriptions>
-        <div v-if="detail.config?.accessPoints?.length" style="margin-top:12px;font-size:13px;font-weight:600">接入点配置</div>
-        <el-table v-if="detail.config?.accessPoints?.length" :data="detail.config.accessPoints" stripe size="small" style="margin-top:8px">
-          <el-table-column label="类型" width="110"><template #default="{ row }">{{ NODE_TYPE_OPTIONS.find(nt => nt.value === row.nodeType)?.label || row.nodeType }}</template></el-table-column>
-          <el-table-column prop="nodeName" label="节点名称" min-width="140" show-overflow-tooltip />
-          <el-table-column label="接入容量(kW)" width="110"><template #default="{ row }">{{ row.connectedCapacity }}</template></el-table-column>
-          <el-table-column label="电压等级(kV)" width="100"><template #default="{ row }">{{ row.voltageLevel }}</template></el-table-column>
-        </el-table>
-        <div v-if="detail.config?.controlRules?.length" style="margin-top:12px;font-size:13px;font-weight:600">协同规则</div>
-        <el-table v-if="detail.config?.controlRules?.length" :data="detail.config.controlRules" stripe size="small" style="margin-top:8px">
-          <el-table-column prop="name" label="规则名称" min-width="140" show-overflow-tooltip />
-          <el-table-column prop="condition" label="触发条件" min-width="120" show-overflow-tooltip />
-          <el-table-column prop="action" label="执行动作" min-width="120" show-overflow-tooltip />
-          <el-table-column prop="priority" label="优先级" width="70" align="center" />
-        </el-table>
+          </template>
+        </div>
       </template>
     </el-dialog>
 
     <!-- 版本历史对话框 -->
     <el-dialog v-model="versionsVisible" title="版本历史" width="700px">
+      <div style="margin-bottom:10px;font-size:12px;color:#606266">
+        版本保留上限：<strong>{{ versionsScenarioData?.version_limit ?? 10 }}</strong> 个 | 当前已保存 <strong>{{ versions.length }}</strong> 个版本
+      </div>
       <el-table :data="versions" stripe size="small">
         <el-table-column prop="version_number" label="版本号" width="80" />
         <el-table-column label="变更说明" min-width="160"><template #default="{ row }">{{ row.changelog }}</template></el-table-column>

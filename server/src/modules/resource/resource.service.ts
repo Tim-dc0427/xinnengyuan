@@ -12,10 +12,10 @@ export class ResourceService {
 
   async createModel(data: any, userId: string) {
     const id = uuid()
-    let plantId = data.plantId || null
-    if (plantId) {
-      const plant = await db('power_plants').where('id', plantId).select('id').first()
-      if (!plant) plantId = null
+    let stationId = data.stationId || data.plantId || null
+    if (stationId) {
+      const station = await db('solar_pv_stations').where('id', stationId).select('id').first()
+      if (!station) stationId = null
     }
     let createdBy = userId || null
     if (createdBy) {
@@ -28,7 +28,7 @@ export class ResourceService {
       model_name: data.modelName,
       model_type: data.modelType,
       model_parameters: typeof data.parameters === 'string' ? data.parameters : JSON.stringify(data.parameters),
-      plant_id: plantId,
+      station_id: stationId,
       description: data.description || null,
       created_by: createdBy,
       created_at: now,
@@ -77,75 +77,72 @@ export class ResourceService {
     }
   }
 
-  // ==================== Power Plants (层2实体数据) ====================
+  // ==================== 集中式光伏电站 CRUD（唯一数据源：solar_pv_stations） ====================
   async listPowerPlants() {
-    const plants = await db('power_plants')
-      .leftJoin('equipment', 'power_plants.id', 'equipment.plant_id')
+    const plants = await db('solar_pv_stations')
+      .leftJoin('equipment', 'solar_pv_stations.id', 'equipment.station_id')
       .leftJoin('resource_models', function () {
-        this.on('power_plants.id', 'resource_models.plant_id').andOn('resource_models.is_active', db.raw('1'))
+        this.on('solar_pv_stations.id', 'resource_models.station_id').andOn('resource_models.is_active', db.raw('1'))
       })
       .select(
-        'power_plants.*',
+        'solar_pv_stations.*',
         db.raw('COUNT(DISTINCT equipment.id) as equipment_count'),
         db.raw('COUNT(DISTINCT resource_models.id) as bound_model_count'),
       )
-      .groupBy('power_plants.id')
-      .orderBy('power_plants.installed_date', 'desc')
+      .groupBy('solar_pv_stations.id')
+      .orderBy('solar_pv_stations.installed_date', 'desc')
     return plants
   }
 
   async getPowerPlant(id: string) {
-    const plant = await db('power_plants').where('id', id).first()
-    if (!plant) return null
-    const equipment = await db('equipment').where('plant_id', id)
+    const station = await db('solar_pv_stations').where('id', id).first()
+    if (!station) return null
+    const equipment = await db('equipment').where('station_id', id)
     const boundModels = await db('resource_models')
-      .where('plant_id', id)
+      .where('station_id', id)
       .where('is_active', 1)
       .select('id', 'model_name', 'model_type', 'version')
-    return { ...plant, equipment, boundModels }
+    return { ...station, equipment, boundModels }
   }
 
-  async getPowerPlantVersions(plantId: string) {
-    return db('power_plant_versions')
-      .where('plant_id', plantId)
+  async getPowerPlantVersions(stationId: string) {
+    return db('station_versions')
+      .where('station_id', stationId)
       .orderBy('version', 'desc')
   }
 
-  async bindModelsToPlant(plantId: string, modelIds: string[]) {
+  async bindModelsToPlant(stationId: string, modelIds: string[]) {
     // 先解绑该电站所有已关联的模型
-    await db('resource_models').where('plant_id', plantId).update({ plant_id: null })
+    await db('resource_models').where('station_id', stationId).update({ station_id: null })
     // 再绑定新选中的模型
     if (modelIds.length > 0) {
-      await db('resource_models').whereIn('id', modelIds).update({ plant_id: plantId })
+      await db('resource_models').whereIn('id', modelIds).update({ station_id: stationId })
     }
-    return db('resource_models').where('plant_id', plantId).select('id', 'model_name', 'model_type')
+    return db('resource_models').where('station_id', stationId).select('id', 'model_name', 'model_type')
   }
 
   async createPowerPlant(data: any) {
     const id = uuid()
     const now = new Date().toISOString()
-    await db('power_plants').insert({
+    await db('solar_pv_stations').insert({
       id,
-      name: data.name,
-      plant_type: data.plantType,
-      capacity_kw: data.capacityKw,
+      station_name: data.name,
+      installed_capacity_mw: data.capacityKw ? data.capacityKw / 1000 : 0,
+      grid_connection_voltage_kv: data.voltageLevel ? parseFloat(data.voltageLevel) : null,
       installed_date: data.installedDate || null,
       longitude: data.longitude || null,
       latitude: data.latitude || null,
       address: data.address || null,
       status: data.status || 'active',
-      version: 1,
       created_at: now,
-      updated_at: now,
     })
     // 保存初始版本快照
-    await db('power_plant_versions').insert({
+    await db('station_versions').insert({
       id: uuid(),
-      plant_id: id,
+      station_id: id,
       version: 1,
-      name: data.name,
-      plant_type: data.plantType,
-      capacity_kw: data.capacityKw,
+      station_name: data.name,
+      installed_capacity_mw: data.capacityKw ? data.capacityKw / 1000 : 0,
       installed_date: data.installedDate || null,
       longitude: data.longitude || null,
       latitude: data.latitude || null,
@@ -153,44 +150,41 @@ export class ResourceService {
       status: data.status || 'active',
       created_at: now,
     })
-    return db('power_plants').where('id', id).first()
+    return db('solar_pv_stations').where('id', id).first()
   }
 
   async batchImportPowerPlants(plants: any[]) {
     const now = new Date().toISOString()
     const rows = plants.map((p) => ({
       id: uuid(),
-      name: p.name,
-      plant_type: p.plantType || 'PV',
-      capacity_kw: p.capacityKw || 0,
+      station_name: p.name,
+      installed_capacity_mw: p.capacityKw ? p.capacityKw / 1000 : 0,
+      grid_connection_voltage_kv: p.voltageLevel ? parseFloat(p.voltageLevel) : null,
       installed_date: p.installedDate || null,
       longitude: p.longitude || null,
       latitude: p.latitude || null,
       address: p.address || null,
       status: p.status || 'active',
-      version: 1,
       created_at: now,
-      updated_at: now,
     }))
     if (rows.length > 0) {
-      await db('power_plants').insert(rows)
+      await db('solar_pv_stations').insert(rows)
     }
     return { imported: rows.length }
   }
 
   async updatePowerPlant(id: string, data: any) {
-    const current = await db('power_plants').where('id', id).first()
+    const current = await db('solar_pv_stations').where('id', id).first()
     if (!current) return null
 
     // 保存旧版本快照
     const now = new Date().toISOString()
-    await db('power_plant_versions').insert({
+    await db('station_versions').insert({
       id: uuid(),
-      plant_id: id,
-      version: current.version,
-      name: current.name,
-      plant_type: current.plant_type,
-      capacity_kw: current.capacity_kw,
+      station_id: id,
+      version: 1,
+      station_name: current.station_name,
+      installed_capacity_mw: current.installed_capacity_mw,
       installed_date: current.installed_date,
       longitude: current.longitude,
       latitude: current.latitude,
@@ -201,23 +195,21 @@ export class ResourceService {
 
     const updateData: Record<string, any> = {
       updated_at: now,
-      version: db.raw('version + 1'),
     }
-    if (data.name !== undefined) updateData.name = data.name
-    if (data.plantType !== undefined) updateData.plant_type = data.plantType
-    if (data.capacityKw !== undefined) updateData.capacity_kw = data.capacityKw
+    if (data.name !== undefined) updateData.station_name = data.name
+    if (data.capacityKw !== undefined) updateData.installed_capacity_mw = data.capacityKw / 1000
     if (data.installedDate !== undefined) updateData.installed_date = data.installedDate
     if (data.address !== undefined) updateData.address = data.address
     if (data.longitude !== undefined) updateData.longitude = data.longitude
     if (data.latitude !== undefined) updateData.latitude = data.latitude
     if (data.status !== undefined) updateData.status = data.status
-    if (Object.keys(updateData).length <= 2) return null
-    const [plant] = await db('power_plants').where('id', id).update(updateData).returning('*')
-    return plant
+    if (Object.keys(updateData).length <= 1) return null
+    await db('solar_pv_stations').where('id', id).update(updateData)
+    return db('solar_pv_stations').where('id', id).first()
   }
 
   async deletePowerPlant(id: string) {
-    await db('power_plants').where('id', id).update({ status: 'inactive', updated_at: new Date().toISOString() })
+    await db('solar_pv_stations').where('id', id).update({ status: 'inactive' })
     return { deleted: true }
   }
 
@@ -225,6 +217,7 @@ export class ResourceService {
   async listEquipment(query: any) {
     return db('equipment').modify((qb) => {
       if (query.plantId) qb.where('plant_id', query.plantId)
+      if (query.stationId) qb.where('station_id', query.stationId)
       if (query.equipmentType) qb.where('equipment_type', query.equipmentType)
     }).orderBy('installation_date', 'desc')
   }
@@ -233,7 +226,12 @@ export class ResourceService {
     const eq = await db('equipment').where('id', id).first()
     if (!eq) return null
     const lifecycle = await db('equipment_lifecycle').where('equipment_id', id).orderBy('event_date', 'desc')
-    const plant = eq.plant_id ? await db('power_plants').where('id', eq.plant_id).select('id', 'name').first() : null
+    let plant: any = null
+    if (eq.station_id) {
+      plant = await db('solar_pv_stations').where('id', eq.station_id).select('id', 'station_name as name').first()
+    } else if (eq.plant_id) {
+      plant = await db('power_plants').where('id', eq.plant_id).select('id', 'name').first()
+    }
     return { ...eq, lifecycle, plant }
   }
 
@@ -257,7 +255,8 @@ export class ResourceService {
     const now = new Date().toISOString()
     await db('equipment').insert({
       id,
-      plant_id: data.plantId,
+      plant_id: data.plantId || null,
+      station_id: data.stationId || null,
       equipment_type: data.equipmentType || 'TRANSFORMER',
       model_number: data.modelNumber || null,
       manufacturer: data.manufacturer || null,

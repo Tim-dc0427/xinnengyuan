@@ -215,6 +215,7 @@ onMounted(() => { loadData() })
 
 <template>
   <div class="online-page">
+    <div class="chart-panel-title">计算历史</div>
     <div class="filter-bar">
       <el-select v-model="filters.taskType" placeholder="计算类型" size="small" style="width:130px" clearable @change="handleSearch">
         <el-option v-for="t in taskTypeOptions" :key="t.value" :label="t.label" :value="t.value" />

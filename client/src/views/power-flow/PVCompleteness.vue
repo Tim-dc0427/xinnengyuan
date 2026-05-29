@@ -22,6 +22,7 @@ const severityMap: Record<string, string> = {
 
 <template>
   <div class="page-container">
+    <div class="chart-panel-title">光伏数据完整性校验</div>
     <!-- 操作栏 -->
     <div class="filter-bar">
       <span style="font-size:14px;font-weight:600;color:#303133">光伏数据完整性校验</span>

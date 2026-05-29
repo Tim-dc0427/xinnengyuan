@@ -227,6 +227,7 @@ function branchRowStyle({ row }: any) {
 
 <template>
   <div class="online-page">
+    <div class="chart-panel-title">潮流计算支持</div>
     <div class="filter-bar">
       <FeederSelector
         v-if="feeder.feeders.value.length > 0"

@@ -13,15 +13,12 @@ const chartGroupBy = ref<'zone' | 'voltage'>('zone')
 const list = ref<ThreePhaseItem[]>([])
 
 const voltageLevelOptions = ['', '220kV', '110kV', '10kV']
-const regionOptions = ['', 'A（西部：仓前/未来城）', 'B（中部：余杭/闲林）', 'C（东部：乔司）']
-const regionValueMap: Record<string, string> = {
-  'A（西部：仓前/未来城）': 'A',
-  'B（中部：余杭/闲林）': 'B',
-  'C（东部：乔司）': 'C',
-}
+const regionOptions = ref<string[]>([''])
 
 const filteredList = computed(() => {
   let data = list.value
+  if (region.value) data = data.filter(i => (i as any).zone === region.value)
+  if (voltageLevel.value) data = data.filter(i => (i as any).voltageLevel === voltageLevel.value)
   if (pvFilter.value === 'pv') data = data.filter(i => i.pvRelated)
   else if (pvFilter.value === 'non-pv') data = data.filter(i => !i.pvRelated)
   return data
@@ -31,33 +28,33 @@ const pvRelatedItems = computed(() => list.value.filter(i => i.pvRelated))
 const severeItems = computed(() => list.value.filter(i => i.imbalancePct > 2))
 const warningItems = computed(() => list.value.filter(i => i.imbalancePct > 1 && i.imbalancePct <= 2))
 
-// 按区域/电压等级分组的相幅值图表
+// 按区域/电压等级分组的相幅值图表（聚合后展示）
 const threePhaseChartOption = computed(() => {
-  const data = filteredList.value.slice(0, 20)
+  const data = filteredList.value
   if (!data.length) return {}
 
-  // 按分组字段排序
-  const sortedData = [...data].sort((a, b) => {
-    const groupKey = chartGroupBy.value === 'zone' ? 'zone' : 'voltageLevel'
-    return ((a as any)[groupKey] || '').localeCompare((b as any)[groupKey] || '')
-  })
+  const groupKey = chartGroupBy.value === 'zone' ? 'zone' : 'voltageLevel'
 
-  const names = sortedData.map(d => d.nodeId || d.name || d.id)
-  const phaseA = sortedData.map(d => d.phaseA ?? 0)
-  const phaseB = sortedData.map(d => d.phaseB ?? 0)
-  const phaseC = sortedData.map(d => d.phaseC ?? 0)
-  const imbalance = sortedData.map(d => Number(d.imbalancePct.toFixed(2)))
+  // 按分组字段聚合
+  const groups = new Map<string, { phaseA: number[]; phaseB: number[]; phaseC: number[]; imbalances: number[] }>()
+  for (const d of data) {
+    const key = (d as any)[groupKey] || '未知'
+    if (!groups.has(key)) groups.set(key, { phaseA: [], phaseB: [], phaseC: [], imbalances: [] })
+    const g = groups.get(key)!
+    if (d.phaseA != null) g.phaseA.push(d.phaseA)
+    if (d.phaseB != null) g.phaseB.push(d.phaseB)
+    if (d.phaseC != null) g.phaseC.push(d.phaseC)
+    g.imbalances.push(d.imbalancePct)
+  }
 
-  // 构建分组标签（含区域+电压等级）
-  const labels = sortedData.map(d => {
-    const zone = d.zone || ''
-    const vl = d.voltageLevel || ''
-    if (chartGroupBy.value === 'zone') {
-      // 同一个区域下标记电压等级
-      return `${d.nodeId || d.name}\n${vl}`
-    }
-    return `${d.nodeId || d.name}\n${zone}`
-  })
+  const avg = (arr: number[]) => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : 0
+  const groupEntries = Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+
+  const labels = groupEntries.map(([key]) => key)
+  const phaseA = groupEntries.map(([_, g]) => Number(avg(g.phaseA).toFixed(4)))
+  const phaseB = groupEntries.map(([_, g]) => Number(avg(g.phaseB).toFixed(4)))
+  const phaseC = groupEntries.map(([_, g]) => Number(avg(g.phaseC).toFixed(4)))
+  const avgImbalance = groupEntries.map(([_, g]) => Number(avg(g.imbalances).toFixed(2)))
 
   return {
     tooltip: {
@@ -66,27 +63,25 @@ const threePhaseChartOption = computed(() => {
       formatter: (params: any[]) => {
         const idx = params[0]?.dataIndex
         if (idx === undefined) return ''
-        const d = sortedData[idx]
-        let html = `<b>${d.nodeId || d.name}</b><br/>`
-        html += `<span style="color:#909399">区域：${d.zone || '-'}  |  电压等级：${d.voltageLevel || '-'}</span><br/>`
-        params.forEach((p: any) => { html += `${p.marker} ${p.seriesName}: ${(p.value as number).toFixed(4)} p.u.<br/>` })
-        html += `不平衡度: <b style="color:${d.imbalancePct > 2 ? '#F56C6C' : d.imbalancePct > 1 ? '#E6A23C' : '#67C23A'}">${d.imbalancePct.toFixed(2)}%</b>`
+        const key = labels[idx]
+        let html = `<b>${key}</b><br/>`
+        html += `<span style="color:#909399">${groupKey === 'zone' ? '区域' : '电压等级'}：${key}  |  节点数：${groups.get(key)?.phaseA.length ?? 0}</span><br/>`
+        params.forEach((p: any) => { html += `${p.marker} ${p.seriesName}: ${(p.value as number).toFixed(4)} kV<br/>` })
+        html += `平均不平衡度: <b style="color:${avgImbalance[idx] > 2 ? '#F56C6C' : avgImbalance[idx] > 1 ? '#E6A23C' : '#67C23A'}">${avgImbalance[idx]}%</b>`
         return html
       },
     },
     legend: { data: ['A 相', 'B 相', 'C 相'], top: 0 },
-    grid: { left: 60, right: 60, top: 40, bottom: 80 },
+    grid: { left: 60, right: 60, top: 40, bottom: 60 },
     xAxis: {
       type: 'category' as const,
       data: labels,
-      axisLabel: { rotate: 30, fontSize: 10, interval: 0 },
+      axisLabel: { rotate: 15, fontSize: 11, interval: 0 },
       axisLine: { show: false },
     },
     yAxis: {
       type: 'value' as const,
-      name: '电压 (p.u.)',
-      min: 0.85,
-      max: 1.15,
+      name: '电压 (kV)',
       splitLine: { lineStyle: { type: 'dashed', color: '#e0e0e0' } },
     },
     series: [
@@ -95,22 +90,22 @@ const threePhaseChartOption = computed(() => {
         type: 'bar',
         data: phaseA,
         itemStyle: { color: '#F56C6C' },
-        barWidth: 8,
-        barGap: '10%',
+        barWidth: 10,
+        barGap: '15%',
       },
       {
         name: 'B 相',
         type: 'bar',
         data: phaseB,
         itemStyle: { color: '#E6A23C' },
-        barWidth: 8,
+        barWidth: 10,
       },
       {
         name: 'C 相',
         type: 'bar',
         data: phaseC,
         itemStyle: { color: '#267F7B' },
-        barWidth: 8,
+        barWidth: 10,
       },
     ],
   }
@@ -136,7 +131,7 @@ const imbalanceScatterOption = computed(() => {
         const d = p.data
         return `<b>${d[2]}</b><br/>
           不平衡度: <b>${d[3].toFixed(2)}%</b><br/>
-          相间最大差: ${(d[1] * 100).toFixed(2)}%<br/>
+          相间最大差: ${Number(d[1]).toFixed(3)} kV<br/>
           区域: ${d[4] || '-'} | ${d[5] || '-'}<br/>
           ${d[6] ? '☀ 光伏关联' : ''}`
       },
@@ -149,7 +144,7 @@ const imbalanceScatterOption = computed(() => {
     },
     yAxis: {
       type: 'value' as const,
-      name: '相间最大差 (p.u.)',
+      name: '相间最大差 (kV)',
       axisLabel: { formatter: (v: number) => v.toFixed(2) },
     },
     series: [{
@@ -168,8 +163,12 @@ async function loadData() {
   try {
     const params: Record<string, string> = {}
     if (voltageLevel.value) params.voltageLevel = voltageLevel.value
-    if (region.value) params.region = regionValueMap[region.value] || region.value
+    if (region.value) params.region = region.value
     list.value = await fetchThreePhase(params) || []
+    // 从数据中提取所有区县
+    const zones = new Set<string>()
+    list.value.forEach((n: any) => { if (n.zone) zones.add(n.zone) })
+    regionOptions.value = ['', ...Array.from(zones).sort()]
   } catch {
     list.value = []
   } finally {
@@ -182,6 +181,7 @@ onMounted(loadData)
 
 <template>
   <div class="page-container">
+    <div class="chart-panel-title">三相不平衡度</div>
     <div class="filter-bar">
       <el-select v-model="voltageLevel" placeholder="电压等级" clearable size="small" style="width:140px" @change="loadData">
         <el-option v-for="v in voltageLevelOptions" :key="v" :label="v || '全部'" :value="v" />
@@ -239,7 +239,7 @@ onMounted(loadData)
         B 相
         <span style="display:inline-block;width:12px;height:12px;background:#267F7B;margin-right:4px;margin-left:16px;border-radius:2px;vertical-align:middle" />
         C 相
-        <span style="margin-left:24px;color:#c0c4cc">每节点三柱并排，柱高差异越大表示三相越不平衡</span>
+        <span style="margin-left:24px;color:#c0c4cc">按分组聚合三相平均电压，柱高差异越大表示该组三相越不平衡</span>
       </div>
     </div>
 
@@ -277,16 +277,16 @@ onMounted(loadData)
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="A 相" width="80">
+        <el-table-column label="A 相(kV)" width="85">
           <template #default="{ row }">{{ row.phaseA?.toFixed(4) || '-' }}</template>
         </el-table-column>
-        <el-table-column label="B 相" width="80">
+        <el-table-column label="B 相(kV)" width="85">
           <template #default="{ row }">{{ row.phaseB?.toFixed(4) || '-' }}</template>
         </el-table-column>
-        <el-table-column label="C 相" width="80">
+        <el-table-column label="C 相(kV)" width="85">
           <template #default="{ row }">{{ row.phaseC?.toFixed(4) || '-' }}</template>
         </el-table-column>
-        <el-table-column label="相间最大差" width="110">
+        <el-table-column label="相间最大差(kV)" width="120">
           <template #default="{ row }">
             <span v-if="row.phaseA != null && row.phaseB != null && row.phaseC != null" style="font-weight:600">
               {{ (Math.max(row.phaseA, row.phaseB, row.phaseC) - Math.min(row.phaseA, row.phaseB, row.phaseC)).toFixed(4) }}

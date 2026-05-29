@@ -344,6 +344,7 @@ function branchRowStyle({ row }: any) {
 
 <template>
   <div class="online-page">
+    <div class="chart-panel-title">反向潮流计算支持</div>
     <!-- ========== 输入区 ========== -->
     <div class="filter-bar">
       <div class="filter-group">

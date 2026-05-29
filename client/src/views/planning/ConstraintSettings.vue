@@ -77,6 +77,7 @@ onMounted(() => {
 
 <template>
   <div class="constraint-page">
+    <div class="chart-panel-title">约束条件配置</div>
     <div class="page-header">
       <div class="header-left">
         <el-button size="small" @click="router.back()">← 返回</el-button>

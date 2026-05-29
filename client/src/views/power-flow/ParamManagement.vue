@@ -304,6 +304,7 @@ onMounted(() => {
 
 <template>
   <div class="page-container">
+    <div class="chart-panel-title">参数管理</div>
     <!-- 集中式光伏电站模型参数 -->
     <div class="chart-panel">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">

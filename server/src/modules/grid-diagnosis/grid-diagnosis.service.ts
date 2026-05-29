@@ -8,18 +8,18 @@ export class GridDiagnosisService {
     return db('pv_output_measurements')
       .whereBetween('time', [startDate, endDate])
       .select(
-        'plant_id',
+        'station_id',
         db.raw('SUM(active_power_kw * interval_hours) as total_output_kwh'),
         db.raw('AVG(active_power_kw) as avg_output_kw'),
         db.raw('MAX(active_power_kw) as max_output_kw'),
       )
-      .groupBy('plant_id')
+      .groupBy('station_id')
   }
 
   async getFactors(query: { plantId: string; startDate: string; endDate: string }) {
     const { plantId, startDate, endDate } = query
     const data = await db('pv_output_measurements')
-      .where('plant_id', plantId)
+      .where('station_id', plantId)
       .whereBetween('time', [startDate, endDate])
       .select('active_power_kw', 'temperature_c', 'irradiance_wm2', 'humidity_pct', 'inverter_efficiency')
       .orderBy('time', 'asc')
@@ -64,7 +64,7 @@ export class GridDiagnosisService {
   async getCarbonStats(query: { plantId?: string; startDate: string; endDate: string }) {
     return db('carbon_emissions')
       .whereBetween('period_start', [query.startDate, query.endDate])
-      .modify((qb) => { if (query.plantId) qb.where('plant_id', query.plantId) })
+      .modify((qb) => { if (query.plantId) qb.where('station_id', query.plantId) })
       .orderBy('period_start', 'desc')
   }
 
@@ -72,7 +72,7 @@ export class GridDiagnosisService {
   async getJointOutputAnalysis(query: { plantId: string; storageId: string; startDate: string; endDate: string }) {
     // Join PV output with storage data
     const pvData = await db('pv_output_measurements')
-      .where('plant_id', query.plantId)
+      .where('station_id', query.plantId)
       .whereBetween('time', [query.startDate, query.endDate])
       .select('time', 'active_power_kw')
       .orderBy('time', 'asc')
@@ -96,7 +96,7 @@ export class GridDiagnosisService {
   // ==================== Backfeed ====================
   async detectBackfeed(params: { plantId: string; threshold?: number }) {
     const data = await db('pv_output_measurements')
-      .where('plant_id', params.plantId)
+      .where('station_id', params.plantId)
       .select('time', 'active_power_kw')
       .orderBy('time', 'desc')
       .limit(1000)
@@ -113,7 +113,7 @@ export class GridDiagnosisService {
   async calculateCapacity(query: { equipmentType?: string; plantId?: string }) {
     const qb = db('equipment').modify((q) => {
       if (query.equipmentType) q.where('equipment_type', query.equipmentType)
-      if (query.plantId) q.where('plant_id', query.plantId)
+      if (query.plantId) q.where('station_id', query.plantId)
     })
     return qb.select(
       'id as equipmentId',
@@ -244,9 +244,9 @@ export class GridDiagnosisService {
 
   async generateReplacementPlan(params: { plantId?: string }) {
     // 获取所有电池设备的最新循环记录
-    let query = db('equipment').where('equipment_type', 'BATTERY').select('id', 'name', 'model_number', 'plant_id', 'grade')
+    let query = db('equipment').where('equipment_type', 'BATTERY').select('id', 'name', 'model_number', 'station_id', 'grade')
     if (params.plantId) {
-      query = query.where('plant_id', params.plantId)
+      query = query.where('station_id', params.plantId)
     }
     const batteryEquipment = await query
 
@@ -259,7 +259,7 @@ export class GridDiagnosisService {
 
       if (!latest || latest.soh_pct > 85) continue // SOH>85%暂不需要更换计划
 
-      const plant = await db('power_plants').where('id', eq.plant_id).select('name').first()
+      const plant = await db('solar_pv_stations').where('id', eq.station_id).select('station_name as name').first()
       // 计算剩余月份
       const recentRecords = await db('battery_cycle_records')
         .where('equipment_id', eq.id)

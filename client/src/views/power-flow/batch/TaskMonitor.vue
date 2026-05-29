@@ -116,6 +116,7 @@ onUnmounted(() => stopPoll())
 
 <template>
   <div class="batch-monitor">
+    <div class="chart-panel-title">任务监控</div>
     <div class="monitor-grid">
       <div class="monitor-left">
         <div class="section-title">批次列表</div>

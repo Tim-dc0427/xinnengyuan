@@ -59,6 +59,7 @@ const severityMap: Record<string, string> = {
 
 <template>
   <div class="page-container">
+    <div class="chart-panel-title">时序数据一致性校验</div>
     <div class="filter-bar">
       <span style="font-size:14px;font-weight:600;color:#303133">时序数据一致性校验</span>
       <div style="flex:1" />

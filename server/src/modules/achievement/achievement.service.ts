@@ -17,6 +17,7 @@ export class AchievementService {
       plan_id: data.planId,
       capacity_kw: data.capacityKw,
       budget: data.budget,
+      custom_fields: data.customFields ? JSON.stringify(data.customFields) : '{}',
       created_by: userId,
     }).returning('*')
     return project

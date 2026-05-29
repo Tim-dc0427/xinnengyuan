@@ -23,6 +23,10 @@ export function fetchCurveTemplates() {
   return apiClient.get('/api/v1/power-flow/model-params/curve-templates')
 }
 
+export function fetchAllCurveTemplates(rootId?: string) {
+  return apiClient.get('/api/v1/power-flow/model-params/curve-templates/all', { params: { rootId } })
+}
+
 export function createCurveTemplate(data: any) {
   return apiClient.post('/api/v1/power-flow/model-params/curve-templates', data)
 }

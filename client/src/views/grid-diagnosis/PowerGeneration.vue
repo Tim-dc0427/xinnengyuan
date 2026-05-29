@@ -32,6 +32,7 @@ const factorChart = ref({
 
 <template>
   <div class="page-container">
+    <div class="chart-panel-title">发电情况</div>
     <div class="chart-panel">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <span class="chart-panel-title" style="margin-bottom:0">发电量统计分析</span>

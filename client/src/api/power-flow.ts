@@ -18,6 +18,7 @@ export interface ThreePhaseItem {
   name?: string
   zone?: string
   voltageLevel?: string
+  baseKv?: number
   imbalancePct: number
   phaseA?: number
   phaseB?: number

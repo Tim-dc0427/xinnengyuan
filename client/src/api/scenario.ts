@@ -71,6 +71,11 @@ export async function copyScenario(id: string) {
   return res.data.data
 }
 
+export async function batchCopyScenarios(ids: string[]) {
+  const res = await apiClient.post('/api/v1/scenario/scenarios/batch-copy', { ids })
+  return res.data.data
+}
+
 export async function fetchScenarioVersions(scenarioId: string) {
   const res = await apiClient.get(`/api/v1/scenario/scenarios/${scenarioId}/versions`)
   return res.data.data
@@ -143,8 +148,28 @@ export async function stopSimulation(id: string) {
   return res.data.data
 }
 
+export async function pauseSimulation(id: string) {
+  const res = await apiClient.put(`/api/v1/scenario/simulations/${id}/pause`)
+  return res.data.data
+}
+
+export async function resumeSimulation(id: string) {
+  const res = await apiClient.put(`/api/v1/scenario/simulations/${id}/resume`)
+  return res.data.data
+}
+
+export async function updateSimulationParams(id: string, params: any) {
+  const res = await apiClient.put(`/api/v1/scenario/simulations/${id}/params`, params)
+  return res.data.data
+}
+
 export async function fetchSimulationResults(id: string) {
   const res = await apiClient.get(`/api/v1/scenario/simulations/${id}/results`)
+  return res.data.data
+}
+
+export async function fetchSimulationLive(id: string, sinceStep: number = 0) {
+  const res = await apiClient.get(`/api/v1/scenario/simulations/${id}/live`, { params: { since_step: sinceStep } })
   return res.data.data
 }
 
@@ -169,6 +194,14 @@ export async function generateEvaluation(simulationId: string) {
   return res.data.data
 }
 
+export async function exportEvaluation(id: string, format: 'word' | 'pdf' = 'word') {
+  const res = await apiClient.get(`/api/v1/scenario/evaluations/${id}/export`, {
+    params: { format },
+    responseType: 'blob',
+  })
+  return res.data
+}
+
 // 人工干预
 export async function fetchInterventions(params?: any) {
   const res = await apiClient.get('/api/v1/scenario/interventions', { params })
@@ -177,5 +210,10 @@ export async function fetchInterventions(params?: any) {
 
 export async function createIntervention(data: InterventionForm) {
   const res = await apiClient.post('/api/v1/scenario/interventions', data)
+  return res.data.data
+}
+
+export async function exportInterventions(params?: any) {
+  const res = await apiClient.get('/api/v1/scenario/interventions/export', { params })
   return res.data.data
 }

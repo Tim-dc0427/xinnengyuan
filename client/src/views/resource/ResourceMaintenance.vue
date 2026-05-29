@@ -604,6 +604,7 @@ onUnmounted(() => {
 
 <template>
   <div class="page-container">
+    <div class="chart-panel-title">资源维护</div>
     <el-tabs v-model="activeTab">
       <!-- ========== Tab 1：电站维护 ========== -->
       <el-tab-pane label="电站维护" name="plant">

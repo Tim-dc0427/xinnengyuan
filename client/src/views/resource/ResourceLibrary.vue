@@ -296,44 +296,42 @@ onMounted(() => { loadModels() })
 
 <template>
   <div class="page-container">
-    <div class="chart-panel">
-      <div class="chart-panel-title">资源模型构建</div>
+    <div class="chart-panel-title">资源模型构建</div>
 
-      <div style="margin-bottom: 12px;">
-        <el-radio-group v-model="activeTab" @change="loadModels">
-          <el-radio-button v-for="(label, type) in tabLabelMap" :key="type" :value="type">{{ label }}</el-radio-button>
-        </el-radio-group>
-      </div>
-
-      <div style="margin-bottom: 12px; display: flex; gap: 12px;">
-        <el-button type="primary" @click="openCreate">新增模型</el-button>
-      </div>
-
-      <el-table :data="models" stripe v-loading="loading">
-        <el-table-column prop="model_name" label="模型名称" min-width="140" />
-        <el-table-column label="模型类型" width="150">
-          <template #default="{ row }">
-            <el-tag size="small">{{ tabLabelMap[row.model_type] || row.model_type }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="物理特性" min-width="180">
-          <template #default="{ row }"><span v-html="fmtPhysical(row)" /></template>
-        </el-table-column>
-        <el-table-column label="控制策略" min-width="180">
-          <template #default="{ row }"><span v-html="fmtControl(row)" /></template>
-        </el-table-column>
-        <el-table-column label="接口参数" min-width="180">
-          <template #default="{ row }"><span v-html="fmtInterface(row)" /></template>
-        </el-table-column>
-        <el-table-column label="版本" width="60" prop="version" />
-        <el-table-column label="操作" width="160" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="openEdit(row)">编辑</el-button>
-            <el-button size="small" link type="danger" @click="handleDelete(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+    <div style="margin-bottom: 12px;">
+      <el-radio-group v-model="activeTab" @change="loadModels">
+        <el-radio-button v-for="(label, type) in tabLabelMap" :key="type" :value="type">{{ label }}</el-radio-button>
+      </el-radio-group>
     </div>
+
+    <div style="margin-bottom: 12px; display: flex; gap: 12px;">
+      <el-button type="primary" @click="openCreate">新增模型</el-button>
+    </div>
+
+    <el-table :data="models" stripe v-loading="loading">
+      <el-table-column prop="model_name" label="模型名称" min-width="140" />
+      <el-table-column label="模型类型" width="150">
+        <template #default="{ row }">
+          <el-tag size="small">{{ tabLabelMap[row.model_type] || row.model_type }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="物理特性" min-width="180">
+        <template #default="{ row }"><span v-html="fmtPhysical(row)" /></template>
+      </el-table-column>
+      <el-table-column label="控制策略" min-width="180">
+        <template #default="{ row }"><span v-html="fmtControl(row)" /></template>
+      </el-table-column>
+      <el-table-column label="接口参数" min-width="180">
+        <template #default="{ row }"><span v-html="fmtInterface(row)" /></template>
+      </el-table-column>
+      <el-table-column label="版本" width="60" prop="version" />
+      <el-table-column label="操作" width="160" fixed="right">
+        <template #default="{ row }">
+          <el-button size="small" link type="primary" @click="openEdit(row)">编辑</el-button>
+          <el-button size="small" link type="danger" @click="handleDelete(row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
 
     <el-dialog v-model="dialogVisible" :title="dialogTitle" width="650px" @closed="editingModelId = null">
       <el-form label-width="140px">

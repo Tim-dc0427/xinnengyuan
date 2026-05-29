@@ -12,6 +12,7 @@ const equipmentData = ref([
 
 <template>
   <div class="page-container">
+    <div class="chart-panel-title">网架结构</div>
     <div class="chart-panel">
       <div class="chart-panel-title">光伏倒送判断 - 接入点展示</div>
       <div style="height:400px;background:#e8edf2;display:flex;align-items:center;justify-content:center;border-radius:4px;color:#909399">

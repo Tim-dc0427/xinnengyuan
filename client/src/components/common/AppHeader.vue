@@ -38,6 +38,10 @@ const alertCount = ref(3)
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
   z-index: 10;
 }
+.header-left {
+  display: flex;
+  align-items: center;
+}
 .header-right {
   display: flex;
   align-items: center;

@@ -19,7 +19,20 @@ planningRoutes.delete('/pv-stations/:id', auth(['admin', 'planner']), ctrl.delet
 
 // ==================== PV Cost Library (2.1.1) ====================
 planningRoutes.get('/pv-cost-library', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.listPvCostLibrary)
-planningRoutes.post('/pv-cost-library', auth(['admin', 'planner']), ctrl.createCostLibraryItem)
+planningRoutes.post('/pv-cost-library', auth(['admin', 'planner']), ctrl.upsertCostLibraryItem)
+
+// ==================== PV Model Types (规划工具) ====================
+planningRoutes.get('/pv-model-types', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.listPvModelTypes)
+planningRoutes.get('/pv-model-types/:id/with-fields', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getPvModelTypeWithFields)
+planningRoutes.post('/pv-model-types', auth(['admin', 'planner']), ctrl.createPvModelType)
+planningRoutes.put('/pv-model-types/:id', auth(['admin', 'planner']), ctrl.updatePvModelType)
+planningRoutes.delete('/pv-model-types/:id', auth(['admin', 'planner']), ctrl.deletePvModelType)
+planningRoutes.get('/pv-model-types/:id/fields', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.listModelTypeFields)
+planningRoutes.post('/pv-model-types/:id/fields', auth(['admin', 'planner']), ctrl.saveModelTypeFields)
+
+// ==================== Field Library (字段库) ====================
+planningRoutes.get('/field-library', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.listFieldLibrary)
+planningRoutes.post('/field-library', auth(['admin', 'planner']), ctrl.createFieldLibraryItem)
 
 // ==================== Constraint Rules (2.1.2) ====================
 planningRoutes.get('/constraint-rules', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.listConstraintRules)
@@ -40,6 +53,16 @@ planningRoutes.put('/absorption-plans/:id', auth(['admin', 'planner']), ctrl.upd
 planningRoutes.get('/absorption-plans/:id/variants', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.listVariants)
 planningRoutes.post('/absorption-plans/:id/variants', auth(['admin', 'planner']), ctrl.createVariant)
 planningRoutes.delete('/absorption-plans/variants/:id', auth(['admin', 'planner']), ctrl.deleteVariant)
+
+// ==================== Investment Config (投资配置方案) ====================
+planningRoutes.get('/investment-config', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.listInvestmentConfig)
+planningRoutes.post('/investment-config/:planId', auth(['admin', 'planner']), ctrl.saveInvestmentConfig)
+
+// ==================== Cost Items (造价参数管理) ====================
+planningRoutes.get('/cost-items', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.listCostItems)
+planningRoutes.post('/cost-items', auth(['admin', 'planner']), ctrl.createCostItem)
+planningRoutes.put('/cost-items/:id', auth(['admin', 'planner']), ctrl.updateCostItem)
+planningRoutes.delete('/cost-items/:id', auth(['admin', 'planner']), ctrl.deleteCostItem)
 
 // ==================== Cost Management (2.1.4) ====================
 planningRoutes.get('/unit-cost-params', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.listUnitCostParams)

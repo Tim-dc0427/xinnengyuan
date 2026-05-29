@@ -520,6 +520,7 @@ watch(mainTab, async (t) => {
 
 <template>
   <div class="page-container" style="display:flex;flex-direction:column;gap:12px;height:calc(100vh - 100px)">
+    <div class="chart-panel-title">资源关联关系</div>
     <el-tabs v-model="mainTab" style="margin-bottom:-8px">
       <el-tab-pane label="接入关系" name="relation" />
       <el-tab-pane label="模型管理" name="model" />

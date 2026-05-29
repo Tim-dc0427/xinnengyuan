@@ -109,6 +109,7 @@ onMounted(async () => {
 
 <template>
   <div class="batch-results">
+    <div class="chart-panel-title">结果分析</div>
     <div class="results-top">
       <div class="top-row">
         <el-select v-model="groupId" placeholder="选择批次" size="small" style="width:280px" @change="loadData">

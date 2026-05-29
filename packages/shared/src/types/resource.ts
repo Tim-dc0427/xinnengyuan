@@ -348,3 +348,32 @@ export interface ManualInterventionRecord {
   timestamp: string
   reason: string
 }
+
+// ==================== Scenario Topology (网架图编辑器) ====================
+
+export interface TopoNodeState {
+  id: string
+  nodeType: TopoNodeType
+  nodeId?: string
+  nodeName: string
+  voltageLevel?: string
+  connectedCapacity?: number
+  x: number
+  y: number
+  params: Record<string, any>
+}
+
+export interface TopoEdgeState {
+  id: string
+  sourceId: string
+  targetId: string
+  edgeType: TopoEdgeType
+  flowDirection: FlowDirection
+  maxCapacityKw?: number
+}
+
+export interface ScenarioTopology {
+  nodes: TopoNodeState[]
+  edges: TopoEdgeState[]
+  topologyVersion?: number
+}

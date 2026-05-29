@@ -32,6 +32,7 @@ function envColor(e: string) {
 
 <template>
   <div>
+    <div class="chart-panel-title">综合评估</div>
     <div class="action-bar">
       <el-button disabled>导入数据</el-button>
       <el-button type="primary" @click="runEval" :loading="loading">综合评估</el-button>

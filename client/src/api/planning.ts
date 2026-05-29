@@ -4,6 +4,7 @@ import type {
   CandidatePoint, AbsorptionPlanDetail, UnitCostParam,
   InvestmentResult, CostComparison, RoiAnalysis,
   EquipmentLifecycleRecord, EquipmentLedgerItem, PotentialSite, ComprehensiveEvaluation, SchemeVariant,
+  PvModelType, PvModelTypeField,
 } from '@new-energy/shared'
 
 // ==================== Plan ====================
@@ -44,12 +45,12 @@ export async function deletePvStation(id: string) {
 }
 
 // ==================== PV Cost Library (2.1.1) ====================
-export async function fetchCostLibrary(params?: { modelType?: string }) {
+export async function fetchCostLibrary(params?: { modelType?: string; modelTypeId?: string }) {
   const res = await apiClient.get('/api/v1/planning/pv-cost-library', { params })
   return res.data?.data as PvCostLibraryItem[]
 }
 
-export async function createCostLibraryItem(data: Partial<PvCostLibraryItem>) {
+export async function upsertCostLibraryItem(data: { modelTypeId: string; unitCostPerKw?: number; remark?: string }) {
   const res = await apiClient.post('/api/v1/planning/pv-cost-library', data)
   return res.data?.data as PvCostLibraryItem
 }
@@ -158,25 +159,99 @@ export async function deletePlanVariant(variantId: string) {
   return res.data?.data
 }
 
+// ==================== Cost Items (造价参数管理) ====================
+export interface CostItem {
+  id: string
+  item_code: string
+  category: string
+  sub_category?: string
+  equipment_type?: string
+  model_spec?: string
+  item_name: string
+  unit_price: number
+  cost_unit: string
+  created_at?: string
+  updated_at?: string
+}
+
+export async function fetchCostItems(params?: {
+  category?: string; subCategory?: string; equipmentType?: string; itemCode?: string
+}) {
+  const res = await apiClient.get('/api/v1/planning/cost-items', { params })
+  return res.data?.data as CostItem[]
+}
+
+export async function createCostItem(data: {
+  itemCode: string; category: string; subCategory?: string
+  equipmentType?: string; modelSpec?: string; itemName: string
+  unitPrice: number; costUnit: string
+}) {
+  const res = await apiClient.post('/api/v1/planning/cost-items', data)
+  return res.data?.data as CostItem
+}
+
+export async function updateCostItem(id: string, data: {
+  itemCode?: string; category?: string; subCategory?: string
+  equipmentType?: string; modelSpec?: string; itemName?: string
+  unitPrice?: number; costUnit?: string
+}) {
+  const res = await apiClient.put(`/api/v1/planning/cost-items/${id}`, data)
+  return res.data?.data as CostItem
+}
+
+export async function deleteCostItem(id: string) {
+  const res = await apiClient.delete(`/api/v1/planning/cost-items/${id}`)
+  return res.data?.data
+}
+
+// ==================== Investment Config (投资配置方案) ====================
+export interface InvestmentConfigItem {
+  id: string
+  plan_id: string
+  cost_item_id: string
+  quantity: number
+  unit_price: number
+  item_code?: string
+  equipment_type?: string
+  model_spec?: string
+  cost_item_name?: string
+  cost_unit?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export async function fetchInvestmentConfig(params?: { planId?: string }) {
+  const res = await apiClient.get('/api/v1/planning/investment-config', { params })
+  return res.data?.data as InvestmentConfigItem[]
+}
+
+export async function saveInvestmentConfig(planId: string, items: Array<{
+  costItemId: string; quantity: number
+}>) {
+  const res = await apiClient.post(`/api/v1/planning/investment-config/${planId}`, items)
+  return res.data?.data as InvestmentConfigItem[]
+}
+
 // ==================== Cost Management (2.1.4) ====================
 export async function fetchUnitCostParams(params?: { category?: string }) {
   const res = await apiClient.get('/api/v1/planning/unit-cost-params', { params })
   return res.data?.data as UnitCostParam[]
 }
 
-export async function calculateInvestment(data: { capacityKw: number }) {
+export async function calculateInvestment(data: { capacityKw: number; planId?: string }) {
   const res = await apiClient.post('/api/v1/planning/calculate-investment', data)
   return res.data?.data as InvestmentResult
 }
 
-export async function compareCost(data: { pvCapacityKw: number }) {
+export async function compareCost(data: { planIdA?: string; planIdB?: string }) {
   const res = await apiClient.post('/api/v1/planning/compare-cost', data)
   return res.data?.data as CostComparison
 }
 
 export async function roiAnalysis(data: {
-  capacityKw: number; investment?: number
-  storageConfig?: any; reactiveCompConfig?: any; lineModification?: any
+  planId?: string; capacityKw?: number; investment?: number
+  annualHours?: number; gridPrice?: number
+  subsidyPrice?: number; carbonPrice?: number; omRate?: number; projectLife?: number
 }) {
   const res = await apiClient.post('/api/v1/planning/roi-analysis', data)
   return res.data?.data as RoiAnalysis
@@ -245,4 +320,54 @@ export async function createLifecycleRecord(data: Partial<EquipmentLifecycleReco
 export async function fetchLifecycleRecords(equipmentId: string) {
   const res = await apiClient.get(`/api/v1/planning/equipment-lifecycle/${equipmentId}`)
   return res.data?.data as EquipmentLifecycleRecord[]
+}
+
+// ==================== PV Model Types (规划工具) ====================
+export async function fetchPvModelTypes() {
+  const res = await apiClient.get('/api/v1/planning/pv-model-types')
+  return res.data?.data as PvModelType[]
+}
+
+export async function fetchPvModelTypeWithFields(id: string) {
+  const res = await apiClient.get(`/api/v1/planning/pv-model-types/${id}/with-fields`)
+  return res.data?.data as PvModelType
+}
+
+export async function createPvModelType(data: { name: string; code: string; description?: string; sortOrder?: number }) {
+  const res = await apiClient.post('/api/v1/planning/pv-model-types', data)
+  return res.data?.data as PvModelType
+}
+
+export async function updatePvModelType(id: string, data: { name?: string; description?: string; sortOrder?: number }) {
+  const res = await apiClient.put(`/api/v1/planning/pv-model-types/${id}`, data)
+  return res.data?.data as PvModelType
+}
+
+export async function deletePvModelType(id: string) {
+  const res = await apiClient.delete(`/api/v1/planning/pv-model-types/${id}`)
+  return res.data?.data
+}
+
+export async function fetchModelTypeFields(typeId: string) {
+  const res = await apiClient.get(`/api/v1/planning/pv-model-types/${typeId}/fields`)
+  return res.data?.data as PvModelTypeField[]
+}
+
+export async function saveModelTypeFields(typeId: string, fields: Array<{
+  fieldCode: string; fieldName: string; fieldType: string
+  fieldOptions?: string; isRequired: boolean; sortOrder: number
+}>) {
+  const res = await apiClient.post(`/api/v1/planning/pv-model-types/${typeId}/fields`, fields)
+  return res.data?.data as PvModelTypeField[]
+}
+
+// ==================== Field Library (字段库) ====================
+export async function fetchFieldLibrary(keyword?: string) {
+  const res = await apiClient.get('/api/v1/planning/field-library', { params: keyword ? { keyword } : {} })
+  return res.data?.data as Array<{ id: string; field_code: string; field_name: string; field_type: string; field_options?: string; category?: string }>
+}
+
+export async function createFieldLibraryItem(data: { fieldCode: string; fieldName: string; fieldType: string; fieldOptions?: string; category?: string }) {
+  const res = await apiClient.post('/api/v1/planning/field-library', data)
+  return res.data?.data
 }

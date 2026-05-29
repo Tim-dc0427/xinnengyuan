@@ -132,6 +132,7 @@ onMounted(loadData)
 
 <template>
   <div class="batch-config">
+    <div class="chart-panel-title">参数配置</div>
     <div class="config-grid">
       <div class="config-left">
         <div class="filter-row">

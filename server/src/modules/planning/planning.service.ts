@@ -16,6 +16,7 @@ export class PlanningService {
       plan_name: data.planName,
       plan_type: data.planType,
       plan_year: data.planYear,
+      tech_route: data.techRoute,
       description: data.description,
       created_by: userId,
       created_at: new Date().toISOString(),
@@ -25,12 +26,14 @@ export class PlanningService {
   }
 
   async updatePlan(id: string, data: any) {
-    const [plan] = await db('plans').where('id', id).update({
-      plan_name: data.planName,
-      description: data.description,
-      status: data.status,
-      updated_at: new Date().toISOString(),
-    }).returning('*')
+    const updateData: any = { updated_at: new Date().toISOString() }
+    if (data.planName !== undefined) updateData.plan_name = data.planName
+    if (data.planType !== undefined) updateData.plan_type = data.planType
+    if (data.planYear !== undefined) updateData.plan_year = data.planYear
+    if (data.techRoute !== undefined) updateData.tech_route = data.techRoute
+    if (data.description !== undefined) updateData.description = data.description
+    if (data.status !== undefined) updateData.status = data.status
+    const [plan] = await db('plans').where('id', id).update(updateData).returning('*')
     return plan
   }
 
@@ -50,17 +53,19 @@ export class PlanningService {
     const [station] = await db('pv_stations').insert({
       id: uuid(),
       name: data.name,
-      capacity_kw: data.capacityKw,
-      panel_type: data.panelType,
-      rated_voltage_kv: data.ratedVoltageKv,
-      longitude: data.longitude,
-      latitude: data.latitude,
-      land_type: data.landType,
-      land_area_mu: data.landAreaMu,
+      capacity_kw: data.capacityKw ?? 0,
+      panel_type: data.panelType ?? '',
+      rated_voltage_kv: data.ratedVoltageKv ?? 0,
+      longitude: data.longitude ?? 0,
+      latitude: data.latitude ?? 0,
+      land_type: data.landType ?? '',
+      land_area_mu: data.landAreaMu ?? 0,
       electrical_params: JSON.stringify(data.electricalParams || {}),
       equipment_list: JSON.stringify(data.equipmentList || []),
       status: data.status || 'planning',
       plan_id: data.planId || null,
+      model_type_id: data.modelTypeId || null,
+      custom_fields: data.customFields ? JSON.stringify(data.customFields) : null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }).returning('*')
@@ -79,6 +84,8 @@ export class PlanningService {
     if (data.status !== undefined) updateData.status = data.status
     if (data.electricalParams !== undefined) updateData.electrical_params = JSON.stringify(data.electricalParams)
     if (data.equipmentList !== undefined) updateData.equipment_list = JSON.stringify(data.equipmentList)
+    if (data.modelTypeId !== undefined) updateData.model_type_id = data.modelTypeId
+    if (data.customFields !== undefined) updateData.custom_fields = JSON.stringify(data.customFields)
 
     const [station] = await db('pv_stations').where('id', id).update(updateData).returning('*')
     return station
@@ -91,35 +98,153 @@ export class PlanningService {
 
   private mockPvStations() {
     return [
-      { id: 'pv-1', name: '阳光集中式光伏电站A', capacity_kw: 50000, panel_type: 'mono-si', panel_type_label: '单晶硅', rated_voltage_kv: 110, longitude: 116.4, latitude: 39.9, land_type: 'desert', land_area_mu: 1500, electrical_params: { efficiency: 20.5, temperature_coefficient: -0.35 }, status: 'operating' },
-      { id: 'pv-2', name: '绿能光伏电站B', capacity_kw: 30000, panel_type: 'poly-si', panel_type_label: '多晶硅', rated_voltage_kv: 35, longitude: 117.0, latitude: 36.7, land_type: 'agricultural', land_area_mu: 800, electrical_params: { efficiency: 18.2, temperature_coefficient: -0.40 }, status: 'construction' },
-      { id: 'pv-3', name: '远景光伏电站C', capacity_kw: 80000, panel_type: 'thin-film', panel_type_label: '薄膜', rated_voltage_kv: 220, longitude: 115.8, latitude: 38.9, land_type: 'gobi', land_area_mu: 2500, electrical_params: { efficiency: 16.8, temperature_coefficient: -0.30 }, status: 'planning' },
+      { id: 'pv-1', name: '瓶窑镇北湖规划电站', capacity_kw: 55000, panel_type: 'mono-si', panel_type_label: '单晶硅', rated_voltage_kv: 220, longitude: 119.92, latitude: 30.42, land_type: 'unused', land_area_mu: 580, electrical_params: { efficiency: 21.5, temperature_coefficient: -0.35 }, status: 'planning', address: '余杭区瓶窑镇北湖草荡周边' },
+      { id: 'pv-2', name: '径山镇南部规划电站', capacity_kw: 35000, panel_type: 'mono-si', panel_type_label: '单晶硅', rated_voltage_kv: 110, longitude: 119.83, latitude: 30.37, land_type: 'unused', land_area_mu: 320, electrical_params: { efficiency: 21.5, temperature_coefficient: -0.35 }, status: 'planning', address: '余杭区径山镇南部区块' },
+      { id: 'pv-3', name: '中泰街道南峰规划电站', capacity_kw: 40000, panel_type: 'poly-si', panel_type_label: '多晶硅', rated_voltage_kv: 110, longitude: 119.91, latitude: 30.21, land_type: 'unused', land_area_mu: 420, electrical_params: { efficiency: 20.5, temperature_coefficient: -0.38 }, status: 'planning', address: '余杭区中泰街道南峰区块' },
     ]
   }
 
   // ==================== PV Cost Library (2.1.1) ====================
-  async listPvCostLibrary(query: { modelType?: string }) {
+  async listPvCostLibrary(query: { modelType?: string; modelTypeId?: string }) {
     try {
       return db('pv_cost_library').modify((qb) => {
         if (query.modelType) qb.where('model_type', query.modelType)
+        if (query.modelTypeId) qb.where('model_type_id', query.modelTypeId)
       }).orderBy('created_at', 'desc')
     } catch {
       return this.mockCostLibrary()
     }
   }
 
-  async createCostLibraryItem(data: any) {
-    const [item] = await db('pv_cost_library').insert({
+  async upsertCostLibraryItem(data: any) {
+    const existing = await db('pv_cost_library').where('model_type_id', data.modelTypeId).first()
+    if (existing) {
+      await db('pv_cost_library').where('id', existing.id).update({
+        unit_cost_per_kw: data.unitCostPerKw ?? existing.unit_cost_per_kw,
+        remark: data.remark ?? existing.remark,
+      })
+      return db('pv_cost_library').where('id', existing.id).first()
+    }
+    await db('pv_cost_library').insert({
       id: uuid(),
-      model_name: data.modelName,
-      model_type: data.modelType,
-      manufacturer: data.manufacturer,
-      unit_cost_per_kw: data.unitCostPerKw,
-      rated_power_kw: data.ratedPowerKw,
-      efficiency_pct: data.efficiencyPct,
-      lifespan_years: data.lifespanYears,
-      technical_params: JSON.stringify(data.technicalParams || {}),
+      model_name: '综合造价评估',
+      model_type: 'comprehensive',
+      unit_cost_per_kw: data.unitCostPerKw || 0,
       remark: data.remark || '',
+      model_type_id: data.modelTypeId,
+      created_at: new Date().toISOString(),
+    })
+    return db('pv_cost_library').where('model_type_id', data.modelTypeId).first()
+  }
+
+  // ==================== PV Model Types (规划工具) ====================
+  async listPvModelTypes() {
+    try {
+      return db('pv_model_types').orderBy('sort_order', 'asc')
+    } catch {
+      return []
+    }
+  }
+
+  async listPvModelTypesWithFields() {
+    try {
+      const types = await db('pv_model_types').orderBy('sort_order', 'asc')
+      const result = []
+      for (const t of types) {
+        const fields = await db('pv_model_type_fields').where('type_id', t.id).orderBy('sort_order', 'asc')
+        result.push({ ...t, fields })
+      }
+      return result
+    } catch {
+      return []
+    }
+  }
+
+  async getPvModelTypeWithFields(typeIdOrCode: string) {
+    let type = await db('pv_model_types').where('id', typeIdOrCode).first()
+    if (!type) type = await db('pv_model_types').where('code', typeIdOrCode).first()
+    if (!type) return null
+    const fields = await db('pv_model_type_fields').where('type_id', type.id).orderBy('sort_order', 'asc')
+    return { ...type, fields }
+  }
+
+  async createPvModelType(data: { name: string; code: string; description?: string; sortOrder?: number }) {
+    const [type] = await db('pv_model_types').insert({
+      id: uuid(),
+      name: data.name,
+      code: data.code,
+      description: data.description,
+      sort_order: data.sortOrder || 0,
+      created_at: new Date().toISOString(),
+    }).returning('*')
+    return type
+  }
+
+  async updatePvModelType(id: string, data: { name?: string; description?: string; sortOrder?: number }) {
+    const [type] = await db('pv_model_types').where('id', id).update({
+      ...(data.name !== undefined && { name: data.name }),
+      ...(data.description !== undefined && { description: data.description }),
+      ...(data.sortOrder !== undefined && { sort_order: data.sortOrder }),
+    }).returning('*')
+    return type
+  }
+
+  async deletePvModelType(id: string) {
+    await db('pv_model_type_fields').where('type_id', id).delete()
+    await db('pv_model_types').where('id', id).delete()
+  }
+
+  async listPvModelTypeFields(typeId: string) {
+    return db('pv_model_type_fields').where('type_id', typeId).orderBy('sort_order', 'asc')
+  }
+
+  async savePvModelTypeFields(typeId: string, fields: Array<{
+    fieldCode: string; fieldName: string; fieldType: string
+    fieldOptions?: string; isRequired: boolean; sortOrder: number
+  }>) {
+    const type = await db('pv_model_types').where('id', typeId).first()
+    if (!type) throw new Error(`模型类型不存在: ${typeId}`)
+    await db('pv_model_type_fields').where('type_id', typeId).delete()
+    if (fields.length > 0) {
+      await db('pv_model_type_fields').insert(
+        fields.map((f) => ({
+          id: uuid(),
+          type_id: typeId,
+          field_code: f.fieldCode,
+          field_name: f.fieldName,
+          field_type: f.fieldType,
+          field_options: f.fieldOptions || null,
+          is_required: f.isRequired ? 1 : 0,
+          sort_order: f.sortOrder,
+          created_at: new Date().toISOString(),
+        })),
+      )
+    }
+    return this.listPvModelTypeFields(typeId)
+  }
+
+  // ==================== Field Library (字段库) ====================
+  async listFieldLibrary(query?: { keyword?: string }) {
+    let qb = db('pv_field_library').orderBy('field_code', 'asc')
+    if (query?.keyword) {
+      const kw = `%${query.keyword}%`
+      qb = qb.where(function () {
+        this.where('field_code', 'like', kw).orWhere('field_name', 'like', kw)
+      })
+    }
+    return qb
+  }
+
+  async createFieldLibraryItem(data: { fieldCode: string; fieldName: string; fieldType: string; fieldOptions?: string; category?: string }) {
+    const existing = await db('pv_field_library').where('field_code', data.fieldCode).first()
+    if (existing) return existing
+    const [item] = await db('pv_field_library').insert({
+      id: uuid(),
+      field_code: data.fieldCode,
+      field_name: data.fieldName,
+      field_type: data.fieldType,
+      field_options: data.fieldOptions || null,
+      category: data.category || '基础信息',
       created_at: new Date().toISOString(),
     }).returning('*')
     return item
@@ -403,7 +528,7 @@ export class PlanningService {
 
   private mockAbsorptionPlan(id: string) {
     return {
-      id, scheme_id: 'scheme-1', plan_name: '阳光电站A消纳方案', candidate_point_id: 'cp-1',
+      id, scheme_id: 'scheme-1', plan_name: '规划光伏站消纳方案', candidate_point_id: 'cp-1',
       storage_config: { requiredCapacityKwh: 20000, requiredPowerKw: 10000, storageType: 'lithium', durationHours: 2, estimatedCost: 3000, layoutPlan: '集中式布置于升压站附近' },
       reactive_comp_config: { compType: 'SVG', requiredCapacityKvar: 8000, targetPowerFactor: 0.95, estimatedCost: 480 },
       line_modification: { modificationType: 'upgrade_conductor', currentSpec: 'LGJ-240', targetSpec: 'LGJ-400', lineLengthKm: 12.5, estimatedCost: 1250, description: '导线截面升级，提升输送容量' },
@@ -525,6 +650,64 @@ export class PlanningService {
     ]
   }
 
+  // ==================== Cost Items (造价参数管理) ====================
+  async listCostItems(query: {
+    category?: string; subCategory?: string; equipmentType?: string; itemCode?: string
+  }) {
+    try {
+      return db('cost_items').modify((qb) => {
+        if (query.category) qb.where('category', query.category)
+        if (query.subCategory) qb.where('sub_category', query.subCategory)
+        if (query.equipmentType) qb.where('equipment_type', query.equipmentType)
+        if (query.itemCode) qb.where('item_code', 'like', `%${query.itemCode}%`)
+      }).orderBy('category').orderBy('item_code')
+    } catch {
+      return []
+    }
+  }
+
+  async createCostItem(data: any) {
+    const existing = await db('cost_items').where('item_code', data.itemCode).first()
+    if (existing) throw new Error('设备编号已存在')
+    const [item] = await db('cost_items').insert({
+      id: crypto.randomUUID(),
+      item_code: data.itemCode,
+      category: data.category,
+      sub_category: data.subCategory || null,
+      equipment_type: data.equipmentType || null,
+      model_spec: data.modelSpec || null,
+      item_name: data.itemName,
+      unit_price: data.unitPrice,
+      cost_unit: data.costUnit,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }).returning('*')
+    return item
+  }
+
+  async updateCostItem(id: string, data: any) {
+    if (data.itemCode) {
+      const existing = await db('cost_items').where('item_code', data.itemCode).whereNot('id', id).first()
+      if (existing) throw new Error('设备编号已存在')
+    }
+    const [item] = await db('cost_items').where('id', id).update({
+      ...(data.itemCode !== undefined && { item_code: data.itemCode }),
+      ...(data.category !== undefined && { category: data.category }),
+      ...(data.subCategory !== undefined && { sub_category: data.subCategory || null }),
+      ...(data.equipmentType !== undefined && { equipment_type: data.equipmentType || null }),
+      ...(data.modelSpec !== undefined && { model_spec: data.modelSpec || null }),
+      ...(data.itemName !== undefined && { item_name: data.itemName }),
+      ...(data.unitPrice !== undefined && { unit_price: data.unitPrice }),
+      ...(data.costUnit !== undefined && { cost_unit: data.costUnit }),
+      updated_at: new Date().toISOString(),
+    }).returning('*')
+    return item
+  }
+
+  async deleteCostItem(id: string) {
+    await db('cost_items').where('id', id).delete()
+  }
+
   // ==================== Cost Management (2.1.4) ====================
   async listUnitCostParams(query: { category?: string }) {
     try {
@@ -536,176 +719,246 @@ export class PlanningService {
     }
   }
 
-  async calculateInvestment(data: { capacityKw: number; params?: any }) {
-    const capacityKw = data.capacityKw || 50000
-    const equipmentCost = capacityKw * 1.8  // 1800元/kW
-    const constructionCost = capacityKw * 0.6
-    const landCost = capacityKw * 0.4
-    const otherCost = (equipmentCost + constructionCost + landCost) * 0.08
+  // ==================== Investment Config (投资配置方案) ====================
+  async listInvestmentConfig(query: { planId?: string }) {
+    try {
+      return db('investment_config')
+        .join('cost_items', 'investment_config.cost_item_id', 'cost_items.id')
+        .modify((qb) => {
+          if (query.planId) qb.where('investment_config.plan_id', query.planId)
+        })
+        .select(
+          'investment_config.*',
+          'cost_items.item_code',
+          'cost_items.equipment_type',
+          'cost_items.model_spec',
+          'cost_items.item_name as cost_item_name',
+          'cost_items.cost_unit',
+        )
+        .orderBy('cost_items.equipment_type')
+    } catch { return [] }
+  }
+
+  async saveInvestmentConfig(planId: string, items: Array<{
+    costItemId: string; quantity: number
+  }>) {
+    await db('investment_config').where('plan_id', planId).delete()
+    if (items.length === 0) return []
+    const costItems = await db('cost_items').whereIn('id', items.map(i => i.costItemId)).select('id', 'unit_price')
+    const priceMap = new Map(costItems.map((c: any) => [c.id, c.unit_price]))
+    const rows = items.map(i => ({
+      id: crypto.randomUUID(),
+      plan_id: planId,
+      cost_item_id: i.costItemId,
+      quantity: i.quantity,
+      unit_price: priceMap.get(i.costItemId) || 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }))
+    await db('investment_config').insert(rows)
+    return this.listInvestmentConfig({ planId })
+  }
+
+  async calculateInvestment(data: { capacityKw?: number; planId?: string }) {
+    let equipmentCost = 0, constructionCost = 0, landCost = 0, otherCost = 0
+    let configDetails: any[] = []
+    let capacityKw = data.capacityKw || 50000
+
+    // 基于配置方案汇总全部类别费用
+    if (data.planId) {
+      const config = await this.listInvestmentConfig({ planId: data.planId })
+      if (config.length > 0) {
+        // 从 cost_items join 结果中取 category
+        const items = await db('investment_config')
+          .join('cost_items', 'investment_config.cost_item_id', 'cost_items.id')
+          .where('investment_config.plan_id', data.planId)
+          .select('investment_config.*', 'cost_items.category', 'cost_items.item_code', 'cost_items.equipment_type', 'cost_items.model_spec', 'cost_items.item_name as cost_item_name', 'cost_items.cost_unit')
+
+        for (const row of items) {
+          let subtotal = 0
+          const unit = (row.cost_unit || '')
+          // 按容量计价：总价 = 容量 × 单价
+          if (unit.endsWith('/kW')) {
+            subtotal = capacityKw * (row.unit_price || 0)
+          } else if (unit.endsWith('/W') || unit.endsWith('/Wp')) {
+            subtotal = capacityKw * 1000 * (row.unit_price || 0)
+          } else {
+            // 按数量计价：总价 = 数量 × 单价
+            subtotal = (row.quantity || 0) * (row.unit_price || 0)
+          }
+          // 按造价库类别分摊到四项费用
+          switch (row.category) {
+            case 'equipment': equipmentCost += subtotal; break
+            case 'construction': constructionCost += subtotal; break
+            case 'other': otherCost += subtotal; break
+            default: otherCost += subtotal
+          }
+          configDetails.push({
+            category: row.category,
+            itemCode: row.item_code,
+            equipmentType: row.equipment_type,
+            modelSpec: row.model_spec,
+            costItemName: row.cost_item_name,
+            quantity: row.quantity,
+            unitPrice: row.unit_price,
+            costUnit: row.cost_unit,
+            subtotal: Math.round(subtotal * 100) / 100,
+          })
+        }
+      }
+    }
+
+    // 无planId且有配置数据时，从配置计算；无planId=pure容量估算
+    if (!data.planId && equipmentCost === 0 && constructionCost === 0) {
+      equipmentCost = capacityKw * 1800
+      constructionCost = capacityKw * 600
+      landCost = capacityKw * 400
+      otherCost = (equipmentCost + constructionCost + landCost) * 0.08
+    }
+
     const total = equipmentCost + constructionCost + landCost + otherCost
 
     return {
       totalInvestment: Math.round(total / 10000) * 10000,
-      unitCostPerKw: Math.round(total / capacityKw),
+      unitCostPerKw: capacityKw > 0 ? Math.round(total / capacityKw) : 0,
+      basedOnConfig: configDetails.length > 0,
+      configDetails,
       breakdown: {
-        equipmentCost: Math.round(equipmentCost / 10000) * 10000,
-        constructionCost: Math.round(constructionCost / 10000) * 10000,
-        landCost: Math.round(landCost / 10000) * 10000,
-        otherCost: Math.round(otherCost / 10000) * 10000,
+        equipmentCost: Math.round(equipmentCost),
+        constructionCost: Math.round(constructionCost),
+        landCost: Math.round(landCost),
+        otherCost: Math.round(otherCost),
       },
       details: [
-        { itemName: '光伏组件', amount: Math.round(equipmentCost * 0.6 / 10000) * 10000, proportion: 45.0 },
-        { itemName: '逆变器', amount: Math.round(equipmentCost * 0.15 / 10000) * 10000, proportion: 11.3 },
-        { itemName: '支架及基础', amount: Math.round(equipmentCost * 0.15 / 10000) * 10000, proportion: 11.3 },
-        { itemName: '电气设备', amount: Math.round(equipmentCost * 0.1 / 10000) * 10000, proportion: 7.5 },
-        { itemName: '建筑工程', amount: Math.round(constructionCost / 10000) * 10000, proportion: 22.6 },
-        { itemName: '土地费用', amount: Math.round(landCost / 10000) * 10000, proportion: 15.0 },
-        { itemName: '其他费用', amount: Math.round(otherCost / 10000) * 10000, proportion: 8.0 },
-      ].map(d => ({ ...d, proportion: +(d.proportion / 1.207).toFixed(1) })),
+        { itemName: '设备投资', amount: Math.round(equipmentCost / 10000) * 10000, proportion: total > 0 ? +(equipmentCost / total * 100).toFixed(1) : 0 },
+        { itemName: '建设安装', amount: Math.round(constructionCost / 10000) * 10000, proportion: total > 0 ? +(constructionCost / total * 100).toFixed(1) : 0 },
+        { itemName: '土地费用', amount: Math.round(landCost / 10000) * 10000, proportion: total > 0 ? +(landCost / total * 100).toFixed(1) : 0 },
+        { itemName: '其他费用', amount: Math.round(otherCost / 10000) * 10000, proportion: total > 0 ? +(otherCost / total * 100).toFixed(1) : 0 },
+      ],
     }
   }
 
-  async compareCost(data: { pvCapacityKw: number }) {
-    const pvUnitCost = 4200
-    const traditionalCoalUnitCost = 5500
-    const traditionalTransmissionCost = 1800
-    const pvTotalCost = data.pvCapacityKw * pvUnitCost
+  async compareCost(data: { planIdA?: string; planIdB?: string }) {
+    // 分别计算两个方案的投资
+    const invA = data.planIdA ? await this.calculateInvestment({ planId: data.planIdA }) : null
+    const invB = data.planIdB ? await this.calculateInvestment({ planId: data.planIdB }) : null
+
+    const pvUnitCost = invA?.unitCostPerKw || 0
+    const tradUnitCost = invB?.unitCostPerKw || 0
+    const pvTotalCost = invA?.totalInvestment || 0
+    const tradTotalCost = invB?.totalInvestment || 0
 
     return {
-      pvTotalCost,
       pvUnitCost,
-      traditionalCoalCost: data.pvCapacityKw * traditionalCoalUnitCost,
-      traditionalCoalUnitCost,
-      traditionalTransmissionCost,
-      costAdvantagePct: +((traditionalCoalUnitCost + traditionalTransmissionCost - pvUnitCost) / (traditionalCoalUnitCost + traditionalTransmissionCost) * 100).toFixed(1),
+      pvTotalCost,
+      traditionalUnitCost: tradUnitCost,
+      traditionalTotalCost: tradTotalCost,
+      costAdvantagePct: +((tradUnitCost - pvUnitCost) / tradUnitCost * 100).toFixed(1),
+      pvBreakdown: invA?.breakdown || null,
+      traditionalBreakdown: invB?.breakdown || null,
+      pvConfigDetails: invA?.configDetails || [],
+      traditionalConfigDetails: invB?.configDetails || [],
       comparisonChart: {
-        labels: ['设备投资', '建设安装', '土地费用', '并网接入', '运维成本(20年)'],
-        pvValues: [9000, 3000, 2000, 1500, 3500],
-        traditionalValues: [12000, 5000, 1000, 2000, 8000],
+        labels: ['设备投资', '建设安装', '土地费用', '其他费用'],
+        pvValues: invA ? [
+          Math.round(invA.breakdown.equipmentCost / 10000),
+          Math.round(invA.breakdown.constructionCost / 10000),
+          Math.round(invA.breakdown.landCost / 10000),
+          Math.round(invA.breakdown.otherCost / 10000),
+        ] : [0, 0, 0, 0],
+        traditionalValues: invB ? [
+          Math.round(invB.breakdown.equipmentCost / 10000),
+          Math.round(invB.breakdown.constructionCost / 10000),
+          Math.round(invB.breakdown.landCost / 10000),
+          Math.round(invB.breakdown.otherCost / 10000),
+        ] : [0, 0, 0, 0],
       },
     }
   }
 
   async roiAnalysis(data: {
-    capacityKw: number; investment?: number
-    storageConfig?: any; reactiveCompConfig?: any; lineModification?: any
+    planId?: string; capacityKw?: number; investment?: number
+    annualHours?: number; gridPrice?: number
+    subsidyPrice?: number; carbonPrice?: number; omRate?: number; projectLife?: number
   }) {
-    const capacityKw = data.capacityKw || 50000
-    const storage = data.storageConfig || {}
-    const reactive = data.reactiveCompConfig || {}
-    const line = data.lineModification || {}
+    const annualHours = data.annualHours || 1300
+    const gridPrice = data.gridPrice || 0.42
+    const subsidyPrice = data.subsidyPrice || 0
+    const carbonPrice = data.carbonPrice || 0
+    const omRate = (data.omRate || 2) / 100
+    const projectLife = data.projectLife || 25
 
-    // 总投资（元）：从各配置的估算造价汇总
-    const storageCost = (storage.estimatedCost || 0) * 10000
-    const reactiveCost = (reactive.estimatedCost || 0) * 10000
-    const lineCost = (line.estimatedCost || 0) * 10000
-    const totalInvestment = data.investment || storageCost + reactiveCost + lineCost
-    if (totalInvestment <= 0) return this.fallbackRoi(capacityKw)
+    let totalInvestment = 0
+    let capacityKw = 50000
+    let breakdown = { equipmentCost: 0, constructionCost: 0, landCost: 0, otherCost: 0 }
 
-    // ===== 年度增量收益计算 =====
-
-    // 1. 储能收益：低储高发套利 + 减少弃光
-    const storageKwh = storage.requiredCapacityKwh || 0
-    const cyclesPerYear = 300
-    const peakValleyDiff = 0.6       // 元/kWh，峰谷价差
-    const batteryEfficiency = 0.9     // 充放效率
-    const annualStorageRevenue = storageKwh * cyclesPerYear * peakValleyDiff * batteryEfficiency
-
-    // 2. 无功补偿收益：提高功率因数 → 降低线损 → 可多送出电力
-    const pf = reactive.targetPowerFactor || 0.95
-    const pfImprovement = Math.max(0, (pf - 0.9) / 0.9)   // 相对提升比例
-    const annualThroughputKwh = capacityKw * 2500            // 年等效满发小时数
-    const avgPrice = 0.5                                     // 元/kWh 上网电价
-    const annualReactiveRevenue = pfImprovement * 0.03 * annualThroughputKwh * avgPrice
-
-    // 3. 线路改造收益：降低线路损耗
-    const lossReductionMap: Record<string, number> = {
-      upgrade_conductor: 0.03, new_tie_line: 0.05,
-      upgrade_transformer: 0.02, other: 0,
+    if (data.planId) {
+      const inv = await this.calculateInvestment({ planId: data.planId })
+      totalInvestment = inv.totalInvestment
+      capacityKw = inv.unitCostPerKw > 0 ? Math.round(inv.totalInvestment / inv.unitCostPerKw) : 50000
+      breakdown = inv.breakdown
+    } else if (data.capacityKw) {
+      capacityKw = data.capacityKw
+      totalInvestment = data.investment || capacityKw * 4200
     }
-    const lossReduction = lossReductionMap[line.modificationType] || 0
-    const annualLineRevenue = lossReduction * annualThroughputKwh * avgPrice
 
-    const totalAnnualRevenue = annualStorageRevenue + annualReactiveRevenue + annualLineRevenue
+    const annualKwh = capacityKw * annualHours
+    const powerIncome = annualKwh * gridPrice
+    const subsidyIncome = subsidyPrice > 0 ? annualKwh * subsidyPrice : 0
+    const carbonTons = annualKwh * 0.0008
+    const carbonIncome = carbonPrice > 0 ? carbonTons * carbonPrice : 0
+    const totalRevenue = powerIncome + subsidyIncome + carbonIncome
 
-    // 年度运维成本（投资额的2% + 保险等0.5%）
-    const annualOm = totalInvestment * 0.02
-    const annualInsurance = totalInvestment * 0.005
-    const annualExpensesTotal = annualOm + annualInsurance
+    const annualExpense = totalInvestment * omRate
+    const annualNet = totalRevenue - annualExpense
 
-    const annualNet = totalAnnualRevenue - annualExpensesTotal
-
-    // 25年现金流（年增长率2%）
     const cashflows: { year: number; netCashflow: number; cumulativeCashflow: number }[] = []
     let cum = -totalInvestment
-    for (let i = 0; i < 25; i++) {
-      const net = annualNet * (1 + 0.02) ** i
-      cum += net
-      cashflows.push({ year: i + 1, netCashflow: Math.round(net), cumulativeCashflow: Math.round(cum) })
+    for (let i = 0; i < projectLife; i++) {
+      cum += annualNet
+      cashflows.push({ year: i + 1, netCashflow: Math.round(annualNet), cumulativeCashflow: Math.round(cum) })
     }
 
-    // 回收期
-    let paybackYears = 0
+    let paybackYears = projectLife
     for (const y of cashflows) {
       if (y.cumulativeCashflow >= 0) {
-        const prevIdx = y.year - 2
-        const prevCum = prevIdx >= 0 ? cashflows[prevIdx].cumulativeCashflow : -totalInvestment
+        const prevCum = y.year > 1 ? cashflows[y.year - 2].cumulativeCashflow : -totalInvestment
         paybackYears = y.year - 1 + Math.abs(prevCum) / y.netCashflow
         break
       }
     }
-    if (paybackYears === 0) paybackYears = 25
 
-    // IRR（牛顿迭代）
     const irr = this.calcIrr(totalInvestment, cashflows.map(c => c.netCashflow))
-    // NPV（折现率6%）
     const npv = this.calcNpv(0.06, totalInvestment, cashflows.map(c => c.netCashflow))
 
     return {
       upfrontCosts: {
-        equipmentInvestment: Math.round((storageCost + lineCost) * 0.8 + reactiveCost * 0.3),
-        landCost: Math.round(totalInvestment * 0.08),
-        constructionCost: Math.round((storageCost + lineCost) * 0.15 + reactiveCost * 0.5),
-        otherCost: Math.round(totalInvestment * 0.07),
+        equipmentInvestment: Math.round(breakdown.equipmentCost),
+        landCost: Math.round(breakdown.landCost),
+        constructionCost: Math.round(breakdown.constructionCost),
+        otherCost: Math.round(breakdown.otherCost),
         total: Math.round(totalInvestment),
       },
       annualRevenue: {
-        powerGenerationIncome: Math.round(annualStorageRevenue / 10000),
-        greenSubsidy: Math.round(annualReactiveRevenue / 10000),
-        carbonTradingIncome: Math.round(annualLineRevenue / 10000),
-        total: Math.round(totalAnnualRevenue / 10000),
+        powerGenerationIncome: Math.round(powerIncome / 10000),
+        greenSubsidy: Math.round(subsidyIncome / 10000),
+        carbonTradingIncome: Math.round(carbonIncome / 10000),
+        total: Math.round(totalRevenue / 10000),
       },
       annualExpenses: {
-        operationCost: Math.round(annualOm / 10000),
-        maintenanceCost: Math.round(annualOm * 0.6 / 10000),
-        insuranceCost: Math.round(annualInsurance / 10000),
-        otherCost: Math.round(annualInsurance * 0.5 / 10000),
-        total: Math.round(annualExpensesTotal / 10000),
+        operationCost: Math.round(annualExpense / 10000),
+        maintenanceCost: 0,
+        insuranceCost: 0,
+        otherCost: 0,
+        total: Math.round(annualExpense / 10000),
       },
       financialIndicators: {
         irrPct: +irr.toFixed(2),
         npv: Math.round(npv),
         paybackPeriodYears: +paybackYears.toFixed(1),
-        roiPct: +((totalAnnualRevenue * 25 / totalInvestment - 1) * 100).toFixed(1),
+        roiPct: totalInvestment > 0 ? +((totalRevenue / totalInvestment) * 100).toFixed(1) : 0,
       },
       yearlyCashflow: cashflows,
-    }
-  }
-
-  /** 兜底返回（无有效参数时） */
-  private fallbackRoi(capacityKw: number) {
-    const totalInvestment = capacityKw * 4200
-    const annualRevenueTotal = Math.round(capacityKw * 0.08)
-    const annualExpensesTotal = Math.round(totalInvestment * 0.025 / 10000)
-    return {
-      upfrontCosts: { equipmentInvestment: Math.round(totalInvestment * 0.6), landCost: Math.round(totalInvestment * 0.15), constructionCost: Math.round(totalInvestment * 0.18), otherCost: Math.round(totalInvestment * 0.07), total: Math.round(totalInvestment) },
-      annualRevenue: { powerGenerationIncome: Math.round(annualRevenueTotal * 0.7), greenSubsidy: Math.round(annualRevenueTotal * 0.2), carbonTradingIncome: Math.round(annualRevenueTotal * 0.1), total: Math.round(annualRevenueTotal) },
-      annualExpenses: { operationCost: Math.round(annualExpensesTotal * 0.4), maintenanceCost: Math.round(annualExpensesTotal * 0.3), insuranceCost: Math.round(annualExpensesTotal * 0.15), otherCost: Math.round(annualExpensesTotal * 0.15), total: Math.round(annualExpensesTotal) },
-      financialIndicators: { irrPct: 8.5, npv: 0, paybackPeriodYears: 12.5, roiPct: 150 },
-      yearlyCashflow: Array.from({ length: 25 }, (_, i) => {
-        const net = annualRevenueTotal * 10000 - annualExpensesTotal * 10000
-        return { year: i + 1, netCashflow: Math.round(net), cumulativeCashflow: Math.round(net * (i + 1) - totalInvestment) }
-      }),
     }
   }
 
@@ -753,7 +1006,61 @@ export class PlanningService {
 
   async getEquipmentByStation(stationId: string) {
     try {
-      return db('equipment_ledger').where('station_id', stationId).orderBy('created_at', 'asc')
+      // 先查 equipment_ledger（规划台账）
+      const ledgerRows = await db('equipment_ledger').where('station_id', stationId).orderBy('created_at', 'asc')
+      if (ledgerRows.length > 0) return ledgerRows
+
+      // fallback：查 equipment 表（实际设备），做字段映射
+      const eqRows = await db('equipment').where('station_id', stationId).orderBy('created_at', 'asc')
+      const typeLabelMap: Record<string, string> = {
+        TRANSFORMER: '变压器', INVERTER: '逆变器', BATTERY: '电池组',
+        PV_MODULE: '光伏组件', CABLE: '电缆', SWITCHGEAR: '开关柜', OTHER: '其他',
+      }
+      const statusMap: Record<string, string> = {
+        operational: 'operating', maintenance: 'fault', retired: 'retired',
+        installed: 'installed', standby: 'installed',
+      }
+      // 按设备类型映射 ratedParams，key 对齐前端 equipmentFieldConfigs
+      const typeParamsMap: Record<string, (r: any) => Record<string, any>> = {
+        TRANSFORMER: (r) => ({
+          ratedCapacity: r.rated_capacity_kva,
+          primaryVoltage: r.rated_voltage_kv,
+          ratedCurrent: r.rated_current_a,
+        }),
+        INVERTER: (r) => ({
+          ratedPower: r.rated_capacity_kva,
+          acOutputVoltage: r.rated_voltage_kv,
+          ratedOutputCurrent: r.rated_current_a,
+        }),
+        BATTERY: (r) => ({
+          ratedCapacity: r.rated_capacity_kva,
+          ratedVoltage: r.rated_voltage_kv,
+          ratedCurrent: r.rated_current_a,
+        }),
+      }
+      const defaultParams = (r: any) => ({
+        ratedCapacityKva: r.rated_capacity_kva,
+        ratedVoltageKv: r.rated_voltage_kv,
+        ratedCurrentA: r.rated_current_a,
+      })
+      const eqType = (r: any) => r.equipment_type || 'OTHER'
+      return eqRows.map((r: any) => ({
+        id: r.id,
+        planId: '',
+        stationId: r.station_id || '',
+        equipmentType: eqType(r).toLowerCase(),
+        equipmentTypeLabel: typeLabelMap[eqType(r)] || eqType(r) || '其他',
+        equipmentCode: '',
+        modelNumber: r.model_number || '',
+        manufacturer: r.manufacturer || '',
+        ratedParams: (typeParamsMap[eqType(r)] || defaultParams)(r),
+        quantity: 1,
+        installDate: r.installation_date || '',
+        status: statusMap[r.status] || 'installed',
+        locationDesc: '',
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      }))
     } catch {
       return this.mockEquipmentLedger(stationId).map((e: any) => ({ ...e, station_id: stationId }))
     }

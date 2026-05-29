@@ -37,6 +37,7 @@ export class PowerFlowController {
 
   // Curve templates (version controlled)
   listCurveTemplates = async (_req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.listCurveTemplates() }) }
+  listAllCurveTemplates = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.listAllCurveTemplates(req.query.rootId as string) }) }
   createCurveTemplate = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.createCurveTemplate(req.body, req.user!.id) }) }
   updateCurveTemplate = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.updateCurveTemplate(req.params.id, req.body, req.user!.id) }) }
   deleteCurveTemplate = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.deleteCurveTemplate(req.params.id) }) }

@@ -47,8 +47,59 @@ export class PlanningController {
     res.json({ code: 200, message: 'ok', data })
   }
 
-  createCostLibraryItem = async (req: Request, res: Response) => {
-    const data = await this.service.createCostLibraryItem(req.body)
+  upsertCostLibraryItem = async (req: Request, res: Response) => {
+    const data = await this.service.upsertCostLibraryItem(req.body)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
+  // ==================== PV Model Types (规划工具) ====================
+  listPvModelTypes = async (_req: Request, res: Response) => {
+    const data = await this.service.listPvModelTypesWithFields()
+    res.json({ code: 200, message: 'ok', data })
+  }
+
+  getPvModelTypeWithFields = async (req: Request, res: Response) => {
+    const data = await this.service.getPvModelTypeWithFields(req.params.id)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
+  createPvModelType = async (req: Request, res: Response) => {
+    const data = await this.service.createPvModelType(req.body)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
+  updatePvModelType = async (req: Request, res: Response) => {
+    const data = await this.service.updatePvModelType(req.params.id, req.body)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
+  deletePvModelType = async (req: Request, res: Response) => {
+    await this.service.deletePvModelType(req.params.id)
+    res.json({ code: 200, message: 'ok', data: null })
+  }
+
+  listModelTypeFields = async (req: Request, res: Response) => {
+    const data = await this.service.listPvModelTypeFields(req.params.id)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
+  saveModelTypeFields = async (req: Request, res: Response) => {
+    try {
+      const data = await this.service.savePvModelTypeFields(req.params.id, req.body)
+      res.json({ code: 200, message: 'ok', data })
+    } catch (e: any) {
+      res.status(400).json({ code: 400, message: e.message || '保存失败', data: null })
+    }
+  }
+
+  // ==================== Field Library (字段库) ====================
+  listFieldLibrary = async (req: Request, res: Response) => {
+    const data = await this.service.listFieldLibrary(req.query as any)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
+  createFieldLibraryItem = async (req: Request, res: Response) => {
+    const data = await this.service.createFieldLibraryItem(req.body)
     res.json({ code: 200, message: 'ok', data })
   }
 
@@ -120,6 +171,42 @@ export class PlanningController {
   // ==================== Cost Management (2.1.4) ====================
   listUnitCostParams = async (req: Request, res: Response) => {
     const data = await this.service.listUnitCostParams(req.query as any)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
+  // ==================== Cost Items ====================
+  listCostItems = async (req: Request, res: Response) => {
+    const data = await this.service.listCostItems(req.query as any)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
+  createCostItem = async (req: Request, res: Response) => {
+    try {
+      const data = await this.service.createCostItem(req.body)
+      res.json({ code: 200, message: 'ok', data })
+    } catch (e: any) { res.status(400).json({ code: 400, message: e.message }) }
+  }
+
+  updateCostItem = async (req: Request, res: Response) => {
+    try {
+      const data = await this.service.updateCostItem(req.params.id, req.body)
+      res.json({ code: 200, message: 'ok', data })
+    } catch (e: any) { res.status(400).json({ code: 400, message: e.message }) }
+  }
+
+  deleteCostItem = async (req: Request, res: Response) => {
+    await this.service.deleteCostItem(req.params.id)
+    res.json({ code: 200, message: 'ok' })
+  }
+
+  // ==================== Investment Config ====================
+  listInvestmentConfig = async (req: Request, res: Response) => {
+    const data = await this.service.listInvestmentConfig(req.query as any)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
+  saveInvestmentConfig = async (req: Request, res: Response) => {
+    const data = await this.service.saveInvestmentConfig(req.params.planId, req.body)
     res.json({ code: 200, message: 'ok', data })
   }
 

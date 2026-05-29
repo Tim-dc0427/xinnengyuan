@@ -11,10 +11,11 @@ import { db } from '../../config/database.js'
 export class DataValidationService {
 
   // ==================== 4.2.1 光伏数据完整性校验 ====================
-  async checkPVCompleteness(params: { plantId?: string; startDate?: string; endDate?: string }) {
-    // 从 pv_output_measurements 表读取
+  async checkPVCompleteness(params: { plantId?: string; stationId?: string; startDate?: string; endDate?: string }) {
+    // 从 pv_output_measurements 表读取，按 station_id 过滤
     const qb = db('pv_output_measurements')
-    if (params.plantId) qb.where('plant_id', params.plantId)
+    if (params.stationId) qb.where('station_id', params.stationId)
+    else if (params.plantId) qb.where('station_id', params.plantId)
     if (params.startDate) qb.where('time', '>=', params.startDate)
     if (params.endDate) qb.where('time', '<=', params.endDate)
     const records = await qb.orderBy('time', 'asc')
