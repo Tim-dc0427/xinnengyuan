@@ -6,6 +6,7 @@ import { usePlanningStore } from '@/stores/planning.store'
 import { fetchConstraintRules, runSpatialAnalysis, fetchCandidatePoints, fetchEvaluation } from '@/api/planning'
 import type { CandidatePoint, ConstraintRule, ComprehensiveEvaluation } from '@new-energy/shared'
 import EvaluationTab from './EvaluationTab.vue'
+import ConstraintSettings from './ConstraintSettings.vue'
 
 const router = useRouter()
 const planningStore = usePlanningStore()
@@ -16,6 +17,7 @@ const rules = ref<ConstraintRule[]>([])
 const evaluations = ref<ComprehensiveEvaluation[]>([])
 const selectedEval = ref<ComprehensiveEvaluation | null>(null)
 const evalDialogVisible = ref(false)
+const constraintDialogVisible = ref(false)
 const LNG_MIN = 119.75, LNG_MAX = 120.25, LNG_SPAN = LNG_MAX - LNG_MIN
 const LAT_MIN = 30.15, LAT_MAX = 30.52, LAT_SPAN = LAT_MAX - LAT_MIN
 
@@ -75,6 +77,10 @@ function envColor(e: string) {
   return e === 'III' ? '#67c23a' : e === 'II' ? '#e6a23c' : '#f56c6c'
 }
 
+function onConstraintSaved() {
+  loadRules()
+}
+
 onMounted(() => {
   loadRules()
   loadCandidates()
@@ -91,7 +97,7 @@ onMounted(() => {
       <el-tab-pane label="推荐布点规划" name="distribution">
         <div class="action-bar">
           <el-button type="primary" @click="runAnalysis" :loading="loading">执行空间分析</el-button>
-          <el-button @click="router.push('/planning/distribution/constraint-settings')">约束条件配置</el-button>
+          <el-button @click="constraintDialogVisible = true">约束条件配置</el-button>
         </div>
 
         <div class="chart-panel">
@@ -195,6 +201,10 @@ onMounted(() => {
           </div>
         </div>
       </template>
+    </el-dialog>
+
+    <el-dialog v-model="constraintDialogVisible" title="约束条件配置" width="700px" top="5vh">
+      <ConstraintSettings @close="constraintDialogVisible = false" @saved="onConstraintSaved" />
     </el-dialog>
   </div>
 </template>

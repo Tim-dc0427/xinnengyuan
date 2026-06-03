@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { fetchConstraintRules, saveConstraintRules } from '@/api/planning'
 import { CONSTRAINT_CATEGORIES, getDefaultCategoryValues } from '@/config/constraintCategories'
 import type { ConstraintCategoryValue } from '@new-energy/shared'
 
-const router = useRouter()
+const emit = defineEmits<{
+  close: []
+  saved: []
+}>()
+
 const loading = ref(false)
 const categories = ref<ConstraintCategoryValue[]>(getDefaultCategoryValues())
 
@@ -57,7 +60,8 @@ async function saveConfig() {
     })
     await saveConstraintRules(payload as any)
     ElMessage.success('约束条件配置已保存')
-    router.back()
+    emit('saved')
+    emit('close')
   } catch {
     ElMessage.error('保存失败')
   } finally {
@@ -77,12 +81,8 @@ onMounted(() => {
 
 <template>
   <div class="constraint-page">
-    <div class="chart-panel-title">约束条件配置</div>
     <div class="page-header">
-      <div class="header-left">
-        <el-button size="small" @click="router.back()">← 返回</el-button>
-        <span style="margin-left:8px">布点约束条件配置</span>
-      </div>
+      <div class="header-left">布点约束条件配置</div>
       <div class="header-actions">
         <el-button size="small" @click="resetDefaults">恢复默认</el-button>
         <el-button size="small" type="primary" @click="saveConfig" :loading="loading">保存配置</el-button>
@@ -128,7 +128,7 @@ onMounted(() => {
 
 <style scoped>
 .constraint-page {
-  max-width: 900px;
+  /* dialog内使用 */
 }
 
 .page-header {

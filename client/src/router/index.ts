@@ -149,12 +149,6 @@ const routes: RouteRecordRaw[] = [
             meta: { title: '布点规划智能推荐', roles: ['admin', 'planner'] },
           },
           {
-            path: 'constraint-settings',
-            name: 'ConstraintSettings',
-            component: () => import('@/views/planning/ConstraintSettings.vue'),
-            meta: { title: '约束条件配置', roles: ['admin', 'planner'] },
-          },
-          {
             path: 'absorption-scheme',
             name: 'AbsorptionScheme',
             component: () => import('@/views/planning/AbsorptionScheme.vue'),
