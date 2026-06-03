@@ -3,16 +3,16 @@ import { ref } from 'vue'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
-import { LineChart, BarChart, PieChart, ScatterChart, RadarChart, GaugeChart, HeatmapChart, GraphChart } from 'echarts/charts'
+import { LineChart, BarChart, PieChart, ScatterChart, RadarChart, GaugeChart, HeatmapChart, GraphChart, TreeChart } from 'echarts/charts'
 import {
   TitleComponent, TooltipComponent, LegendComponent, GridComponent,
-  DataZoomComponent, ToolboxComponent, MarkLineComponent,
+  DataZoomComponent, ToolboxComponent, MarkLineComponent, VisualMapComponent,
 } from 'echarts/components'
 
 use([
-  CanvasRenderer, LineChart, BarChart, PieChart, ScatterChart, RadarChart, GaugeChart, HeatmapChart, GraphChart,
+  CanvasRenderer, LineChart, BarChart, PieChart, ScatterChart, RadarChart, GaugeChart, HeatmapChart, GraphChart, TreeChart,
   TitleComponent, TooltipComponent, LegendComponent, GridComponent,
-  DataZoomComponent, ToolboxComponent, MarkLineComponent,
+  DataZoomComponent, ToolboxComponent, MarkLineComponent, VisualMapComponent,
 ])
 
 const props = withDefaults(defineProps<{
@@ -23,6 +23,10 @@ const props = withDefaults(defineProps<{
   height: '400px',
   loading: false,
 })
+
+const emit = defineEmits<{
+  chartClick: [params: any]
+}>()
 
 const chartRef = ref<InstanceType<typeof VChart> | null>(null)
 defineExpose({ chartRef })
@@ -39,6 +43,7 @@ defineExpose({ chartRef })
       :option="option"
       :style="{ height }"
       autoresize
+      @click="(p: any) => emit('chartClick', p)"
     />
   </div>
 </template>

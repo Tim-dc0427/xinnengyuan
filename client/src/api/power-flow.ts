@@ -215,6 +215,11 @@ export async function cancelBatch(groupId: string) {
   return res.data?.data as { groupId: string; status: string; cancelledCount: number }
 }
 
+export async function deleteBatch(groupId: string) {
+  const res = await apiClient.delete(`/api/v1/power-flow/batch/${groupId}`)
+  return res.data?.data as { groupId: string; deleted: boolean; deletedTasks: number }
+}
+
 export async function fetchBatchResults(groupId: string) {
   const res = await apiClient.get(`/api/v1/power-flow/batch/${groupId}/results`)
   return res.data?.data as {

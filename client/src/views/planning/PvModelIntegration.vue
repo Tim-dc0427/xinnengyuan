@@ -6,7 +6,7 @@ import {
   fetchCostLibrary, upsertCostLibraryItem,
   fetchPvModelTypes, createPvModelType, updatePvModelType, deletePvModelType,
   fetchModelTypeFields, saveModelTypeFields,
-  fetchFieldLibrary, createFieldLibraryItem,
+  fetchFieldLibrary, createFieldLibraryItem, deleteFieldLibraryItem,
 } from '@/api/planning'
 import type { PvModelType, PvModelTypeField } from '@new-energy/shared'
 
@@ -253,6 +253,15 @@ function toggleLibraryField(code: string) {
 
 function isLibrarySelected(code: string) {
   return librarySelected.value.includes(code)
+}
+
+async function handleDeleteLibraryField(id: string) {
+  try {
+    await ElMessageBox.confirm('确定从字段库中删除该字段？', '确认删除', { type: 'warning' })
+    await deleteFieldLibraryItem(id)
+    fieldLibrary.value = fieldLibrary.value.filter(f => f.id !== id)
+    ElMessage.success('已删除')
+  } catch { /* cancelled */ }
 }
 
 async function handleBatchAddFields() {
@@ -592,9 +601,14 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column prop="field_code" label="字段编码" width="180" />
         <el-table-column prop="field_name" label="字段名称" width="200" />
-        <el-table-column label="字段类型" width="90">
+        <el-table-column label="字段类型" width="80">
           <template #default="{ row }">
             {{ fieldTypeOptions.find(o => o.value === row.field_type)?.label || row.field_type }}
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="60">
+          <template #default="{ row }">
+            <el-button size="small" link type="danger" @click.stop="handleDeleteLibraryField(row.id)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>

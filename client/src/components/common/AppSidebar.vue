@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Monitor, Edit, Collection, DataAnalysis, Connection } from '@element-plus/icons-vue'
+import { Monitor, Edit, Collection, DataAnalysis, Connection, ArrowDown } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
 const expandedGroup = ref<string | null>(null)
-const expandedSubGroups = ref<Set<string>>(new Set())
 
 interface MenuItem {
   path?: string
@@ -27,102 +26,31 @@ const menuItems: MenuItem[] = [
   {
     title: '规划编制', icon: Edit,
     children: [
-      {
-        title: '配电网规划',
-        children: [
-          { path: '/planning/distribution/pv-model', title: '集中式光伏模型集成' },
-          { path: '/planning/distribution/site-planning', title: '布点规划智能推荐' },
-          { path: '/planning/distribution/absorption-scheme', title: '消纳方案智能编制' },
-          { path: '/planning/distribution/cost-analysis', title: '造价管理与经济性分析' },
-          { path: '/planning/distribution/equipment-ledger', title: '设备台账动态管理' },
-        ],
-      },
+      { path: '/planning/distribution', title: '配电网规划' },
     ],
   },
   {
     title: '成果管理', icon: Collection,
     children: [
-      {
-        title: '规划项目库',
-        children: [
-          { path: '/achievement/projects/type-mgmt', title: '光伏项目类型兼容' },
-          { path: '/achievement/projects/access-conditions', title: '接入条件数字化管理' },
-          { path: '/achievement/projects/feasibility', title: '并网可行性综合分析' },
-          { path: '/achievement/projects/effectiveness', title: '项目成效验证评估' },
-          { path: '/achievement/projects/traceability', title: '项目留痕与追溯' },
-        ],
-      },
+      { path: '/achievement/projects', title: '规划项目库' },
     ],
   },
   {
     title: '潮流计算', icon: DataAnalysis,
     children: [
-      {
-        title: '指标概览',
-        children: [
-          { path: '/power-flow/indicators/overview', title: '综合概览' },
-          { path: '/power-flow/indicators/voltage-stability', title: '节点电压稳定性' },
-          { path: '/power-flow/indicators/imbalance', title: '三相不平衡度' },
-          { path: '/power-flow/indicators/thresholds', title: '阈值配置' },
-        ],
-      },
-      {
-        title: '数据校验',
-        children: [
-          { path: '/power-flow/data-validation/completeness', title: '光伏数据完整性校验' },
-          { path: '/power-flow/data-validation/boundary', title: '边界条件合理性校验' },
-          { path: '/power-flow/data-validation/time-sync', title: '时序数据一致性校验' },
-        ],
-      },
-      {
-        title: '在线计算',
-        children: [
-          { path: '/power-flow/online/standard', title: '潮流计算支持' },
-          { path: '/power-flow/online/reverse', title: '反向潮流计算支持' },
-          { path: '/power-flow/online/probabilistic', title: '概率潮流计算支持' },
-          { path: '/power-flow/online/three-phase', title: '三相潮流计算支持' },
-          { path: '/power-flow/online/tasks', title: '异步计算及进度跟踪' },
-        ],
-      },
-      {
-        title: '批量计算',
-        children: [
-          { path: '/power-flow/batch/config', title: '参数配置' },
-          { path: '/power-flow/batch/monitor', title: '任务监控' },
-          { path: '/power-flow/batch/results', title: '结果分析' },
-        ],
-      },
+      { path: '/power-flow/indicators', title: '指标概览' },
+      { path: '/power-flow/data-validation', title: '数据校验' },
+      { path: '/power-flow/online', title: '在线计算' },
+      { path: '/power-flow/batch', title: '批量计算' },
       { path: '/power-flow/history', title: '计算历史' },
-      {
-        title: '型号参数',
-        children: [
-          { path: '/power-flow/model-params/management', title: '参数管理' },
-          { path: '/power-flow/model-params/versioning', title: '参数版本控制' },
-        ],
-      },
+      { path: '/power-flow/model-params', title: '型号参数' },
     ],
   },
   {
     title: '互动资源管理', icon: Connection,
     children: [
-      {
-        title: '互动资源库',
-        children: [
-          { path: '/resources/hub/models', title: '资源模型构建' },
-          { path: '/resources/hub/maintenance', title: '资源维护' },
-          { path: '/resources/hub/topology', title: '资源关联关系' },
-        ],
-      },
-      {
-        title: '互动场景库',
-        children: [
-          { path: '/resources/scenarios/management', title: '互动场景管理' },
-          { path: '/resources/scenarios/strategy', title: '互动场景策略管理' },
-          { path: '/resources/scenarios/simulation', title: '场景模拟与验证' },
-          { path: '/resources/scenarios/evaluation', title: '场景执行效果评估' },
-          { path: '/resources/scenarios/intervention', title: '场景策略人工干预' },
-        ],
-      },
+      { path: '/resources/hub', title: '互动资源库' },
+      { path: '/resources/scenarios', title: '互动场景库' },
     ],
   },
 ]
@@ -165,28 +93,6 @@ function syncExpandedGroup() {
 syncExpandedGroup()
 watch(() => route.path, syncExpandedGroup)
 
-// 根据当前路由自动展开对应的二级分组
-function syncSubGroups() {
-  const group = activeGroupItem.value
-  if (!group) return
-  for (const child of (group.children || [])) {
-    if (child.children && child.children.some(c => isItemActive(c.path))) {
-      expandedSubGroups.value.add(child.title)
-    }
-  }
-}
-watch(() => [route.path, expandedGroup.value], () => {
-  syncSubGroups()
-}, { immediate: true })
-
-function toggleSubGroup(title: string) {
-  if (expandedSubGroups.value.has(title)) {
-    expandedSubGroups.value.delete(title)
-  } else {
-    expandedSubGroups.value.add(title)
-  }
-}
-
 // 点击一级菜单
 function handleGroupClick(item: MenuItem) {
   if (item.children && item.children.length > 0) {
@@ -194,16 +100,11 @@ function handleGroupClick(item: MenuItem) {
   }
 }
 
-// 点击叶子菜单项
+// 点击二级菜单项（直接跳转 Hub 页面）
 function handleItemClick(it: MenuItem) {
   if (it.path) {
     router.push(it.path)
   }
-}
-
-function isSubGroupActive(item: MenuItem): boolean {
-  if (!item.children) return false
-  return item.children.some(c => isItemActive(c.path))
 }
 
 </script>
@@ -227,41 +128,20 @@ function isSubGroupActive(item: MenuItem): boolean {
         >
           <el-icon v-if="item.icon"><component :is="item.icon" /></el-icon>
           <span class="menu-label">{{ item.title }}</span>
-          <el-icon v-if="item.children" class="menu-arrow"><Fold /></el-icon>
+          <el-icon v-if="item.children" class="menu-arrow"><ArrowDown /></el-icon>
         </div>
       </div>
 
-      <!-- 子菜单抽屉 -->
+      <!-- 二级菜单抽屉 -->
       <div v-if="activeGroupItem" class="menu-sub">
-        <template v-for="child in activeGroupItem.children" :key="child.title">
-          <!-- 有子菜单的二级 -->
-          <template v-if="child.children && child.children.length > 0">
-            <div
-              :class="['menu-sub-group-title', { active: isSubGroupActive(child) }]"
-              @click="toggleSubGroup(child.title)"
-            >
-              <span>{{ child.title }}</span>
-              <span :class="['sub-group-arrow', { open: expandedSubGroups.has(child.title) }]">▾</span>
-            </div>
-            <div
-              v-for="grandchild in child.children"
-              v-show="expandedSubGroups.has(child.title)"
-              :key="grandchild.path"
-              :class="['menu-sub-item', { active: isItemActive(grandchild.path) }]"
-              @click="handleItemClick(grandchild)"
-            >
-              {{ grandchild.title }}
-            </div>
-          </template>
-          <!-- 叶子菜单项 -->
-          <div
-            v-else
-            :class="['menu-sub-item', { active: isItemActive(child.path) }]"
-            @click="handleItemClick(child)"
-          >
-            {{ child.title }}
-          </div>
-        </template>
+        <div
+          v-for="child in activeGroupItem.children"
+          :key="child.path || child.title"
+          :class="['menu-sub-item', { active: isItemActive(child.path) }]"
+          @click="handleItemClick(child)"
+        >
+          {{ child.title }}
+        </div>
       </div>
     </div>
 
@@ -356,33 +236,7 @@ function isSubGroupActive(item: MenuItem): boolean {
   opacity: 0.5;
 }
 
-/* 子菜单分组标题 */
-.menu-sub-group-title {
-  padding: 6px 16px 4px;
-  font-size: 14px;
-  color: #267F7B;
-  margin-top: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  cursor: pointer;
-  user-select: none;
-}
-.menu-sub-group-title:hover {
-  opacity: 0.7;
-}
-.menu-sub-group-title.active {
-  font-weight: 600;
-}
-.sub-group-arrow {
-  font-size: 12px;
-  transition: transform 0.2s;
-  opacity: 0.6;
-}
-.sub-group-arrow.open {
-  transform: rotate(180deg);
-}
-/* 子菜单链接项 */
+/* 二级菜单链接项 */
 .menu-sub-item {
   padding: 0 20px;
   height: 40px;

@@ -22,12 +22,13 @@ export const PV_STATION_TYPE_LABELS = {
   ROOFTOP: '屋顶式',
 } as const
 
-// 国家标准: 10kV电压允许偏差 ±7%
-export const VOLTAGE_QUALIFICATION_STANDARD = {
+// 国家标准 GB/T 12325: 各电压等级允许偏差
+export const VOLTAGE_QUALIFICATION_STANDARD: Record<string, { deviationPct: number }> = {
   '10KV': { deviationPct: 7 },
   '35KV': { deviationPct: 5 },
   '110KV': { deviationPct: 3 },
-} as const
+  '220KV': { deviationPct: 3 },
+}
 
 // 功率因数目标区间
 export const POWER_FACTOR_TARGET = { min: 0.95, max: 1.0 }

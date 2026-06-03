@@ -17,21 +17,117 @@ const routes: RouteRecordRaw[] = [
       // Module 1: Grid Diagnosis
       {
         path: 'grid-diagnosis/power-generation',
-        name: 'PowerGeneration',
-        component: () => import('@/views/grid-diagnosis/PowerGeneration.vue'),
+        component: () => import('@/views/grid-diagnosis/PowerGenerationHub.vue'),
         meta: { title: '发电情况', roles: ['admin', 'planner', 'operator', 'viewer'] },
+        redirect: '/grid-diagnosis/power-generation/stats',
+        children: [
+          {
+            path: 'stats',
+            name: 'GenerationStats',
+            component: () => import('@/views/grid-diagnosis/GenerationStats.vue'),
+            meta: { title: '发电量统计分析', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+          {
+            path: 'factors',
+            name: 'InfluenceFactors',
+            component: () => import('@/views/grid-diagnosis/InfluenceFactors.vue'),
+            meta: { title: '出力影响因素分析', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+          {
+            path: 'extreme',
+            name: 'ExtremeScenario',
+            component: () => import('@/views/grid-diagnosis/ExtremeScenario.vue'),
+            meta: { title: '极端场景模拟分析', roles: ['admin', 'planner', 'operator'] },
+          },
+          {
+            path: 'carbon',
+            name: 'CarbonStats',
+            component: () => import('@/views/grid-diagnosis/CarbonStats.vue'),
+            meta: { title: '碳排放量统计分析', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+          {
+            path: 'joint',
+            name: 'JointOutput',
+            component: () => import('@/views/grid-diagnosis/JointOutput.vue'),
+            meta: { title: '光储联合出力分析', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+        ],
       },
       {
         path: 'grid-diagnosis/grid-structure',
-        name: 'GridStructure',
-        component: () => import('@/views/grid-diagnosis/GridStructure.vue'),
+        component: () => import('@/views/grid-diagnosis/GridStructureHub.vue'),
         meta: { title: '网架结构', roles: ['admin', 'planner', 'operator', 'viewer'] },
+        redirect: '/grid-diagnosis/grid-structure/backfeed',
+        children: [
+          {
+            path: 'backfeed',
+            name: 'BackfeedDetection',
+            component: () => import('@/views/grid-diagnosis/BackfeedDetection.vue'),
+            meta: { title: '光伏倒送场景判断', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+          {
+            path: 'capacity',
+            name: 'EquipmentCapacity',
+            component: () => import('@/views/grid-diagnosis/EquipmentCapacity.vue'),
+            meta: { title: '设备承载力量化计算', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+          {
+            path: 'reliability',
+            name: 'EquipmentReliability',
+            component: () => import('@/views/grid-diagnosis/EquipmentReliability.vue'),
+            meta: { title: '设备可靠性评估', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+          {
+            path: 'lifecycle',
+            name: 'LifecycleManagement',
+            component: () => import('@/views/grid-diagnosis/LifecycleManagement.vue'),
+            meta: { title: '设备寿命周期管理', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+        ],
       },
       {
         path: 'grid-diagnosis/power-quality',
-        name: 'PowerQuality',
-        component: () => import('@/views/grid-diagnosis/PowerQuality.vue'),
+        component: () => import('@/views/grid-diagnosis/PowerQualityHub.vue'),
         meta: { title: '供电质量', roles: ['admin', 'planner', 'operator', 'viewer'] },
+        redirect: '/grid-diagnosis/power-quality/fluctuation',
+        children: [
+          {
+            path: 'fluctuation',
+            name: 'VoltageFluctuation',
+            component: () => import('@/views/grid-diagnosis/VoltageFluctuation.vue'),
+            meta: { title: '并网点电压波动监测', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+          {
+            path: 'reliability',
+            name: 'PowerReliability',
+            component: () => import('@/views/grid-diagnosis/PowerReliability.vue'),
+            meta: { title: '供电可靠性计算', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+          {
+            path: 'qualification',
+            name: 'VoltageQualification',
+            component: () => import('@/views/grid-diagnosis/VoltageQualification.vue'),
+            meta: { title: '电压合格率统计', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+          {
+            path: 'alerts',
+            name: 'QualityAlerts',
+            component: () => import('@/views/grid-diagnosis/QualityAlerts.vue'),
+            meta: { title: '供电质量预警机制', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+          {
+            path: 'event-trace',
+            name: 'EventTrace',
+            component: () => import('@/views/grid-diagnosis/EventTrace.vue'),
+            meta: { title: '历史事件追溯分析', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+          {
+            path: 'impact',
+            name: 'VoltageImpact',
+            component: () => import('@/views/grid-diagnosis/VoltageImpact.vue'),
+            meta: { title: '电压波动影响分析', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+        ],
       },
       // Module 2: Planning — Distribution Planning (Hub + 5 children)
       {
@@ -242,9 +338,17 @@ const routes: RouteRecordRaw[] = [
       },
       {
         path: 'power-flow/history',
-        name: 'CalculationHistory',
         component: () => import('@/views/power-flow/CalculationHistory.vue'),
         meta: { title: '计算历史', roles: ['admin', 'planner', 'operator', 'viewer'] },
+        redirect: '/power-flow/history/management',
+        children: [
+          {
+            path: 'management',
+            name: 'HistoryManagement',
+            component: () => import('@/views/power-flow/CalculationHistoryManagement.vue'),
+            meta: { title: '历史记录管理', roles: ['admin', 'planner', 'operator', 'viewer'] },
+          },
+        ],
       },
       {
         path: 'power-flow/model-params',

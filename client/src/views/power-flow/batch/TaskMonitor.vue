@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { fetchBatchList, fetchBatchStatus, cancelBatch } from '@/api/power-flow'
+import { fetchBatchList, fetchBatchStatus, cancelBatch, deleteBatch } from '@/api/power-flow'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const route = useRoute()
@@ -98,6 +98,17 @@ async function handleCancel() {
   } catch { /* 用户取消 */ }
 }
 
+async function handleDelete() {
+  try {
+    await ElMessageBox.confirm('确定要删除此批次？删除后相关计算任务也将被清除。', '确认删除', { type: 'warning' })
+    await deleteBatch(activeGroupId.value)
+    ElMessage.success('批次已删除')
+    activeGroupId.value = ''
+    stopPoll()
+    await loadBatchList()
+  } catch { /* 用户取消 */ }
+}
+
 function goResults() {
   router.push({ name: 'BatchResultAnalysis', query: { groupId: activeGroupId.value } })
 }
@@ -158,6 +169,7 @@ onUnmounted(() => stopPoll())
             <div class="action-row">
               <el-button v-if="!isFinished" type="danger" size="small" @click="handleCancel">取消批次</el-button>
               <el-button v-if="isFinished" type="primary" size="small" @click="goResults">查看结果</el-button>
+              <el-button type="danger" size="small" plain @click="handleDelete">删除批次</el-button>
             </div>
           </div>
 

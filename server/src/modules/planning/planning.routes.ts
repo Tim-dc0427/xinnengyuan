@@ -33,6 +33,7 @@ planningRoutes.post('/pv-model-types/:id/fields', auth(['admin', 'planner']), ct
 // ==================== Field Library (字段库) ====================
 planningRoutes.get('/field-library', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.listFieldLibrary)
 planningRoutes.post('/field-library', auth(['admin', 'planner']), ctrl.createFieldLibraryItem)
+planningRoutes.delete('/field-library/:id', auth(['admin', 'planner']), ctrl.deleteFieldLibraryItem)
 
 // ==================== Constraint Rules (2.1.2) ====================
 planningRoutes.get('/constraint-rules', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.listConstraintRules)
@@ -54,9 +55,15 @@ planningRoutes.get('/absorption-plans/:id/variants', auth(['admin', 'planner', '
 planningRoutes.post('/absorption-plans/:id/variants', auth(['admin', 'planner']), ctrl.createVariant)
 planningRoutes.delete('/absorption-plans/variants/:id', auth(['admin', 'planner']), ctrl.deleteVariant)
 
+// ==================== Investment Plans (造价模块投资方案) ====================
+planningRoutes.get('/investment-plans', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.listInvestmentPlans)
+planningRoutes.post('/investment-plans', auth(['admin', 'planner']), ctrl.createInvestmentPlan)
+planningRoutes.put('/investment-plans/:id', auth(['admin', 'planner']), ctrl.updateInvestmentPlan)
+planningRoutes.delete('/investment-plans/:id', auth(['admin', 'planner']), ctrl.deleteInvestmentPlan)
+
 // ==================== Investment Config (投资配置方案) ====================
 planningRoutes.get('/investment-config', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.listInvestmentConfig)
-planningRoutes.post('/investment-config/:planId', auth(['admin', 'planner']), ctrl.saveInvestmentConfig)
+planningRoutes.post('/investment-config/:investmentPlanId', auth(['admin', 'planner']), ctrl.saveInvestmentConfig)
 
 // ==================== Cost Items (造价参数管理) ====================
 planningRoutes.get('/cost-items', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.listCostItems)

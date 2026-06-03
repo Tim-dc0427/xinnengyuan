@@ -37,6 +37,41 @@ export class PlanningService {
     return plan
   }
 
+  // ==================== Investment Plans (造价模块投资方案) ====================
+  async listInvestmentPlans() {
+    try {
+      return db('investment_plans').orderBy('created_at', 'desc')
+    } catch { return [] }
+  }
+
+  async createInvestmentPlan(data: { planName: string; techRoute: string; capacityKw?: number; description?: string }) {
+    const [plan] = await db('investment_plans').insert({
+      id: uuid(),
+      plan_name: data.planName,
+      tech_route: data.techRoute,
+      capacity_kw: data.capacityKw || 50000,
+      description: data.description || null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }).returning('*')
+    return plan
+  }
+
+  async updateInvestmentPlan(id: string, data: { planName?: string; techRoute?: string; capacityKw?: number; description?: string }) {
+    const updateData: any = { updated_at: new Date().toISOString() }
+    if (data.planName !== undefined) updateData.plan_name = data.planName
+    if (data.techRoute !== undefined) updateData.tech_route = data.techRoute
+    if (data.capacityKw !== undefined) updateData.capacity_kw = data.capacityKw
+    if (data.description !== undefined) updateData.description = data.description
+    const [plan] = await db('investment_plans').where('id', id).update(updateData).returning('*')
+    return plan
+  }
+
+  async deleteInvestmentPlan(id: string) {
+    await db('investment_config').where('investment_plan_id', id).delete()
+    await db('investment_plans').where('id', id).delete()
+  }
+
   // ==================== PV Stations (2.1.1) ====================
   async listPvStations(query: { planId?: string; status?: string }) {
     try {
@@ -249,6 +284,8 @@ export class PlanningService {
     }).returning('*')
     return item
   }
+
+  async deleteFieldLibraryItem(id: string) { await db('pv_field_library').where('id', id).del() }
 
   private mockCostLibrary() {
     return [
@@ -720,12 +757,12 @@ export class PlanningService {
   }
 
   // ==================== Investment Config (投资配置方案) ====================
-  async listInvestmentConfig(query: { planId?: string }) {
+  async listInvestmentConfig(query: { investmentPlanId?: string }) {
     try {
       return db('investment_config')
         .join('cost_items', 'investment_config.cost_item_id', 'cost_items.id')
         .modify((qb) => {
-          if (query.planId) qb.where('investment_config.plan_id', query.planId)
+          if (query.investmentPlanId) qb.where('investment_config.investment_plan_id', query.investmentPlanId)
         })
         .select(
           'investment_config.*',
@@ -739,16 +776,16 @@ export class PlanningService {
     } catch { return [] }
   }
 
-  async saveInvestmentConfig(planId: string, items: Array<{
+  async saveInvestmentConfig(investmentPlanId: string, items: Array<{
     costItemId: string; quantity: number
   }>) {
-    await db('investment_config').where('plan_id', planId).delete()
+    await db('investment_config').where('investment_plan_id', investmentPlanId).delete()
     if (items.length === 0) return []
     const costItems = await db('cost_items').whereIn('id', items.map(i => i.costItemId)).select('id', 'unit_price')
     const priceMap = new Map(costItems.map((c: any) => [c.id, c.unit_price]))
     const rows = items.map(i => ({
       id: crypto.randomUUID(),
-      plan_id: planId,
+      investment_plan_id: investmentPlanId,
       cost_item_id: i.costItemId,
       quantity: i.quantity,
       unit_price: priceMap.get(i.costItemId) || 0,
@@ -756,60 +793,64 @@ export class PlanningService {
       updated_at: new Date().toISOString(),
     }))
     await db('investment_config').insert(rows)
-    return this.listInvestmentConfig({ planId })
+    return this.listInvestmentConfig({ investmentPlanId })
   }
 
-  async calculateInvestment(data: { capacityKw?: number; planId?: string }) {
+  async calculateInvestment(data: { capacityKw?: number; investmentPlanId?: string }) {
     let equipmentCost = 0, constructionCost = 0, landCost = 0, otherCost = 0
     let configDetails: any[] = []
     let capacityKw = data.capacityKw || 50000
 
-    // 基于配置方案汇总全部类别费用
-    if (data.planId) {
-      const config = await this.listInvestmentConfig({ planId: data.planId })
-      if (config.length > 0) {
-        // 从 cost_items join 结果中取 category
-        const items = await db('investment_config')
-          .join('cost_items', 'investment_config.cost_item_id', 'cost_items.id')
-          .where('investment_config.plan_id', data.planId)
-          .select('investment_config.*', 'cost_items.category', 'cost_items.item_code', 'cost_items.equipment_type', 'cost_items.model_spec', 'cost_items.item_name as cost_item_name', 'cost_items.cost_unit')
-
-        for (const row of items) {
-          let subtotal = 0
-          const unit = (row.cost_unit || '')
-          // 按容量计价：总价 = 容量 × 单价
-          if (unit.endsWith('/kW')) {
-            subtotal = capacityKw * (row.unit_price || 0)
-          } else if (unit.endsWith('/W') || unit.endsWith('/Wp')) {
-            subtotal = capacityKw * 1000 * (row.unit_price || 0)
-          } else {
-            // 按数量计价：总价 = 数量 × 单价
-            subtotal = (row.quantity || 0) * (row.unit_price || 0)
-          }
-          // 按造价库类别分摊到四项费用
-          switch (row.category) {
-            case 'equipment': equipmentCost += subtotal; break
-            case 'construction': constructionCost += subtotal; break
-            case 'other': otherCost += subtotal; break
-            default: otherCost += subtotal
-          }
-          configDetails.push({
-            category: row.category,
-            itemCode: row.item_code,
-            equipmentType: row.equipment_type,
-            modelSpec: row.model_spec,
-            costItemName: row.cost_item_name,
-            quantity: row.quantity,
-            unitPrice: row.unit_price,
-            costUnit: row.cost_unit,
-            subtotal: Math.round(subtotal * 100) / 100,
-          })
+    // 有投资方案时，从 investment_plans 取容量（若未手动覆盖）
+    if (data.investmentPlanId) {
+      const plan = await db('investment_plans').where('id', data.investmentPlanId).first()
+      if (plan) {
+        // 如果调用方没传 capacityKw（即未手动覆盖），则使用方案自身容量
+        if (!data.capacityKw) {
+          capacityKw = plan.capacity_kw || 50000
         }
       }
     }
 
-    // 无planId且有配置数据时，从配置计算；无planId=pure容量估算
-    if (!data.planId && equipmentCost === 0 && constructionCost === 0) {
+    // 基于投资方案汇总全部类别费用
+    if (data.investmentPlanId) {
+      const items = await db('investment_config')
+        .join('cost_items', 'investment_config.cost_item_id', 'cost_items.id')
+        .where('investment_config.investment_plan_id', data.investmentPlanId)
+        .select('investment_config.*', 'cost_items.category', 'cost_items.item_code', 'cost_items.equipment_type', 'cost_items.model_spec', 'cost_items.item_name as cost_item_name', 'cost_items.cost_unit')
+
+      for (const row of items) {
+        let subtotal = 0
+        const unit = (row.cost_unit || '')
+        if (unit.endsWith('/kW')) {
+          subtotal = capacityKw * (row.unit_price || 0)
+        } else if (unit.endsWith('/W') || unit.endsWith('/Wp')) {
+          subtotal = capacityKw * 1000 * (row.unit_price || 0)
+        } else {
+          subtotal = (row.quantity || 0) * (row.unit_price || 0)
+        }
+        switch (row.category) {
+          case 'equipment': equipmentCost += subtotal; break
+          case 'construction': constructionCost += subtotal; break
+          case 'other': otherCost += subtotal; break
+          default: otherCost += subtotal
+        }
+        configDetails.push({
+          category: row.category,
+          itemCode: row.item_code,
+          equipmentType: row.equipment_type,
+          modelSpec: row.model_spec,
+          costItemName: row.cost_item_name,
+          quantity: row.quantity,
+          unitPrice: row.unit_price,
+          costUnit: row.cost_unit,
+          subtotal: Math.round(subtotal * 100) / 100,
+        })
+      }
+    }
+
+    // 无投资方案时，纯容量估算
+    if (!data.investmentPlanId && equipmentCost === 0 && constructionCost === 0) {
       equipmentCost = capacityKw * 1800
       constructionCost = capacityKw * 600
       landCost = capacityKw * 400
@@ -838,10 +879,9 @@ export class PlanningService {
     }
   }
 
-  async compareCost(data: { planIdA?: string; planIdB?: string }) {
-    // 分别计算两个方案的投资
-    const invA = data.planIdA ? await this.calculateInvestment({ planId: data.planIdA }) : null
-    const invB = data.planIdB ? await this.calculateInvestment({ planId: data.planIdB }) : null
+  async compareCost(data: { investmentPlanIdA?: string; investmentPlanIdB?: string }) {
+    const invA = data.investmentPlanIdA ? await this.calculateInvestment({ investmentPlanId: data.investmentPlanIdA }) : null
+    const invB = data.investmentPlanIdB ? await this.calculateInvestment({ investmentPlanId: data.investmentPlanIdB }) : null
 
     const pvUnitCost = invA?.unitCostPerKw || 0
     const tradUnitCost = invB?.unitCostPerKw || 0
@@ -877,7 +917,7 @@ export class PlanningService {
   }
 
   async roiAnalysis(data: {
-    planId?: string; capacityKw?: number; investment?: number
+    investmentPlanId?: string; capacityKw?: number; investment?: number
     annualHours?: number; gridPrice?: number
     subsidyPrice?: number; carbonPrice?: number; omRate?: number; projectLife?: number
   }) {
@@ -889,13 +929,17 @@ export class PlanningService {
     const projectLife = data.projectLife || 25
 
     let totalInvestment = 0
-    let capacityKw = 50000
+    let capacityKw = data.capacityKw || 50000
     let breakdown = { equipmentCost: 0, constructionCost: 0, landCost: 0, otherCost: 0 }
 
-    if (data.planId) {
-      const inv = await this.calculateInvestment({ planId: data.planId })
+    if (data.investmentPlanId) {
+      const plan = await db('investment_plans').where('id', data.investmentPlanId).first()
+      const inv = await this.calculateInvestment({ investmentPlanId: data.investmentPlanId })
       totalInvestment = inv.totalInvestment
-      capacityKw = inv.unitCostPerKw > 0 ? Math.round(inv.totalInvestment / inv.unitCostPerKw) : 50000
+      // 优先使用方案自身容量，允许参数覆盖
+      if (!data.capacityKw && plan) {
+        capacityKw = plan.capacity_kw || 50000
+      }
       breakdown = inv.breakdown
     } else if (data.capacityKw) {
       capacityKw = data.capacityKw
@@ -1000,7 +1044,7 @@ export class PlanningService {
     try {
       return db('equipment_ledger').where('plan_id', planId)
     } catch {
-      return this.mockEquipmentLedger(planId)
+      return []
     }
   }
 
@@ -1009,60 +1053,9 @@ export class PlanningService {
       // 先查 equipment_ledger（规划台账）
       const ledgerRows = await db('equipment_ledger').where('station_id', stationId).orderBy('created_at', 'asc')
       if (ledgerRows.length > 0) return ledgerRows
-
-      // fallback：查 equipment 表（实际设备），做字段映射
-      const eqRows = await db('equipment').where('station_id', stationId).orderBy('created_at', 'asc')
-      const typeLabelMap: Record<string, string> = {
-        TRANSFORMER: '变压器', INVERTER: '逆变器', BATTERY: '电池组',
-        PV_MODULE: '光伏组件', CABLE: '电缆', SWITCHGEAR: '开关柜', OTHER: '其他',
-      }
-      const statusMap: Record<string, string> = {
-        operational: 'operating', maintenance: 'fault', retired: 'retired',
-        installed: 'installed', standby: 'installed',
-      }
-      // 按设备类型映射 ratedParams，key 对齐前端 equipmentFieldConfigs
-      const typeParamsMap: Record<string, (r: any) => Record<string, any>> = {
-        TRANSFORMER: (r) => ({
-          ratedCapacity: r.rated_capacity_kva,
-          primaryVoltage: r.rated_voltage_kv,
-          ratedCurrent: r.rated_current_a,
-        }),
-        INVERTER: (r) => ({
-          ratedPower: r.rated_capacity_kva,
-          acOutputVoltage: r.rated_voltage_kv,
-          ratedOutputCurrent: r.rated_current_a,
-        }),
-        BATTERY: (r) => ({
-          ratedCapacity: r.rated_capacity_kva,
-          ratedVoltage: r.rated_voltage_kv,
-          ratedCurrent: r.rated_current_a,
-        }),
-      }
-      const defaultParams = (r: any) => ({
-        ratedCapacityKva: r.rated_capacity_kva,
-        ratedVoltageKv: r.rated_voltage_kv,
-        ratedCurrentA: r.rated_current_a,
-      })
-      const eqType = (r: any) => r.equipment_type || 'OTHER'
-      return eqRows.map((r: any) => ({
-        id: r.id,
-        planId: '',
-        stationId: r.station_id || '',
-        equipmentType: eqType(r).toLowerCase(),
-        equipmentTypeLabel: typeLabelMap[eqType(r)] || eqType(r) || '其他',
-        equipmentCode: '',
-        modelNumber: r.model_number || '',
-        manufacturer: r.manufacturer || '',
-        ratedParams: (typeParamsMap[eqType(r)] || defaultParams)(r),
-        quantity: 1,
-        installDate: r.installation_date || '',
-        status: statusMap[r.status] || 'installed',
-        locationDesc: '',
-        createdAt: r.created_at,
-        updatedAt: r.updated_at,
-      }))
+      return []
     } catch {
-      return this.mockEquipmentLedger(stationId).map((e: any) => ({ ...e, station_id: stationId }))
+      return []
     }
   }
 
@@ -1104,7 +1097,8 @@ export class PlanningService {
   }
 
   async deleteEquipmentItem(id: string) {
-    await db('equipment_ledger').where('id', id).del()
+    const affected = await db('equipment_ledger').where('id', id).del()
+    if (affected === 0) throw new Error('设备不存在')
     return { success: true }
   }
 

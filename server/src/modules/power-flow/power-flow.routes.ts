@@ -30,6 +30,7 @@ powerFlowRoutes.get('/batch', auth(['admin', 'planner', 'operator', 'viewer']), 
 powerFlowRoutes.get('/batch/:groupId', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getBatchGroup)
 powerFlowRoutes.get('/batch/:groupId/status', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getBatchStatus)
 powerFlowRoutes.post('/batch/:groupId/cancel', auth(['admin', 'planner']), ctrl.cancelBatch)
+powerFlowRoutes.delete('/batch/:groupId', auth(['admin', 'planner']), ctrl.deleteBatch)
 powerFlowRoutes.get('/batch/:groupId/results', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getBatchResults)
 powerFlowRoutes.get('/batch/:groupId/export', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.exportBatchResults)
 

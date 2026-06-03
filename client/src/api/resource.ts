@@ -102,7 +102,7 @@ export async function batchImportPowerPlants(plants: CreatePowerPlantPayload[]) 
 }
 
 // ==================== Equipment (层2实体) ====================
-export async function fetchEquipment(params?: { plantId?: string; equipmentType?: string }) {
+export async function fetchEquipment(params?: { plantId?: string; stationId?: string; equipmentType?: string }) {
   const res = await apiClient.get('/api/v1/resource/equipment', { params })
   return res.data.data as any[]
 }
@@ -118,7 +118,7 @@ export async function updateEquipment(id: string, data: { modelNumber?: string; 
 }
 
 export interface CreateEquipmentPayload {
-  plantId: string
+  stationId: string
   equipmentType: string
   modelNumber?: string
   manufacturer?: string

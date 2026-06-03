@@ -23,6 +23,41 @@ export async function updatePlan(id: string, data: Partial<Plan>) {
   return res.data?.data as Plan
 }
 
+// ==================== Investment Plans (造价模块投资方案) ====================
+export interface InvestmentPlan {
+  id: string
+  plan_name: string
+  tech_route: string
+  capacity_kw: number
+  description?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export async function fetchInvestmentPlans() {
+  const res = await apiClient.get('/api/v1/planning/investment-plans')
+  return res.data?.data as InvestmentPlan[]
+}
+
+export async function createInvestmentPlan(data: {
+  planName: string; techRoute: string; capacityKw?: number; description?: string
+}) {
+  const res = await apiClient.post('/api/v1/planning/investment-plans', data)
+  return res.data?.data as InvestmentPlan
+}
+
+export async function updateInvestmentPlan(id: string, data: {
+  planName?: string; techRoute?: string; capacityKw?: number; description?: string
+}) {
+  const res = await apiClient.put(`/api/v1/planning/investment-plans/${id}`, data)
+  return res.data?.data as InvestmentPlan
+}
+
+export async function deleteInvestmentPlan(id: string) {
+  const res = await apiClient.delete(`/api/v1/planning/investment-plans/${id}`)
+  return res.data?.data
+}
+
 // ==================== PV Stations (2.1.1) ====================
 export async function fetchPvStations(params?: { planId?: string; status?: string }) {
   const res = await apiClient.get('/api/v1/planning/pv-stations', { params })
@@ -207,7 +242,7 @@ export async function deleteCostItem(id: string) {
 // ==================== Investment Config (投资配置方案) ====================
 export interface InvestmentConfigItem {
   id: string
-  plan_id: string
+  investment_plan_id: string
   cost_item_id: string
   quantity: number
   unit_price: number
@@ -216,19 +251,20 @@ export interface InvestmentConfigItem {
   model_spec?: string
   cost_item_name?: string
   cost_unit?: string
+  category?: string
   created_at?: string
   updated_at?: string
 }
 
-export async function fetchInvestmentConfig(params?: { planId?: string }) {
+export async function fetchInvestmentConfig(params?: { investmentPlanId?: string }) {
   const res = await apiClient.get('/api/v1/planning/investment-config', { params })
   return res.data?.data as InvestmentConfigItem[]
 }
 
-export async function saveInvestmentConfig(planId: string, items: Array<{
+export async function saveInvestmentConfig(investmentPlanId: string, items: Array<{
   costItemId: string; quantity: number
 }>) {
-  const res = await apiClient.post(`/api/v1/planning/investment-config/${planId}`, items)
+  const res = await apiClient.post(`/api/v1/planning/investment-config/${investmentPlanId}`, items)
   return res.data?.data as InvestmentConfigItem[]
 }
 
@@ -238,18 +274,18 @@ export async function fetchUnitCostParams(params?: { category?: string }) {
   return res.data?.data as UnitCostParam[]
 }
 
-export async function calculateInvestment(data: { capacityKw: number; planId?: string }) {
+export async function calculateInvestment(data: { capacityKw?: number; investmentPlanId?: string }) {
   const res = await apiClient.post('/api/v1/planning/calculate-investment', data)
   return res.data?.data as InvestmentResult
 }
 
-export async function compareCost(data: { planIdA?: string; planIdB?: string }) {
+export async function compareCost(data: { investmentPlanIdA?: string; investmentPlanIdB?: string }) {
   const res = await apiClient.post('/api/v1/planning/compare-cost', data)
   return res.data?.data as CostComparison
 }
 
 export async function roiAnalysis(data: {
-  planId?: string; capacityKw?: number; investment?: number
+  investmentPlanId?: string; capacityKw?: number; investment?: number
   annualHours?: number; gridPrice?: number
   subsidyPrice?: number; carbonPrice?: number; omRate?: number; projectLife?: number
 }) {
@@ -370,4 +406,8 @@ export async function fetchFieldLibrary(keyword?: string) {
 export async function createFieldLibraryItem(data: { fieldCode: string; fieldName: string; fieldType: string; fieldOptions?: string; category?: string }) {
   const res = await apiClient.post('/api/v1/planning/field-library', data)
   return res.data?.data
+}
+
+export async function deleteFieldLibraryItem(id: string) {
+  await apiClient.delete(`/api/v1/planning/field-library/${id}`)
 }

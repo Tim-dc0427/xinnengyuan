@@ -1,7 +1,13 @@
 <script setup lang="ts">
-// 型号参数 - 父容器（子页面由侧边栏切换）
+import HubLayout from '@/components/common/HubLayout.vue'
+
+const basePath = '/power-flow/model-params'
+const tabs = [
+  { path: 'management', label: '参数管理' },
+  { path: 'versioning', label: '参数版本控制' },
+]
 </script>
 
 <template>
-  <router-view />
+  <HubLayout :base-path="basePath" :tabs="tabs" />
 </template>

@@ -47,7 +47,6 @@ export function auth(_allowedRoles: UserRole[]) {
     try {
       const payload = jwt.verify(token, authConfig.accessTokenSecret) as AuthUser
       req.user = payload
-      next()
     } catch {
       // 开发模式下 token 无效也自动注入 admin
       if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
@@ -62,5 +61,16 @@ export function auth(_allowedRoles: UserRole[]) {
       }
       return res.status(401).json({ code: 401, message: '令牌无效或已过期', data: null })
     }
+
+    // 确保 req.user.id 在 users 表中存在（防止外键约束失败）
+    if (req.user && (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV)) {
+      const exists = await db('users').where('id', req.user.id).select('id').first()
+      if (!exists) {
+        const adminId = await getAdminId()
+        req.user.id = adminId || '00000000-0000-0000-0000-000000000000'
+      }
+    }
+
+    next()
   }
 }

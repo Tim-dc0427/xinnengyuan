@@ -1,6 +1,16 @@
 <script setup lang="ts">
-// 在线计算 - 父容器（子页面由侧边栏切换）
+import HubLayout from '@/components/common/HubLayout.vue'
+
+const basePath = '/power-flow/online'
+const tabs = [
+  { path: 'standard', label: '潮流计算支持' },
+  { path: 'reverse', label: '反向潮流计算支持' },
+  { path: 'probabilistic', label: '概率潮流计算支持' },
+  { path: 'three-phase', label: '三相潮流计算支持' },
+  { path: 'tasks', label: '异步计算及进度跟踪' },
+]
 </script>
+
 <template>
-  <router-view />
+  <HubLayout :base-path="basePath" :tabs="tabs" />
 </template>

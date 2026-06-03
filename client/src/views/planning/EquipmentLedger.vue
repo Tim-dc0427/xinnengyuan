@@ -137,6 +137,10 @@ async function loadStations() {
       name: r.station_name || r.name,
       capacityKw: (r.installed_capacity_mw || 0) * 1000,
     }))
+    if (stations.value.length > 0 && !selectedStationId.value) {
+      selectedStationId.value = stations.value[0].id
+      await onStationChange(stations.value[0].id)
+    }
   } catch {
     stations.value = []
   }
@@ -190,11 +194,15 @@ function openEdit(row: EquipmentLedgerItem) {
 async function confirmDelete(row: EquipmentLedgerItem) {
   try {
     await ElMessageBox.confirm('确定要删除该设备吗？', '确认删除', { type: 'warning' })
+  } catch {
+    return // 用户取消
+  }
+  try {
     await deleteEquipmentItem(row.id)
     ElMessage.success('删除成功')
     equipment.value = equipment.value.filter((e: any) => e.id !== row.id)
   } catch {
-    // cancelled
+    ElMessage.error('删除失败')
   }
 }
 
@@ -248,13 +256,13 @@ function getParamUnit(key: string): string {
   return ''
 }
 
-/** 获取每类设备的关键参数摘要 */
+/** 获取每类设备的关键参数摘要 — 支持中英文 key 双体系 */
 const keyParamKeys: Record<string, string[]> = {
-  pv_module: ['peakPower', 'efficiency'],
-  inverter: ['ratedPower'],
-  transformer: ['ratedCapacity'],
-  cable: ['conductorSection'],
-  switchgear: ['ratedVoltage', 'ratedCurrent'],
+  pv_module: ['峰值功率', 'peakPower', '转换效率', 'efficiency'],
+  inverter: ['额定容量', 'ratedPower', '额定电压', 'ratedVoltageKv'],
+  transformer: ['额定容量', 'ratedCapacity', '额定电压', 'ratedVoltageKv'],
+  cable: ['额定电压', 'ratedVoltage', '额定电流', 'ratedCurrentA'],
+  switchgear: ['额定电压', 'ratedVoltage', '额定电流', 'ratedCurrent'],
   other: [],
 }
 
@@ -307,71 +315,50 @@ onMounted(() => {
 <template>
   <div>
     <div class="chart-panel-title">设备台账动态管理</div>
-    <!-- Station Selector -->
-    <div class="chart-panel" style="margin-bottom:16px">
-      <div class="chart-panel-title">选择光伏电站</div>
-      <div style="display:flex;align-items:center;gap:16px;padding:8px 0">
-        <el-select
-          v-model="selectedStationId"
-          placeholder="请选择光伏电站"
-          size="large"
-          style="width:360px"
-          clearable
-          filterable
-          @change="onStationChange"
-        >
-          <el-option
-            v-for="s in stations"
-            :key="s.id"
-            :label="s.name"
-            :value="s.id"
-          >
-            <div style="display:flex;justify-content:space-between">
-              <span>{{ s.name }}</span>
-              <span style="color:#909399;font-size:12px">{{ s.capacityKw }}kW</span>
-            </div>
-          </el-option>
+    <!-- 工具栏：电站选择 + 筛选 + 操作 -->
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+      <el-select
+        v-model="selectedStationId"
+        placeholder="选择光伏电站"
+        size="default"
+        style="width:240px"
+        clearable
+        filterable
+        @change="onStationChange"
+      >
+        <el-option
+          v-for="s in stations"
+          :key="s.id"
+          :label="`${s.name} (${s.capacityKw}kW)`"
+          :value="s.id"
+        />
+      </el-select>
+      <template v-if="selectedStationId">
+        <el-select v-model="filterType" placeholder="设备类型" clearable style="width:130px" size="default">
+          <el-option v-for="o in equipmentTypeOptions" :key="o.value" :label="o.label" :value="o.value" />
         </el-select>
-        <span v-if="!selectedStationId" style="color:#909399;font-size:13px">
-          请先选择一个光伏电站，查看和管理该站的设备台账
-        </span>
-      </div>
+        <el-select v-model="filterStatus" placeholder="状态" clearable style="width:100px" size="default">
+          <el-option v-for="o in statusOptions" :key="o.value" :label="o.label" :value="o.value" />
+        </el-select>
+        <el-input
+          v-model="filterKeyword"
+          placeholder="搜索编码/型号/制造商"
+          clearable
+          style="width:220px"
+          size="default"
+        >
+          <template #prefix>
+            <el-icon><Search /></el-icon>
+          </template>
+        </el-input>
+        <div style="flex:1" />
+        <el-button type="primary" size="default" @click="openCreate">新增设备</el-button>
+      </template>
     </div>
 
-    <!-- Stats & Equipment -->
     <template v-if="selectedStationId">
-      <!-- Filter Bar -->
-      <div class="chart-panel" style="margin-bottom:16px">
-        <div class="chart-panel-title">筛选条件</div>
-        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:4px 0">
-          <el-select v-model="filterType" placeholder="设备类型" clearable style="width:140px" size="default">
-            <el-option v-for="o in equipmentTypeOptions" :key="o.value" :label="o.label" :value="o.value" />
-          </el-select>
-          <el-select v-model="filterStatus" placeholder="状态" clearable style="width:120px" size="default">
-            <el-option v-for="o in statusOptions" :key="o.value" :label="o.label" :value="o.value" />
-          </el-select>
-          <el-input
-            v-model="filterKeyword"
-            placeholder="搜索设备编码 / 型号 / 制造商"
-            clearable
-            style="width:280px"
-            size="default"
-          >
-            <template #prefix>
-              <el-icon><Search /></el-icon>
-            </template>
-          </el-input>
-          <span v-if="filterKeyword || filterType || filterStatus" style="color:#909399;font-size:13px">
-            共匹配 <strong>{{ filteredEquipment.length }}</strong> 条
-          </span>
-        </div>
-      </div>
-
       <div class="chart-panel">
-        <div class="chart-panel-title" style="display:flex;justify-content:space-between;align-items:center">
-          <span>设备台账列表 ({{ equipment.length }})</span>
-          <el-button type="primary" size="small" @click="openCreate">新增设备</el-button>
-        </div>
+        <div class="chart-panel-title">设备台账列表 ({{ filteredEquipment.length }})</div>
         <el-table :data="filteredEquipment" v-loading="loading" stripe size="small">
           <el-table-column type="expand" width="36">
             <template #default="{ row }">
@@ -382,8 +369,8 @@ onMounted(() => {
                     :key="key"
                     style="background:#f5f7fa;border-radius:4px;padding:4px 12px;font-size:13px;white-space:nowrap"
                   >
-                    <span style="color:#909399">{{ getParamLabel(key) }}:</span>
-                    <span style="color:#303133;margin-left:4px">{{ val }}{{ getParamUnit(key) ? ' ' + getParamUnit(key) : '' }}</span>
+                    <span style="color:#909399">{{ getParamLabel(String(key)) }}:</span>
+                    <span style="color:#303133;margin-left:4px">{{ val }}{{ getParamUnit(String(key)) ? ' ' + getParamUnit(String(key)) : '' }}</span>
                   </div>
                 </div>
                 <div v-else style="color:#909399;font-size:13px;padding:4px 0">暂无技术参数</div>

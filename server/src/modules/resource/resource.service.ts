@@ -85,7 +85,19 @@ export class ResourceService {
         this.on('solar_pv_stations.id', 'resource_models.station_id').andOn('resource_models.is_active', db.raw('1'))
       })
       .select(
-        'solar_pv_stations.*',
+        'solar_pv_stations.id',
+        'solar_pv_stations.station_name as name',
+        db.raw('solar_pv_stations.installed_capacity_mw * 1000 as capacity_kw'),
+        'solar_pv_stations.bus_id',
+        'solar_pv_stations.installed_date',
+        'solar_pv_stations.longitude',
+        'solar_pv_stations.latitude',
+        'solar_pv_stations.address',
+        'solar_pv_stations.status',
+        'solar_pv_stations.created_at',
+        'solar_pv_stations.land_type',
+        'solar_pv_stations.land_area_mu',
+        'solar_pv_stations.electrical_params',
         db.raw('COUNT(DISTINCT equipment.id) as equipment_count'),
         db.raw('COUNT(DISTINCT resource_models.id) as bound_model_count'),
       )
@@ -216,7 +228,6 @@ export class ResourceService {
   // ==================== Equipment (层2实体数据) ====================
   async listEquipment(query: any) {
     return db('equipment').modify((qb) => {
-      if (query.plantId) qb.where('plant_id', query.plantId)
       if (query.stationId) qb.where('station_id', query.stationId)
       if (query.equipmentType) qb.where('equipment_type', query.equipmentType)
     }).orderBy('installation_date', 'desc')
@@ -229,8 +240,6 @@ export class ResourceService {
     let plant: any = null
     if (eq.station_id) {
       plant = await db('solar_pv_stations').where('id', eq.station_id).select('id', 'station_name as name').first()
-    } else if (eq.plant_id) {
-      plant = await db('power_plants').where('id', eq.plant_id).select('id', 'name').first()
     }
     return { ...eq, lifecycle, plant }
   }

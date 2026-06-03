@@ -1,7 +1,14 @@
 <script setup lang="ts">
-// 数据校验 - 父容器（子页面由侧边栏切换）
+import HubLayout from '@/components/common/HubLayout.vue'
+
+const basePath = '/power-flow/data-validation'
+const tabs = [
+  { path: 'completeness', label: '光伏数据完整性校验' },
+  { path: 'boundary', label: '边界条件合理性校验' },
+  { path: 'time-sync', label: '时序数据一致性校验' },
+]
 </script>
 
 <template>
-  <router-view />
+  <HubLayout :base-path="basePath" :tabs="tabs" />
 </template>

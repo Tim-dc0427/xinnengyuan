@@ -1,6 +1,14 @@
 <script setup lang="ts">
-// 批量计算 - 父容器
+import HubLayout from '@/components/common/HubLayout.vue'
+
+const basePath = '/power-flow/batch'
+const tabs = [
+  { path: 'config', label: '参数配置' },
+  { path: 'monitor', label: '任务监控' },
+  { path: 'results', label: '结果分析' },
+]
 </script>
+
 <template>
-  <router-view />
+  <HubLayout :base-path="basePath" :tabs="tabs" />
 </template>

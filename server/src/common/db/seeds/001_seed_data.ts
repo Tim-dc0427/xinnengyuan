@@ -4,6 +4,11 @@ import { v4 as uuid } from 'uuid'
 
 export async function seed(knex: Knex): Promise<void> {
   // Clear all tables in reverse dependency order
+  await knex('effectiveness_verifications').del()
+  await knex('operation_projects').del()
+  await knex('outage_events').del()
+  await knex('complaint_stats').del()
+  await knex('equipment_temperature').del()
   await knex('solar_pv_stations').del()
   await knex('manual_intervention_log').del()
   await knex('execution_evaluations').del()
@@ -20,18 +25,21 @@ export async function seed(knex: Knex): Promise<void> {
   await knex('calc_results').del()
   await knex('calc_tasks').del()
   await knex('project_audit').del()
-  await knex('effectiveness_verifications').del()
   await knex('feasibility_assessments').del()
   await knex('access_conditions').del()
+  await knex('project_documents').del()
   await knex('projects').del()
   await knex('project_type_fields').del()
   await knex('project_types').del()
+  await knex('access_condition_plans').del()
+  await knex('access_point_resources').del()
+  await knex('project_field_library').del()
+  await knex('investment_config').del()
   await knex('cost_items').del()
   await knex('equipment_ledger').del()
   await knex('economic_analyses').del()
   await knex('absorption_schemes').del()
   await knex('site_recommendations').del()
-  await knex('investment_config').del()
   await knex('candidate_points').del()
   await knex('pv_stations').del()
   await knex('pv_cost_library').del()
@@ -46,7 +54,6 @@ export async function seed(knex: Knex): Promise<void> {
   await knex('equipment_lifecycle').del()
   await knex('equipment').del()
   await knex('pv_output_measurements').del()
-  await knex('power_plants').del()
   await knex('audit_logs').del()
   await knex('users').del()
   await knex('roles').del()
@@ -73,14 +80,7 @@ export async function seed(knex: Knex): Promise<void> {
     { id: uuid(), username: 'viewer', password_hash: passwordHash, display_name: '查看人员', role_id: viewerRoleId, department: '发展部' },
   ])
 
-  // Power plants（仅保留非光伏电源类型，集中式光伏统一由 solar_pv_stations 表管理）
-  const plantCId = uuid()
-
-  await knex('power_plants').insert([
-    { id: plantCId, name: '清源储能电站', plant_type: 'STORAGE', capacity_kw: 10000, installed_date: '2024-01-01', longitude: 120.10, latitude: 30.25, status: 'active' },
-  ])
-
-  // Equipment — 仅非光伏电站设备（集中式光伏设备统一由 002a_solar_pv_stations 种子管理）
+  // Equipment（独立储能电站设备，不关联 power_plants）
   const eqC1Id = uuid()  // plantC 变压器
   const eqC2Id = uuid()  // plantC 电池组
   const eqC3Id = uuid()  // plantC 电池组2
@@ -88,10 +88,10 @@ export async function seed(knex: Knex): Promise<void> {
 
   await knex('equipment').insert([
     // ---- 清源储能电站 (10MW STORAGE) ----
-    { id: eqC1Id, plant_id: plantCId, name: '1号主变压器', equipment_type: 'TRANSFORMER', model_number: 'S11-12500/35', rated_capacity_kva: 12500, rated_voltage_kv: 35, rated_current_a: 206, installation_date: '2024-01-01', design_life_years: 25, grade: 'A' },
-    { id: eqC2Id, plant_id: plantCId, name: '1号电池组', equipment_type: 'BATTERY', model_number: 'LFP-280Ah-40P', rated_capacity_kva: 5000, rated_voltage_kv: 768, rated_current_a: 651, installation_date: '2024-01-01', design_life_years: 12, grade: 'A' },
-    { id: eqC3Id, plant_id: plantCId, name: '2号电池组', equipment_type: 'BATTERY', model_number: 'LFP-280Ah-40P', rated_capacity_kva: 5000, rated_voltage_kv: 768, rated_current_a: 651, installation_date: '2024-01-01', design_life_years: 12, grade: 'B' },
-    { id: eqC4Id, plant_id: plantCId, name: '1号储能变流器', equipment_type: 'INVERTER', model_number: 'PCS-500K', rated_capacity_kva: 500, rated_voltage_kv: 0.8, rated_current_a: 361, installation_date: '2024-01-01', design_life_years: 15, grade: 'A' },
+    { id: eqC1Id, name: 'S11-12500/35 主变压器', equipment_type: 'TRANSFORMER', model_number: 'S11-12500/35', rated_capacity_kva: 12500, rated_voltage_kv: 35, rated_current_a: 206, installation_date: '2024-01-01', design_life_years: 25, grade: 'A' },
+    { id: eqC2Id, name: '磷酸铁锂储能电池组 5000kWh', equipment_type: 'BATTERY', model_number: 'LFP-280Ah-40P', rated_capacity_kva: 5000, rated_voltage_kv: 768, rated_current_a: 651, installation_date: '2024-01-01', design_life_years: 12, grade: 'A' },
+    { id: eqC3Id, name: '磷酸铁锂储能电池组 5000kWh（II段）', equipment_type: 'BATTERY', model_number: 'LFP-280Ah-40P', rated_capacity_kva: 5000, rated_voltage_kv: 768, rated_current_a: 651, installation_date: '2024-01-01', design_life_years: 12, grade: 'B' },
+    { id: eqC4Id, name: 'PCS-500K 储能变流器', equipment_type: 'INVERTER', model_number: 'PCS-500K', rated_capacity_kva: 500, rated_voltage_kv: 0.8, rated_current_a: 361, installation_date: '2024-01-01', design_life_years: 15, grade: 'A' },
   ])
 
   // Equipment lifecycle events（仅非光伏设备）

@@ -44,4 +44,8 @@ export class ProjectTypeController {
     const data = await this.service.saveFields(req.params.id, req.body)
     res.json({ code: 200, message: 'ok', data })
   }
+
+  listFieldLibrary = async (req: Request, res: Response) => { const data = await this.service.listFieldLibrary(req.query as any); res.json({ code: 200, message: 'ok', data }) }
+  createFieldLibraryItem = async (req: Request, res: Response) => { const data = await this.service.createFieldLibraryItem(req.body); res.json({ code: 200, message: 'ok', data }) }
+  deleteFieldLibraryItem = async (req: Request, res: Response) => { await this.service.deleteFieldLibraryItem(req.params.id); res.json({ code: 200, message: 'ok' }) }
 }

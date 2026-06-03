@@ -1004,6 +1004,29 @@ export class PowerFlowService {
     return { groupId, status: 'cancelled', cancelledCount }
   }
 
+  async deleteBatch(groupId: string) {
+    const group = await db('batch_calc_groups').where('id', groupId).first()
+    if (!group) throw new Error('批次不存在')
+    if (group.status === 'running') throw new Error('运行中的批次不能删除，请先取消')
+
+    // 获取关联的 task_id 列表
+    const items = await db('batch_group_items').where('group_id', groupId).select('task_id')
+    const taskIds = items.map((i: any) => i.task_id)
+
+    // 按外键依赖顺序删除
+    // batch_group_items.task_id → calc_tasks.id，必须先删
+    await db('batch_group_items').where('group_id', groupId).del()
+    await db('batch_anomaly_items').where('group_id', groupId).del()
+    if (taskIds.length > 0) {
+      await db('calc_checkpoints').whereIn('task_id', taskIds).del()
+      await db('calc_results').whereIn('task_id', taskIds).del()
+      await db('calc_tasks').whereIn('id', taskIds).del()
+    }
+    await db('batch_calc_groups').where('id', groupId).del()
+
+    return { groupId, deleted: true, deletedTasks: taskIds.length }
+  }
+
   async getBatchResults(groupId: string) {
     const group = await db('batch_calc_groups').where('id', groupId).first()
     if (!group) throw new Error('批次不存在')
@@ -2019,7 +2042,6 @@ export class PowerFlowService {
     const pvOutputs = params.pvOutputMw || [0, 5, 15, 35, 60, 90, 120, 110, 85, 55, 25, 8, 0]
     await db('calc_tasks').insert({
       id: taskId, task_type: 'REVERSE', status: 'queued',
-      created_at: new Date().toISOString(),
       parameters: JSON.stringify(params), created_by: userId,
       scene_type: meta.sceneType, data_source: meta.dataSource,
       created_at: new Date().toISOString(),
@@ -2181,7 +2203,6 @@ export class PowerFlowService {
     const sampleCount = Math.min(Math.max(params.sampleCount || 200, 100), 2000)
     await db('calc_tasks').insert({
       id: taskId, task_type: 'PROBABILISTIC', status: 'queued',
-      created_at: new Date().toISOString(),
       parameters: JSON.stringify(params), created_by: userId,
       scene_type: meta.sceneType, data_source: meta.dataSource,
       created_at: new Date().toISOString(),

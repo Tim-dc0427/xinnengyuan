@@ -67,7 +67,7 @@ export class ProjectTypeService {
 
   async saveFields(typeId: string, fields: Array<{
     fieldCode: string; fieldName: string; fieldType: string
-    fieldOptions?: string; isRequired: boolean; sortOrder: number
+    fieldOptions?: string; isRequired: boolean; sortOrder: number; category?: string
   }>) {
     await db('project_type_fields').where('type_id', typeId).delete()
     if (fields.length > 0) {
@@ -81,6 +81,7 @@ export class ProjectTypeService {
           field_options: f.fieldOptions || null,
           is_required: f.isRequired ? 1 : 0,
           sort_order: f.sortOrder,
+          category: f.category || '项目基础信息',
           created_at: new Date().toISOString(),
         })),
       )
@@ -108,4 +109,17 @@ export class ProjectTypeService {
     }
     return result
   }
+
+  async listFieldLibrary(query?: { keyword?: string }) {
+    let qb = db('project_field_library').orderBy('field_code', 'asc')
+    if (query?.keyword) { const kw = `%${query.keyword}%`; qb = qb.where(function() { this.where('field_code', 'like', kw).orWhere('field_name', 'like', kw) }) }
+    return qb
+  }
+  async createFieldLibraryItem(data: { fieldCode: string; fieldName: string; fieldType: string; fieldOptions?: string; category?: string }) {
+    const existing = await db('project_field_library').where('field_code', data.fieldCode).first()
+    if (existing) return existing
+    const [item] = await db('project_field_library').insert({ id: crypto.randomUUID(), field_code: data.fieldCode, field_name: data.fieldName, field_type: data.fieldType, field_options: data.fieldOptions || null, category: data.category || '项目基础信息', created_at: new Date().toISOString() }).returning('*')
+    return item
+  }
+  async deleteFieldLibraryItem(id: string) { await db('project_field_library').where('id', id).del() }
 }

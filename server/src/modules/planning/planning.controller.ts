@@ -20,6 +20,27 @@ export class PlanningController {
     res.json({ code: 200, message: 'ok', data })
   }
 
+  // ==================== Investment Plans (造价模块投资方案) ====================
+  listInvestmentPlans = async (_req: Request, res: Response) => {
+    const data = await this.service.listInvestmentPlans()
+    res.json({ code: 200, message: 'ok', data })
+  }
+
+  createInvestmentPlan = async (req: Request, res: Response) => {
+    const data = await this.service.createInvestmentPlan(req.body)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
+  updateInvestmentPlan = async (req: Request, res: Response) => {
+    const data = await this.service.updateInvestmentPlan(req.params.id, req.body)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
+  deleteInvestmentPlan = async (req: Request, res: Response) => {
+    await this.service.deleteInvestmentPlan(req.params.id)
+    res.json({ code: 200, message: 'ok' })
+  }
+
   // ==================== PV Stations (2.1.1) ====================
   listPvStations = async (req: Request, res: Response) => {
     const data = await this.service.listPvStations(req.query as any)
@@ -102,6 +123,8 @@ export class PlanningController {
     const data = await this.service.createFieldLibraryItem(req.body)
     res.json({ code: 200, message: 'ok', data })
   }
+
+  deleteFieldLibraryItem = async (req: Request, res: Response) => { await this.service.deleteFieldLibraryItem(req.params.id); res.json({ code: 200, message: 'ok' }) }
 
   // ==================== Constraint Rules (2.1.2) ====================
   listConstraintRules = async (req: Request, res: Response) => {
@@ -206,7 +229,7 @@ export class PlanningController {
   }
 
   saveInvestmentConfig = async (req: Request, res: Response) => {
-    const data = await this.service.saveInvestmentConfig(req.params.planId, req.body)
+    const data = await this.service.saveInvestmentConfig(req.params.investmentPlanId, req.body)
     res.json({ code: 200, message: 'ok', data })
   }
 

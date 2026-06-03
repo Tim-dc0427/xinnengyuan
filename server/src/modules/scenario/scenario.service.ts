@@ -665,7 +665,7 @@ export class ScenarioService {
     const controlRules: any[] = strategyConfig.control_rules || []
     const schedule: any[] = strategyConfig.schedule || []
 
-    let storageSoc = 50 // 储能初始 SOC
+    let storageSoc = 20 + Math.random() * 30 // 储能初始 SOC (20%-50% 波动，模拟实际运行)
     const eventLog: { step: number; time: string; description: string; level: number }[] = []
 
     // 解析故障注入列表

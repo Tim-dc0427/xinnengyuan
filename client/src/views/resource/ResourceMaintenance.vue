@@ -22,7 +22,7 @@ async function openEquipDialog(plant: any) {
   equipDialogVisible.value = true
   if (!equipmentMap.value[plant.id]) {
     try {
-      const eqs = await fetchEquipment({ plantId: plant.id })
+      const eqs = await fetchEquipment({ stationId: plant.id })
       equipmentMap.value[plant.id] = eqs
       const results = await Promise.allSettled(
         eqs.map((eq: any) => apiClient.get(`/grid-diagnosis/equipment/reliability/${eq.id}`))
@@ -174,8 +174,8 @@ async function loadAll() {
   loadReplacementPlan()
 }
 
-function getPlantEquipment(plantId: string) {
-  return equipmentMap.value[plantId] || []
+function getPlantEquipment(stationId: string) {
+  return equipmentMap.value[stationId] || []
 }
 
 function getReliabilityStatus(r: any): string {
@@ -197,18 +197,18 @@ const replacementPlan = ref<any[]>([])
 
 // ==================== 健康状态详细数据 ====================
 const allEquipment = computed(() => {
-  const list: Array<{ eq: any; plantName: string; plantId: string }> = []
+  const list: Array<{ eq: any; plantName: string; stationId: string }> = []
   plants.value.forEach(p => {
     (equipmentMap.value[p.id] || []).forEach((eq: any) => {
-      list.push({ eq, plantName: p.name, plantId: p.id })
+      list.push({ eq, plantName: p.name, stationId: p.id })
     })
   })
   return list
 })
 
 const filteredEquipment = computed(() => {
-  return allEquipment.value.filter(({ eq, plantId }) => {
-    if (healthFilterPlant.value && plantId !== healthFilterPlant.value) return false
+  return allEquipment.value.filter(({ eq, stationId }) => {
+    if (healthFilterPlant.value && stationId !== healthFilterPlant.value) return false
     if (healthFilterType.value && eq.equipment_type !== healthFilterType.value) return false
     if (healthFilterGrade.value) {
       const rel = reliabilityMap.value[eq.id]
@@ -229,7 +229,7 @@ const filteredAnomalyList = computed(() => {
 const healthPlantOptions = computed(() => {
   const seen = new Set<string>()
   return allEquipment.value
-    .map(e => ({ label: e.plantName, value: e.plantId }))
+    .map(e => ({ label: e.plantName, value: e.stationId }))
     .filter(o => { if (seen.has(o.value)) return false; seen.add(o.value); return true })
 })
 
@@ -298,21 +298,21 @@ const storagePlantOptions = computed(() => {
 })
 
 const storageLifeItems = computed(() => {
-  const items: Array<{ plantName: string; plantId: string; eq: any; life: any }> = []
+  const items: Array<{ plantName: string; stationId: string; eq: any; life: any }> = []
   storagePlants.value.forEach(p => {
     if (storageLifeFilterPlant.value && p.id !== storageLifeFilterPlant.value) return
     (equipmentMap.value[p.id] || []).forEach((eq: any) => {
       if (lifePredictMap.value[eq.id]) {
-        items.push({ plantName: p.name, plantId: p.id, eq, life: lifePredictMap.value[eq.id] })
+        items.push({ plantName: p.name, stationId: p.id, eq, life: lifePredictMap.value[eq.id] })
       }
     })
   })
   return items
 })
 
-async function loadReplacementPlan(plantId?: string) {
+async function loadReplacementPlan(stationId?: string) {
   try {
-    const res = await apiClient.post('/grid-diagnosis/equipment/lifecycle/replacement-plan', { plantId })
+    const res = await apiClient.post('/grid-diagnosis/equipment/lifecycle/replacement-plan', { stationId })
     replacementPlan.value = res.data?.data || []
   } catch { replacementPlan.value = [] }
 }
@@ -474,10 +474,10 @@ function openCreateEquipment(plant: any) {
 async function handleEquipCreate() {
   if (!createEquipForm.value.modelNumber.trim()) { ElMessage.warning('请输入设备型号'); return }
   try {
-    await createEquipment({ plantId: createEquipPlantId.value, ...createEquipForm.value })
+    await createEquipment({ stationId: createEquipPlantId.value, ...createEquipForm.value })
     ElMessage.success('设备创建成功')
     createEquipDialogVisible.value = false
-    equipmentMap.value[createEquipPlantId.value] = await fetchEquipment({ plantId: createEquipPlantId.value })
+    equipmentMap.value[createEquipPlantId.value] = await fetchEquipment({ stationId: createEquipPlantId.value })
     // 同步更新电站列表中的设备计数
     const plant = plants.value.find((p: any) => p.id === createEquipPlantId.value)
     if (plant) plant.equipment_count = (Number(plant.equipment_count) || 0) + 1
@@ -565,11 +565,11 @@ async function handleEquipSave() {
     ElMessage.success('设备信息已更新')
     editDialogVisible.value = false
     // 刷新设备列表
-    const plantId = Object.keys(equipmentMap.value).find(pid =>
+    const stationId = Object.keys(equipmentMap.value).find(pid =>
       equipmentMap.value[pid].some((e: any) => e.id === editingId.value)
     )
-    if (plantId) {
-      equipmentMap.value[plantId] = await fetchEquipment({ plantId })
+    if (stationId) {
+      equipmentMap.value[stationId] = await fetchEquipment({ stationId })
     }
   } catch (e: any) { ElMessage.error(e?.message || '更新失败') }
 }

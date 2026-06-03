@@ -12,5 +12,6 @@ export function errorHandler(err: Error, _req: Request, res: Response, _next: Ne
     return res.status(401).json({ code: 401, message: '认证失败', data: null })
   }
 
-  res.status(500).json({ code: 500, message: '服务器内部错误', data: null })
+  const message = process.env.NODE_ENV !== 'production' ? err.message : '服务器内部错误'
+  res.status(500).json({ code: 500, message, data: null })
 }

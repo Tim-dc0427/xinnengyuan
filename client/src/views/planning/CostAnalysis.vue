@@ -2,12 +2,13 @@
 import { ref, onMounted, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ChartContainer from '@/components/common/ChartContainer.vue'
-import { calculateInvestment, compareCost, roiAnalysis } from '@/api/planning'
 import {
+  fetchInvestmentPlans, createInvestmentPlan, updateInvestmentPlan, deleteInvestmentPlan,
   fetchCostItems, createCostItem, updateCostItem, deleteCostItem,
-  fetchInvestmentConfig, saveInvestmentConfig, fetchPlans, createPlan, updatePlan,
+  fetchInvestmentConfig, saveInvestmentConfig,
+  calculateInvestment, compareCost, roiAnalysis,
 } from '@/api/planning'
-import type { CostItem, InvestmentConfigItem } from '@/api/planning'
+import type { CostItem, InvestmentConfigItem, InvestmentPlan } from '@/api/planning'
 import type { InvestmentResult, CostComparison, RoiAnalysis as RoiResult } from '@new-energy/shared'
 
 // ==================== 导航 ====================
@@ -94,6 +95,63 @@ async function handleDelete(row: CostItem) { try { await ElMessageBox.confirm(`�
 const modelSpecOptions = computed(() => { if (!form.value.equipmentType) return []; return [...new Set(costItems.value.filter(i => i.equipment_type === form.value.equipmentType).map(i => i.model_spec).filter(Boolean))] })
 watch([mainTab, paramsTab, equipTab], () => { if (mainTab.value === 'params') loadCostItems() })
 
+// ==================== 投资方案管理 ====================
+const investmentPlans = ref<InvestmentPlan[]>([])
+const planDialogVisible = ref(false)
+const planEditMode = ref(false)
+const planEditId = ref('')
+const planForm = ref({ planName: '', techRoute: '', capacityKw: 50000, description: '' })
+
+async function loadInvestmentPlans() { try { investmentPlans.value = await fetchInvestmentPlans() } catch { investmentPlans.value = [] } }
+
+const pvPlans = computed(() => investmentPlans.value.filter(p => ['centralized_pv', 'string_pv', 'pv_storage', 'distributed_pv'].includes(p.tech_route)))
+const tradPlans = computed(() => investmentPlans.value.filter(p => ['transmission', 'traditional_coal'].includes(p.tech_route)))
+
+function openCreatePlan() {
+  planEditMode.value = false; planEditId.value = ''
+  planForm.value = { planName: '', techRoute: '', capacityKw: 50000, description: '' }
+  planDialogVisible.value = true
+}
+function openEditPlan() {
+  const p = investmentPlans.value.find((p: InvestmentPlan) => p.id === configPlanId.value)
+  if (!p) return
+  planEditMode.value = true; planEditId.value = p.id
+  planForm.value = { planName: p.plan_name, techRoute: p.tech_route, capacityKw: p.capacity_kw, description: p.description || '' }
+  planDialogVisible.value = true
+}
+async function handleSavePlan() {
+  try {
+    const fd = planForm.value
+    if (!fd.planName || !fd.techRoute) { ElMessage.warning('请填写名称和技术路线'); return }
+    if (planEditMode.value && planEditId.value) {
+      await updateInvestmentPlan(planEditId.value, { planName: fd.planName, techRoute: fd.techRoute, capacityKw: fd.capacityKw, description: fd.description })
+      ElMessage.success('方案已更新')
+      // 如果当前选中的方案被编辑，刷新容量
+      if (configPlanId.value === planEditId.value) capacityInput.value = fd.capacityKw
+    } else {
+      const p = await createInvestmentPlan({ planName: fd.planName, techRoute: fd.techRoute, capacityKw: fd.capacityKw, description: fd.description })
+      ElMessage.success('方案创建成功')
+      configPlanId.value = p.id
+      capacityInput.value = p.capacity_kw
+      loadConfig()
+    }
+    planDialogVisible.value = false
+    await loadInvestmentPlans()
+  } catch { ElMessage.error('操作失败') }
+}
+async function handleDeletePlan() {
+  if (!configPlanId.value) return
+  try {
+    await ElMessageBox.confirm('确定删除该投资方案及其配置？', '确认删除', { type: 'warning' })
+    await deleteInvestmentPlan(configPlanId.value)
+    ElMessage.success('已删除')
+    configPlanId.value = ''
+    configItems.value = []
+    investment.value = null
+    await loadInvestmentPlans()
+  } catch { /* cancelled */ }
+}
+
 // ==================== 投资计算 ====================
 const calcLoading = ref(false)
 const capacityInput = ref(50000)
@@ -101,48 +159,88 @@ const investment = ref<InvestmentResult | null>(null)
 const roi = ref<RoiResult | null>(null)
 const roiPlanId = ref('')
 const roiParams = ref({ annualHours: 1300, gridPrice: 0.42, subsidyPrice: 0.03, carbonPrice: 60, omRate: 2, projectLife: 25 })
-const plans = ref<any[]>([])
 const configPlanId = ref('')
 const configItems = ref<InvestmentConfigItem[]>([])
 const configLoading = ref(false)
 const addDeviceVisible = ref(false)
 const addDeviceForm = ref({ costItemId: '', quantity: 1 })
 const costItemOptions = ref<CostItem[]>([])
-const planDialogVisible = ref(false)
-const planEditMode = ref(false)
-const planEditId = ref('')
-const planForm = ref({ planName: '', planType: 'PV_INTEGRATION' as string, techRoute: '', planYear: new Date().getFullYear(), description: '' })
 
-async function loadPlans() { try { plans.value = await fetchPlans() } catch { plans.value = [] } }
-function openCreatePlan() { planEditMode.value = false; planEditId.value = ''; planForm.value = { planName: '', planType: 'PV_INTEGRATION', techRoute: '', planYear: new Date().getFullYear(), description: '' }; planDialogVisible.value = true }
-function openEditPlan() { const p = plans.value.find((p: any) => p.id === configPlanId.value); if (!p) return; planEditMode.value = true; planEditId.value = p.id; planForm.value = { planName: p.plan_name || p.planName, planType: p.plan_type || p.planType, techRoute: p.tech_route || p.techRoute || '', planYear: p.plan_year || p.planYear || new Date().getFullYear(), description: p.description || '' }; planDialogVisible.value = true }
-function routeToPlanType(r: string) { const m: Record<string, string> = { centralized_pv: 'PV_INTEGRATION', string_pv: 'PV_INTEGRATION', pv_storage: 'PV_INTEGRATION', distributed_pv: 'PV_INTEGRATION', transmission: 'DISTRIBUTION', traditional_coal: 'GRID_UPGRADE' }; return m[r] || 'PV_INTEGRATION' }
-async function handleSavePlan() { try { const data = { ...planForm.value, planType: routeToPlanType(planForm.value.techRoute) }; if (planEditMode.value && planEditId.value) { await updatePlan(planEditId.value, data as any); ElMessage.success('方案已更新') } else { const p = await createPlan(data as any); ElMessage.success('方案创建成功'); configPlanId.value = p.id; loadConfig() } planDialogVisible.value = false; await loadPlans() } catch { ElMessage.error('操作失败') } }
-async function loadConfig() { if (!configPlanId.value) { configItems.value = []; return }; configLoading.value = true; try { configItems.value = await fetchInvestmentConfig({ planId: configPlanId.value }) } catch { configItems.value = [] } finally { configLoading.value = false } }
+async function loadConfig() {
+  if (!configPlanId.value) { configItems.value = []; return }
+  configLoading.value = true
+  try {
+    configItems.value = await fetchInvestmentConfig({ investmentPlanId: configPlanId.value })
+  } catch { configItems.value = [] } finally { configLoading.value = false }
+}
+
+// 选择方案时自动回填容量
+function onPlanChange() {
+  const p = investmentPlans.value.find((ip: InvestmentPlan) => ip.id === configPlanId.value)
+  if (p) capacityInput.value = p.capacity_kw
+  loadConfig()
+}
+
 const pvRoutes = ['centralized_pv', 'string_pv', 'pv_storage', 'distributed_pv']
 const tradRoutes = ['transmission', 'traditional_coal']
 const filteredCostOptions = computed(() => {
-  const p = plans.value.find((p: any) => p.id === configPlanId.value)
-  const route = p?.tech_route || p?.techRoute || ''
+  const p = investmentPlans.value.find((ip: InvestmentPlan) => ip.id === configPlanId.value)
+  const route = p?.tech_route || ''
   if (tradRoutes.includes(route)) return costItemOptions.value.filter(c => c.sub_category !== 'pv_body')
   if (pvRoutes.includes(route)) return costItemOptions.value.filter(c => c.sub_category !== 'traditional_coal')
   return costItemOptions.value
 })
 function openAddDevice() { addDeviceForm.value = { costItemId: '', quantity: 1 }; addDeviceVisible.value = true }
-async function handleAddDevice() { if (!addDeviceForm.value.costItemId) return; const exist = configItems.value.find(i => i.cost_item_id === addDeviceForm.value.costItemId); if (exist) { ElMessage.warning('该条目已在配置清单中'); return }; const ci = costItemOptions.value.find(c => c.id === addDeviceForm.value.costItemId); configItems.value = [...configItems.value, { id: '', plan_id: configPlanId.value, cost_item_id: addDeviceForm.value.costItemId, quantity: addDeviceForm.value.quantity, unit_price: ci?.unit_price || 0, equipment_type: ci?.equipment_type, model_spec: ci?.model_spec, cost_item_name: ci?.item_name, cost_unit: ci?.cost_unit, category: ci?.category } as any]; addDeviceVisible.value = false }
-function calcSubtotal(row: any) { const ci = costItemOptions.value.find(c => c.id === row.cost_item_id); if (!ci) return 0; const unit = ci.cost_unit || ''; if (unit.endsWith('/kW')) return capacityInput.value * ci.unit_price; if (unit.endsWith('/W') || unit.endsWith('/Wp')) return capacityInput.value * 1000 * ci.unit_price; return row.quantity * ci.unit_price }
+async function handleAddDevice() {
+  if (!addDeviceForm.value.costItemId) return
+  const exist = configItems.value.find(i => i.cost_item_id === addDeviceForm.value.costItemId)
+  if (exist) { ElMessage.warning('该条目已在配置清单中'); return }
+  const ci = costItemOptions.value.find(c => c.id === addDeviceForm.value.costItemId)
+  configItems.value = [...configItems.value, {
+    id: '', investment_plan_id: configPlanId.value, cost_item_id: addDeviceForm.value.costItemId,
+    quantity: addDeviceForm.value.quantity, unit_price: ci?.unit_price || 0,
+    equipment_type: ci?.equipment_type, model_spec: ci?.model_spec,
+    cost_item_name: ci?.item_name, cost_unit: ci?.cost_unit, category: ci?.category
+  } as any]
+  addDeviceVisible.value = false
+}
+function calcSubtotal(row: any) {
+  const ci = costItemOptions.value.find(c => c.id === row.cost_item_id)
+  if (!ci) return 0
+  const unit = ci.cost_unit || ''
+  if (unit.endsWith('/kW')) return capacityInput.value * ci.unit_price
+  if (unit.endsWith('/W') || unit.endsWith('/Wp')) return capacityInput.value * 1000 * ci.unit_price
+  return row.quantity * ci.unit_price
+}
 function removeDevice(idx: number) { configItems.value.splice(idx, 1) }
-async function handleSaveConfig() { if (!configPlanId.value) { ElMessage.warning('请先选择方案'); return }; try { await saveInvestmentConfig(configPlanId.value, configItems.value.map(i => ({ costItemId: i.cost_item_id, quantity: i.quantity }))); ElMessage.success('配置方案已保存'); await loadConfig() } catch { ElMessage.error('保存失败') } }
-const configTotal = computed(() => { let total = 0; for (const item of configItems.value) { const ci = costItemOptions.value.find(c => c.id === item.cost_item_id); const unit = ci?.cost_unit || ''; const price = ci?.unit_price || 0; if (unit.endsWith('/kW')) total += capacityInput.value * price; else if (unit.endsWith('/W') || unit.endsWith('/Wp')) total += capacityInput.value * 1000 * price; else total += price * item.quantity; } return Math.round(total) })
+async function handleSaveConfig() {
+  if (!configPlanId.value) { ElMessage.warning('请先选择或新建投资方案'); return }
+  try {
+    await saveInvestmentConfig(configPlanId.value, configItems.value.map(i => ({ costItemId: i.cost_item_id, quantity: i.quantity })))
+    ElMessage.success('配置方案已保存')
+    await loadConfig()
+  } catch { ElMessage.error('保存失败') }
+}
+const configTotal = computed(() => {
+  let total = 0
+  for (const item of configItems.value) {
+    const ci = costItemOptions.value.find(c => c.id === item.cost_item_id)
+    const unit = ci?.cost_unit || ''
+    const price = ci?.unit_price || 0
+    if (unit.endsWith('/kW')) total += capacityInput.value * price
+    else if (unit.endsWith('/W') || unit.endsWith('/Wp')) total += capacityInput.value * 1000 * price
+    else total += price * item.quantity
+  }
+  return Math.round(total)
+})
 
 async function runCalculation() {
   calcLoading.value = true
   try {
-    // 自动保存配置再计算
     if (configPlanId.value && configItems.value.length > 0) {
       await saveInvestmentConfig(configPlanId.value, configItems.value.map(i => ({ costItemId: i.cost_item_id, quantity: i.quantity })))
     }
-    const inv = await calculateInvestment({ capacityKw: capacityInput.value, planId: configPlanId.value || undefined })
+    const inv = await calculateInvestment({ capacityKw: capacityInput.value, investmentPlanId: configPlanId.value || undefined })
     investment.value = inv
   } finally { calcLoading.value = false }
 }
@@ -151,28 +249,35 @@ async function runCalculation() {
 const comparison = ref<CostComparison | null>(null)
 const comparePlanA = ref('')
 const comparePlanB = ref('')
-const pvPlans = computed(() => plans.value.filter((p: any) => { const r = p.tech_route || p.techRoute || ''; return ['centralized_pv', 'string_pv', 'pv_storage', 'distributed_pv'].includes(r) }))
-const tradPlans = computed(() => plans.value.filter((p: any) => { const r = p.tech_route || p.techRoute || ''; return ['transmission', 'traditional_coal'].includes(r) }))
-const comparePlanAName = computed(() => { const p = plans.value.find((p: any) => p.id === comparePlanA.value); return p ? (p.plan_name || p.planName) : '方案A' })
-const comparePlanBName = computed(() => { const p = plans.value.find((p: any) => p.id === comparePlanB.value); return p ? (p.plan_name || p.planName) : '方案B' })
+const comparePlanAName = computed(() => {
+  const p = investmentPlans.value.find((ip: InvestmentPlan) => ip.id === comparePlanA.value)
+  return p ? p.plan_name : '方案A'
+})
+const comparePlanBName = computed(() => {
+  const p = investmentPlans.value.find((ip: InvestmentPlan) => ip.id === comparePlanB.value)
+  return p ? p.plan_name : '方案B'
+})
 
 async function runRoiAnalysis() {
   calcLoading.value = true
   try {
-    roi.value = await roiAnalysis({ planId: roiPlanId.value || undefined, ...roiParams.value })
+    roi.value = await roiAnalysis({
+      investmentPlanId: roiPlanId.value || undefined,
+      ...roiParams.value
+    })
   } catch { ElMessage.error('分析失败') }
   finally { calcLoading.value = false }
 }
 
 async function runCompare() {
   if (!comparePlanA.value || !comparePlanB.value) { ElMessage.warning('请选择两个方案'); return }
-  // 自动保存当前方案配置
   if (configPlanId.value && configItems.value.length > 0) {
     await saveInvestmentConfig(configPlanId.value, configItems.value.map(i => ({ costItemId: i.cost_item_id, quantity: i.quantity })))
   }
   calcLoading.value = true
-  try { comparison.value = await compareCost({ planIdA: comparePlanA.value, planIdB: comparePlanB.value } as any) }
-  catch { ElMessage.error('对比失败') }
+  try {
+    comparison.value = await compareCost({ investmentPlanIdA: comparePlanA.value, investmentPlanIdB: comparePlanB.value })
+  } catch { ElMessage.error('对比失败') }
   finally { calcLoading.value = false }
 }
 
@@ -184,7 +289,7 @@ const unitCostChartOption = computed(() => { if (!comparison.value) return {}; r
 const comparisonChartOption = computed(() => { if (!comparison.value) return {}; const c = comparison.value; return { title: { text: '投资构成对比（万元）', left: 'center', textStyle: { fontSize: 13 } }, tooltip: { trigger: 'axis' as const, axisPointer: { type: 'shadow' as const } }, legend: { data: ['光伏项目', '传统火电/输变电'], bottom: 0 }, grid: { left: '3%', right: '4%', top: 30, bottom: 40, containLabel: true }, xAxis: { type: 'category' as const, data: c.comparisonChart.labels }, yAxis: { type: 'value' as const, name: '万元' }, series: [{ name: '光伏项目', type: 'bar' as const, data: c.comparisonChart.pvValues, itemStyle: { color: '#267F7B' }, barWidth: '30%' }, { name: '传统火电/输变电', type: 'bar' as const, data: c.comparisonChart.traditionalValues, itemStyle: { color: '#F56C6C' }, barWidth: '30%' }] } })
 const roiChartOption = computed(() => { if (!roi.value) return {}; const yearly = roi.value.yearlyCashflow; return { tooltip: { trigger: 'axis', formatter: (p: any) => `${p[0].axisValue}年: ${(p[0].data / 10000).toFixed(1)}万元` }, grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true }, xAxis: { type: 'category', data: yearly.map((y: any) => y.year) }, yAxis: { type: 'value', name: '万元', axisLabel: { formatter: (v: any) => (v / 10000).toFixed(0) } }, series: [{ type: 'line', smooth: true, data: yearly.map((y: any) => Math.round(y.cumulativeCashflow / 10000)), areaStyle: { color: 'rgba(64,158,255,0.1)' }, lineStyle: { color: '#267F7B', width: 2 }, itemStyle: { color: '#267F7B' }, markLine: { data: [{ yAxis: 0, name: '盈亏平衡线' }], lineStyle: { color: '#F56C6C', type: 'dashed' }, label: { formatter: '回本线' } } }] } })
 
-onMounted(async () => { loadCostItems(); await loadPlans(); costItemOptions.value = await fetchCostItems() })
+onMounted(async () => { loadCostItems(); await loadInvestmentPlans(); costItemOptions.value = await fetchCostItems() })
 </script>
 
 <template>
@@ -247,16 +352,17 @@ onMounted(async () => { loadCostItems(); await loadPlans(); costItemOptions.valu
       <div class="chart-panel">
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
           <span style="font-size:13px;color:#606266">方案:</span>
-          <el-select v-model="configPlanId" placeholder="选择规划方案" size="small" style="width:280px" @change="loadConfig" clearable>
+          <el-select v-model="configPlanId" placeholder="选择投资方案" size="small" style="width:320px" @change="onPlanChange" clearable>
             <el-option-group label="-- 光伏类 --">
-              <el-option v-for="p in pvPlans" :key="p.id" :label="(p.plan_name||p.planName)+' ['+techLabel(p.tech_route||p.techRoute)+']'" :value="p.id" />
+              <el-option v-for="p in pvPlans" :key="p.id" :label="p.plan_name + ' [' + techLabel(p.tech_route) + '] ' + p.capacity_kw + 'kW'" :value="p.id" />
             </el-option-group>
             <el-option-group label="-- 传统类 --">
-              <el-option v-for="p in tradPlans" :key="p.id" :label="(p.plan_name||p.planName)+' ['+techLabel(p.tech_route||p.techRoute)+']'" :value="p.id" />
+              <el-option v-for="p in tradPlans" :key="p.id" :label="p.plan_name + ' [' + techLabel(p.tech_route) + '] ' + p.capacity_kw + 'kW'" :value="p.id" />
             </el-option-group>
           </el-select>
           <el-button size="small" @click="openCreatePlan">新建</el-button>
           <el-button size="small" @click="openEditPlan" :disabled="!configPlanId">编辑</el-button>
+          <el-button size="small" @click="handleDeletePlan" :disabled="!configPlanId">删除</el-button>
           <span style="font-size:12px;color:#909399;margin-left:8px">容量:</span>
           <el-input-number v-model="capacityInput" :min="1" size="small" style="width:140px" />
           <span style="font-size:12px;color:#909399">kW</span>
@@ -298,16 +404,23 @@ onMounted(async () => { loadCostItems(); await loadPlans(); costItemOptions.valu
         </div>
       </div>
 
-      <el-dialog :title="planEditMode ? '编辑方案' : '新建方案'" v-model="planDialogVisible" width="480px">
-        <el-form :model="planForm" label-width="80px" size="small">
+      <!-- 投资方案编辑弹窗 -->
+      <el-dialog :title="planEditMode ? '编辑投资方案' : '新建投资方案'" v-model="planDialogVisible" width="480px">
+        <el-form :model="planForm" label-width="100px" size="small">
           <el-form-item label="名称" required><el-input v-model="planForm.planName" /></el-form-item>
-          <el-form-item label="技术路线" required><el-select v-model="planForm.techRoute" style="width:100%"><el-option-group label="光伏类"><el-option v-for="t in techRouteOptions.filter(t => ['centralized_pv','string_pv','pv_storage','distributed_pv'].includes(t.value))" :key="t.value" :label="t.label" :value="t.value" /></el-option-group><el-option-group label="传统类"><el-option v-for="t in techRouteOptions.filter(t => ['transmission','traditional_coal'].includes(t.value))" :key="t.value" :label="t.label" :value="t.value" /></el-option-group></el-select></el-form-item>
-          <el-form-item label="年份"><el-input-number v-model="planForm.planYear" :min="2020" :max="2050" style="width:100%" /></el-form-item>
+          <el-form-item label="技术路线" required>
+            <el-select v-model="planForm.techRoute" style="width:100%">
+              <el-option-group label="光伏类"><el-option v-for="t in techRouteOptions.filter(t => ['centralized_pv','string_pv','pv_storage','distributed_pv'].includes(t.value))" :key="t.value" :label="t.label" :value="t.value" /></el-option-group>
+              <el-option-group label="传统类"><el-option v-for="t in techRouteOptions.filter(t => ['transmission','traditional_coal'].includes(t.value))" :key="t.value" :label="t.label" :value="t.value" /></el-option-group>
+            </el-select>
+          </el-form-item>
+          <el-form-item label="装机容量" required><el-input-number v-model="planForm.capacityKw" :min="1" style="width:100%" /><span style="margin-left:8px;font-size:12px;color:#909399">kW</span></el-form-item>
           <el-form-item label="描述"><el-input v-model="planForm.description" type="textarea" :rows="2" /></el-form-item>
         </el-form>
         <template #footer><el-button size="small" @click="planDialogVisible = false">取消</el-button><el-button size="small" type="primary" @click="handleSavePlan">保存</el-button></template>
       </el-dialog>
 
+      <!-- 添加成本项弹窗 -->
       <el-dialog title="添加成本项" v-model="addDeviceVisible" width="500px">
         <el-form :model="addDeviceForm" label-width="90px" size="small">
           <el-form-item label="选择条目" required>
@@ -328,12 +441,12 @@ onMounted(async () => { loadCostItems(); await loadPlans(); costItemOptions.valu
       <div class="chart-panel">
         <div style="display:flex;gap:12px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
           <span style="font-size:13px;color:#606266">光伏方案:</span>
-          <el-select v-model="comparePlanA" placeholder="选择光伏方案" size="small" style="width:260px" clearable>
-            <el-option v-for="p in pvPlans" :key="p.id" :label="(p.plan_name||p.planName)+' ['+techLabel(p.tech_route||p.techRoute)+']'" :value="p.id" />
+          <el-select v-model="comparePlanA" placeholder="选择光伏方案" size="small" style="width:280px" clearable>
+            <el-option v-for="p in pvPlans" :key="p.id" :label="p.plan_name + ' [' + techLabel(p.tech_route) + '] ' + p.capacity_kw + 'kW'" :value="p.id" />
           </el-select>
           <span style="font-size:13px;color:#606266;margin-left:12px">传统方案:</span>
-          <el-select v-model="comparePlanB" placeholder="选择传统方案" size="small" style="width:260px" clearable>
-            <el-option v-for="p in tradPlans" :key="p.id" :label="(p.plan_name||p.planName)+' ['+techLabel(p.tech_route||p.techRoute)+']'" :value="p.id" />
+          <el-select v-model="comparePlanB" placeholder="选择传统方案" size="small" style="width:280px" clearable>
+            <el-option v-for="p in tradPlans" :key="p.id" :label="p.plan_name + ' [' + techLabel(p.tech_route) + '] ' + p.capacity_kw + 'kW'" :value="p.id" />
           </el-select>
           <el-button type="primary" size="small" @click="runCompare" :loading="calcLoading">开始对比</el-button>
         </div>
@@ -372,8 +485,8 @@ onMounted(async () => { loadCostItems(); await loadPlans(); costItemOptions.valu
       <div class="chart-panel">
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
           <span style="font-size:13px;color:#606266">方案:</span>
-          <el-select v-model="roiPlanId" placeholder="选择方案" size="small" style="width:280px" clearable>
-            <el-option v-for="p in pvPlans" :key="p.id" :label="(p.plan_name||p.planName)+' ['+techLabel(p.tech_route||p.techRoute)+']'" :value="p.id" />
+          <el-select v-model="roiPlanId" placeholder="选择投资方案" size="small" style="width:320px" clearable>
+            <el-option v-for="p in pvPlans" :key="p.id" :label="p.plan_name + ' [' + techLabel(p.tech_route) + '] ' + p.capacity_kw + 'kW'" :value="p.id" />
           </el-select>
         </div>
         <div style="display:flex;gap:12px;align-items:center;margin-bottom:12px;flex-wrap:wrap">

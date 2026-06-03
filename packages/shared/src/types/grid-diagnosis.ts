@@ -48,8 +48,76 @@ export interface PvOutputStatsQuery {
   endDate: string
   regionId?: string
   voltageLevel?: string
-  aggregationType: 'hour' | 'day' | 'month' | 'year'
+  aggregationType?: 'hour' | 'day' | 'month' | 'year'
   compareMode?: 'yoy' | 'mom' | 'none'
+  groupBy?: 'station' | 'zone' | 'voltage_level'
+}
+
+// 聚合后的出力统计
+export interface AggregatedOutputStats {
+  groupKey: string
+  groupType: 'station' | 'zone' | 'voltage_level'
+  stationName?: string
+  zone?: string
+  voltageLevel?: string
+  installedCapacityMw: number
+  totalOutputKwh: number
+  avgOutputKw: number
+  maxOutputKw: number
+  stationCount: number
+  generationHours?: number
+  prevTotalOutputKwh?: number
+  changePct?: number | null
+  prevGenerationHours?: number
+  generationHoursChangePct?: number | null
+}
+
+// 电站选项（下拉列表）
+export interface StationOption {
+  id: string
+  stationName: string
+  installedCapacityMw: number
+  gridConnectionVoltageKv: number
+  longitude: number
+  latitude: number
+  zone: string
+  voltageLevel: string
+}
+
+export interface BackfeedItem {
+  time: string
+  activePowerKw: number
+  reactivePowerKvar: number
+  apparentPowerKva: number
+  direction: 'forward' | 'reverse'
+  isBackfeed: boolean
+}
+
+export interface StationSnapshot {
+  stationId: string
+  stationName: string
+  installedCapacityMw: number
+  gridConnectionVoltageKv: number
+  longitude: number
+  latitude: number
+  zone: string
+  voltageLevel: string
+  time: string
+  activePowerKw: number
+  reactivePowerKvar: number
+  apparentPowerKva: number
+  direction: 'forward' | 'reverse'
+  isBackfeed: boolean
+}
+
+// 储能选项
+export interface StorageOption {
+  id: string
+  name: string
+  ratedPowerKw: number
+  ratedCapacityKwh: number
+  storageType: string
+  zone: string
 }
 
 // ==================== Influencing Factors ====================
@@ -65,13 +133,178 @@ export interface FactorAnalysisResult {
 // ==================== Extreme Scenario ====================
 export type ExtremeScenarioType = 'high_temperature' | 'rainstorm'
 
+// -------- 请求参数 --------
+
+/** 高温场景参数 */
+export interface HighTempParams {
+  maxTemperatureC: number          // 最高温度 ℃ (35~50)
+  minTemperatureC: number          // 最低温度 ℃ (20~30)
+  peakTimeHour: number             // 峰值时刻 小时 (12~16)
+  durationHalfHours: number        // 高温持续半宽 h (2~6)
+}
+
+/** 暴雨场景参数 */
+export interface RainstormParams {
+  rainfallIntensityMmh: number     // 降雨强度 mm/h (5~50)
+  cloudCoverRatio: number          // 云层覆盖率 (0.5~1.0)
+  durationHours: number            // 持续时长 h (2~12)
+  peakTimeHour: number             // 暴雨中心时刻 h (10~18)
+}
+
+/** 极端场景模拟请求 */
+export interface ExtremeScenarioRequest {
+  stationId: string
+  scenarioType: ExtremeScenarioType
+  params: HighTempParams | RainstormParams
+}
+
+// -------- 时序数据 --------
+
+/** 单时刻消纳与备用分析 */
+export interface TimePointAnalysis {
+  time: string
+  temperatureC: number             // 当前环境温度
+  outputKw: number                 // 正常光伏出力
+  degradedOutputKw: number         // 极端场景光伏出力
+  dropPct: number                  // 出力骤降比例
+  loadMw: number                   // 本地负荷
+  absorptionCapacityMw: number     // 电网消纳能力
+  actualAbsorptionMw: number       // 实际消纳量
+  absorptionRate: number           // 消纳率 (%)
+  absorptionGapMw: number          // 消纳缺口
+  backupNeededMw: number           // 备用容量需求
+}
+
+/** 分时段备用电源配置建议 */
+export interface BackupConfigSegment {
+  timeRange: string
+  loadMw: number
+  pvOutputMw: number
+  absorptionGapMw: number
+  backupRequiredMw: number
+  recommendedType: 'storage' | 'gas_turbine' | 'demand_response' | 'grid_import'
+  recommendedCapacityMw: number
+  recommendedDurationH: number
+}
+
+// -------- 报告 --------
+
+/** 电站基础信息 */
+export interface ScenarioStationInfo {
+  stationName: string
+  installedCapacityMw: number
+  gridConnectionVoltageKv: number
+  zone: string
+  busName: string
+  storagePowerMw: number
+  storageCapacityMwh: number
+}
+
+/** 策略分析 */
+export interface ScenarioStrategyAnalysis {
+  // 高温
+  cooling?: {
+    panelTempEstimate: string
+    inverterRiskPeriods: string
+    measures: string[]
+    expectedEffect: string
+  }
+  scheduling?: {
+    storageStrategy: string
+    pvLimitAdvice: string
+    loadShedAdvice: string
+    maintenanceAdvice: string
+  }
+  // 暴雨
+  protection?: {
+    waterproofAssessment: string
+    lineProtectionAdvice: string
+    drainageAdvice: string
+    emergencySupplies: string[]
+  }
+}
+
+/** 总结报告 */
+export interface ScenarioConclusion {
+  keyFindings: string[]
+  quantitativeMetrics: {
+    totalEnergyShortfallMwh: number
+    peakBackupRequiredMw: number
+    avgAbsorptionRate: number
+    maxAbsorptionGapMw: number
+  }
+  backupRecommendation: string
+  riskLevel: string
+  riskLevelLabel: string
+}
+
+/** 模拟数据分析 */
+export interface ScenarioDataAnalysis {
+  outputDrop: {
+    overallDropPct: number
+    peakDropHour: string
+    peakDropPct: number
+    worstPeriod: string
+  }
+  absorption: {
+    avgRate: number
+    minRate: number
+    minRateHour: string
+    avgCapacityMw: number
+  }
+  absorptionGap: {
+    maxGapMw: number
+    maxGapHour: string
+    totalShortfallMwh: number
+    gapPeriod: string
+  }
+  temperature?: {
+    maxTempC: number
+    maxTempHour: string
+    peakPanelTempC: number
+    highTempWindow: string
+  }
+  rainstorm?: {
+    maxIntensityMmh: number
+    cloudCoverPct: number
+    affectedHours: number
+    worstPeriod: string
+  }
+  backup: {
+    peakRequiredMw: number
+    peakRequiredHour: string
+    recommendedType: string
+    recommendedCapacityMw: number
+  }
+}
+
+/** 场景报告 */
+export interface ScenarioReport {
+  stationInfo: ScenarioStationInfo
+  scenarioParams: Record<string, string | number>
+  dataAnalysis: ScenarioDataAnalysis
+  strategyAnalysis: ScenarioStrategyAnalysis
+  conclusion: ScenarioConclusion
+}
+
+// -------- 模拟结果 --------
+
 export interface ExtremeScenarioResult {
   scenarioType: ExtremeScenarioType
+  stationInfo: ScenarioStationInfo
+  // 汇总指标
   outputDropPct: number
+  avgAbsorptionRate: number
+  maxAbsorptionGapMw: number
+  peakBackupRequiredMw: number
+  totalEnergyShortfallMwh: number
   absorptionCapacityChange: number
   backupCapacityRequired: number
-  recommendations: string[]
-  timeSeriesData: Array<{ time: string; outputKw: number; absorptionKw: number }>
+  // 数据
+  timeSeriesData: TimePointAnalysis[]
+  backupConfig: BackupConfigSegment[]
+  // 报告
+  report: ScenarioReport
 }
 
 // ==================== Carbon Emission ====================
@@ -92,12 +325,22 @@ export interface JointOutputData {
   storageChargeKw: number
   storageDischargeKw: number
   jointOutputKw: number
+  socKwh?: number
 }
 
 export interface JointOutputAnalysis {
-  plantId: string
+  stationId: string
   storageId: string
+  storageName?: string
+  ratedPowerKw?: number
+  ratedCapacityKwh?: number
   timeSeries: JointOutputData[]
+  pvFluctuationStdDev?: number
+  jointFluctuationStdDev?: number
+  fluctuationImprovementPct?: number
+  pvPeakValleyDiff?: number
+  jointPeakValleyDiff?: number
+  peakValleyImprovementPct?: number
   fluctuationStdDev: number
   peakValleyDiff: number
   peakShavingCapacityKw: number
@@ -128,12 +371,26 @@ export interface Equipment {
 
 export interface EquipmentCapacityResult {
   equipmentId: string
+  equipmentName: string
   equipmentType: EquipmentType
-  shortCircuitCurrent: number
-  throughCurrent: number
-  isOverloaded: boolean
+  modelNumber: string
+  manufacturer: string
+  ratedCapacityKva: number
+  ratedVoltageKv: number
+  ratedCurrentA: number
+  installationDate: string
+  designLifeYears: number
+  grade: string
+  status: string
+  stationId: string
+  stationName: string
+  stationCapacityMw: number
+  shortCircuitCurrentA: number
+  throughCurrentA: number
   loadRate: number
+  isOverloaded: boolean
   riskLevel: string
+  assessment: Record<string, any>
 }
 
 export interface EquipmentLifecycle {
@@ -151,6 +408,14 @@ export interface EquipmentLifecycle {
 export interface ReplacementPlan {
   equipmentId: string
   equipmentName: string
+  equipmentType?: string
+  plantName?: string
+  importance?: string
+  remainingLifePct?: number
+  designLifeYears?: number
+  currentAgeYears?: number
+  currentSoh?: number
+  cumulativeCycles?: number
   priority: number
   reason: string
   suggestedDate: string
@@ -168,29 +433,57 @@ export interface VoltageMeasurement {
 }
 
 export interface VoltageFluctuation {
-  pointId: string
-  timeSeries: Array<{ time: string; voltageV: number; fluctuationPct: number }>
+  stationId: string
+  stationName: string
+  nominalVoltageKv: number
+  windowMinutes: number
+  timeSeries: Array<VoltageFluctuationPoint>
+  alerts: Array<VoltageFluctuationAlert>
   maxFluctuationPct: number
   avgFluctuationPct: number
   thresholdViolations: number
-}
-
-export interface PowerSupplyReliability {
-  saifi: number    // System Average Interruption Frequency Index
-  saidi: number    // System Average Interruption Duration Index
-  theoreticalReliability: number
-  actualReliability: number
-  deviationPct: number
-  faultTreeNodes: FaultTreeNode[]
+  dataRange: { firstTime: string; lastTime: string }
 }
 
 export interface FaultTreeNode {
   id: string
-  label: string
-  type: 'root' | 'intermediate' | 'leaf'
-  failureRate: number
-  children?: FaultTreeNode[]
+  name: string
+  parent: string | null
+  failureRate?: number
+  mttr?: number
 }
+
+export interface ReliabilityContribution {
+  group: string
+  saifi: number
+  saidiPct: number
+}
+
+export interface MonthlyReliabilityComparison {
+  month: string
+  theoretical: number
+  actual: number | null
+  actualSAIDI: number | null
+}
+
+export interface PowerSupplyReliability {
+  stationId: string
+  stationName: string
+  voltageKv: number
+  topologyConfig: { connectionType: string; lineType: string }
+  faultTree: FaultTreeNode[]
+  saifi: number
+  saidi: number
+  theoreticalReliability: number
+  contributions: ReliabilityContribution[]
+  actualSAIFI: number
+  actualSAIDI: number
+  actualOutageCount: number
+  deviationPct: number | null
+  monthlyComparison: MonthlyReliabilityComparison[]
+}
+
+export interface ReliabilityQuery { stationId: string; startDate: string; endDate: string; connectionType?: string; lineType?: string }
 
 export interface VoltageQualification {
   regionId: string
@@ -215,4 +508,101 @@ export interface Alert {
   acknowledgedBy: string | null
   acknowledgedAt: string | null
   resolvedAt: string | null
+}
+
+// ==================== Power Quality Extensions ====================
+
+export interface VoltageFluctuationQuery {
+  pointId: string
+  startDate: string
+  endDate: string
+  windowMinutes?: number
+}
+
+export interface VoltageFluctuationPoint {
+  time: string
+  voltageKv: number
+  activePowerKw: number
+  loadKw: number
+  fluctuationPct: number
+}
+
+export interface VoltageFluctuationAlert {
+  time: string
+  level: string
+  title: string
+  fluctuationPct: number
+  activePowerKw: number
+  loadKw: number
+}
+
+export interface QualificationQuery { startDate: string; endDate: string; voltageLevel?: string }
+
+export interface QualificationLedgerItem {
+  zone: string
+  voltageLevel: string
+  period: string
+  totalHours: number
+  qualifiedHours: number
+  rate: number
+  violations: number
+}
+
+export interface QualificationTrendItem {
+  month: string
+  [zone: string]: number | string
+}
+
+export interface VoltageAnomalyPoint {
+  time: string
+  zone: string
+  rate: number
+  weather: string
+  pvStatus: string
+  loadStatus: string
+  rootCause: string
+  causeType: string
+}
+
+export interface EquipmentImpactItem {
+  id: string
+  device: string
+  type: string
+  ratedVoltage: string
+  surgeCount: number
+  sagCount: number
+  noramlTemp: number
+  surgeTemp: number
+  sagTemp: number
+  runYears: string
+  risk: string
+}
+
+export interface ComplaintStatsItem {
+  industry: string
+  complaints: number
+  lossEstimate: number
+  mainIssue: string
+}
+
+export interface HotspotItem {
+  zone: string
+  complaints: number
+  avgFluctuation: number
+  risk: string
+}
+
+export interface EventAnalysisResult {
+  event: any
+  primaryCause: string
+  probability: number
+  secondaryCauses: string[]
+  relatedEvents: any[]
+  preventiveMeasures: string[]
+}
+
+export interface AlertThreshold {
+  level: string
+  voltagePct: number
+  color: string
 }

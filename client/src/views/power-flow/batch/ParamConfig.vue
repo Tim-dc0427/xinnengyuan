@@ -57,7 +57,10 @@ const busPoints = computed(() => {
 
 const selectedCount = computed(() => selectedBusIds.value.length + selectedBranchIds.value.length)
 
+let syncingTable = false
+
 function handleBusSelect(rows: any[]) {
+  if (syncingTable) return
   selectedBusIds.value = rows.map((r: any) => r.id)
 }
 
@@ -69,6 +72,7 @@ function handleBranchSelect(rows: any[]) {
 watch(selectedBusIds, async () => {
   await nextTick()
   if (!busTableRef.value) return
+  syncingTable = true
   const table = busTableRef.value
   for (const row of filteredBuses.value) {
     const shouldBeSelected = selectedBusIds.value.includes(row.id)
@@ -77,6 +81,23 @@ watch(selectedBusIds, async () => {
       ;(table as any).toggleRowSelection(row, shouldBeSelected)
     }
   }
+  syncingTable = false
+})
+
+// 自动关联支路：选中节点后，自动选中与该节点相连的所有支路
+watch(selectedBusIds, (newIds) => {
+  const busIdSet = new Set(newIds)
+  if (busIdSet.size === 0) {
+    selectedBranchIds.value = []
+    return
+  }
+  const autoIds: string[] = []
+  for (const br of allBranches.value) {
+    if (busIdSet.has(br.from_bus_id) || busIdSet.has(br.to_bus_id)) {
+      if (!autoIds.includes(br.id)) autoIds.push(br.id)
+    }
+  }
+  selectedBranchIds.value = autoIds
 })
 
 async function loadData() {

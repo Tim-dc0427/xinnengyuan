@@ -20,11 +20,12 @@ export class PowerFlowController {
   getTaskResult = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getTaskResult(req.params.taskId) }) }
 
   // ==================== Batch Calculation ====================
-  submitBatchConfig = async (req: Request, res: Response) => { try { res.json({ code: 200, message: 'ok', data: await this.service.submitBatchConfig(req.body, req.user!.id) }) } catch (e: any) { res.status(500).json({ code: 500, message: e.message || '提交失败' }) } }
+  submitBatchConfig = async (req: Request, res: Response) => { try { res.json({ code: 200, message: 'ok', data: await this.service.submitBatchConfig(req.body, req.user!.id) }) } catch (e: any) { console.error('[submitBatchConfig]', e.message, e.stack); res.status(500).json({ code: 500, message: e.message || '提交失败' }) } }
   listBatches = async (req: Request, res: Response) => { try { res.json({ code: 200, message: 'ok', data: await this.service.listBatches(req.query as any) }) } catch (e: any) { res.status(500).json({ code: 500, message: e.message || '查询失败' }) } }
   getBatchGroup = async (req: Request, res: Response) => { try { res.json({ code: 200, message: 'ok', data: await this.service.getBatchGroup(req.params.groupId) }) } catch (e: any) { res.status(500).json({ code: 500, message: e.message || '查询失败' }) } }
   getBatchStatus = async (req: Request, res: Response) => { try { res.json({ code: 200, message: 'ok', data: await this.service.getBatchStatus(req.params.groupId) }) } catch (e: any) { res.status(500).json({ code: 500, message: e.message || '查询失败' }) } }
   cancelBatch = async (req: Request, res: Response) => { try { res.json({ code: 200, message: 'ok', data: await this.service.cancelBatch(req.params.groupId) }) } catch (e: any) { res.status(500).json({ code: 500, message: e.message || '取消失败' }) } }
+  deleteBatch = async (req: Request, res: Response) => { try { res.json({ code: 200, message: 'ok', data: await this.service.deleteBatch(req.params.groupId) }) } catch (e: any) { res.status(500).json({ code: 500, message: e.message || '删除失败' }) } }
   getBatchResults = async (req: Request, res: Response) => { try { res.json({ code: 200, message: 'ok', data: await this.service.getBatchResults(req.params.groupId) }) } catch (e: any) { res.status(500).json({ code: 500, message: e.message || '查询失败' }) } }
   exportBatchResults = async (req: Request, res: Response) => { try { res.json({ code: 200, message: 'ok', data: await this.service.exportBatchResults(req.params.groupId, req.query.format as string) }) } catch (e: any) { res.status(500).json({ code: 500, message: e.message || '导出失败' }) } }
 
@@ -72,9 +73,30 @@ export class PowerFlowController {
   getFeeders = async (_req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getFeeders() }) }
 
   // ==================== 4.3 在线计算 ====================
-  submitStandardPF = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.submitStandardPF(req.body, req.user!.id) }) }
-  submitReversePF = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.submitReversePF(req.body, req.user!.id) }) }
-  submitProbabilisticPF = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.submitProbabilisticPF(req.body, req.user!.id) }) }
+  submitStandardPF = async (req: Request, res: Response) => {
+    try {
+      res.json({ code: 200, message: 'ok', data: await this.service.submitStandardPF(req.body, req.user!.id) })
+    } catch (e: any) {
+      console.error('[submitStandardPF] error:', e.message, e.stack)
+      res.status(500).json({ code: 500, message: e.message || '提交失败', data: null })
+    }
+  }
+  submitReversePF = async (req: Request, res: Response) => {
+    try {
+      res.json({ code: 200, message: 'ok', data: await this.service.submitReversePF(req.body, req.user!.id) })
+    } catch (e: any) {
+      console.error('[submitReversePF] error:', e.message, e.stack)
+      res.status(500).json({ code: 500, message: e.message || '提交失败', data: null })
+    }
+  }
+  submitProbabilisticPF = async (req: Request, res: Response) => {
+    try {
+      res.json({ code: 200, message: 'ok', data: await this.service.submitProbabilisticPF(req.body, req.user!.id) })
+    } catch (e: any) {
+      console.error('[submitProbabilisticPF] error:', e.message, e.stack)
+      res.status(500).json({ code: 500, message: e.message || '提交失败', data: null })
+    }
+  }
   submitThreePhasePF = async (req: Request, res: Response) => {
     try {
       res.json({ code: 200, message: 'ok', data: await this.service.submitThreePhasePF(req.body, req.user!.id) })
