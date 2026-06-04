@@ -4,7 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   fetchCurveTemplates, createCurveTemplate, updateCurveTemplate, deleteCurveTemplate, rollbackCurveTemplate, fetchCurveTemplateVersionHistory,
   fetchConfidenceSettings, createConfidenceSetting, updateConfidenceSetting, deleteConfidenceSetting, rollbackConfidenceSetting, fetchConfidenceSettingVersionHistory,
-  fetchStationModels, createStationModel, updateStationModel, rollbackStationModel, exportStationModels, fetchStationModelVersionHistory,
+  fetchStationModels, createStationModel, updateStationModel, deleteStationModel, rollbackStationModel, exportStationModels, fetchStationModelVersionHistory,
   type CurveTemplate, type ConfidenceSetting, type StationModelParam,
 } from '@/api/model-params'
 import * as echarts from 'echarts'
@@ -194,6 +194,9 @@ async function handleRollback(row: any) {
 // ==================== 集中式光伏电站模型参数 ====================
 const stationList = ref<StationModelParam[]>([])
 const stationLoading = ref(false)
+const stationPage = ref(1)
+const stationPageSize = ref(10)
+const stationTotal = ref(0)
 const showStationDialog = ref(false)
 const editingStation = ref<StationModelParam | null>(null)
 const stationSelectedIds = ref<string[]>([])
@@ -233,11 +236,39 @@ function resetStationForm() {
 async function loadStationModels() {
   stationLoading.value = true
   try {
-    const { data } = await fetchStationModels()
-    stationList.value = data.data
+    const { data } = await fetchStationModels({ page: stationPage.value, pageSize: stationPageSize.value })
+    const result = data.data
+    if (result && result.rows) {
+      stationList.value = result.rows
+      stationTotal.value = result.total
+    } else {
+      // 兼容不分页返回
+      stationList.value = Array.isArray(result) ? result : (result?.rows || [])
+      stationTotal.value = stationList.value.length
+    }
   } finally {
     stationLoading.value = false
   }
+}
+
+function onStationPageChange(page: number) {
+  stationPage.value = page
+  loadStationModels()
+}
+
+function onStationPageSizeChange(size: number) {
+  stationPageSize.value = size
+  stationPage.value = 1
+  loadStationModels()
+}
+
+async function handleDeleteStation(row: StationModelParam) {
+  try {
+    await ElMessageBox.confirm(`确定删除模型「${row.model_name}」？`, '确认删除', { type: 'warning' })
+    await deleteStationModel(row.id)
+    ElMessage.success('已删除')
+    await loadStationModels()
+  } catch { /* cancelled */ }
 }
 
 function handleAddStation() {
@@ -339,13 +370,26 @@ onMounted(() => {
         <el-table-column label="防孤岛" width="70">
           <template #default="{ row }">{{ row.island_protection ? '是' : '否' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <el-button size="small" link type="primary" @click="handleEditStation(row)">编辑</el-button>
             <el-button size="small" link type="primary" @click="loadVersionHistory(row.root_id, 'station')">版本历史</el-button>
+            <el-button size="small" link type="danger" @click="handleDeleteStation(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
+      <div style="display:flex;justify-content:flex-end;margin-top:12px">
+        <el-pagination
+          v-model:current-page="stationPage"
+          v-model:page-size="stationPageSize"
+          :page-sizes="[10, 20, 50]"
+          :total="stationTotal"
+          layout="total, sizes, prev, pager, next"
+          size="small"
+          @current-change="onStationPageChange"
+          @size-change="onStationPageSizeChange"
+        />
+      </div>
     </div>
 
     <div class="grid-2">

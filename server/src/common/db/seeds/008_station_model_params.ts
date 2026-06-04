@@ -125,4 +125,71 @@ export async function seed(knex: Knex): Promise<void> {
   console.log('  ✓ 大型渔光互补电站模型 — 4个版本 (v1→v4)')
   console.log('  ✓ 中型山地集中式电站模型 — 3个版本 (v1→v3)')
   console.log('  ✓ 小型分布式电站模型 — 2个版本 (v1→v2)')
+
+  // ============================================================
+  // 9个实际电站各自专属模型（v1, is_active=1）
+  // 每个电站一条记录，参数按电压等级分档 + 面板类型微调
+  // ============================================================
+
+  interface StationModelSeed {
+    name: string
+    capacityMw: number
+    voltageKv: number
+    pf: number
+    efficiency: number
+    scr: number
+    mppt: string
+    lvrt: number
+    hvrt: number
+    ramp: number
+    designTemp: number
+    designIrradiance: number
+    humidity: number
+    altitude: number
+    soiling: number
+  }
+
+  const stationModels: StationModelSeed[] = [
+    // ---- 220kV 级（钱塘变3站）----
+    { name: '舒能渔光互补光伏项目',       capacityMw: 100, voltageKv: 220, pf: 0.93, efficiency: 78, scr: 1.5, mppt: 'P&O', lvrt: 1, hvrt: 0, ramp: 2.0, designTemp: 25, designIrradiance: 1000, humidity: 70, altitude: 5, soiling: 0.06 },
+    { name: '嘉达渔光互补光伏项目',       capacityMw: 400, voltageKv: 220, pf: 0.95, efficiency: 82.5, scr: 1.5, mppt: 'INC', lvrt: 1, hvrt: 1, ramp: 3.0, designTemp: 25, designIrradiance: 1000, humidity: 70, altitude: 5, soiling: 0.03 },
+    { name: '凌能渔光互补光伏项目',       capacityMw: 550, voltageKv: 220, pf: 0.95, efficiency: 83, scr: 1.5, mppt: 'INC', lvrt: 1, hvrt: 1, ramp: 3.0, designTemp: 25, designIrradiance: 1000, humidity: 70, altitude: 5, soiling: 0.03 },
+    // ---- 110kV 级（建德/临安3站）----
+    { name: '华洋山地光伏电站',           capacityMw: 155, voltageKv: 110, pf: 0.93, efficiency: 81, scr: 1.3, mppt: 'P&O', lvrt: 1, hvrt: 0, ramp: 1.5, designTemp: 20, designIrradiance: 950, humidity: 65, altitude: 200, soiling: 0.05 },
+    { name: '临安青山集中式光伏电站',     capacityMw: 60, voltageKv: 110, pf: 0.93, efficiency: 78, scr: 1.3, mppt: 'P&O', lvrt: 1, hvrt: 0, ramp: 1.5, designTemp: 25, designIrradiance: 950, humidity: 65, altitude: 80, soiling: 0.07 },
+    { name: '临安太湖源集中式光伏电站',   capacityMw: 40, voltageKv: 110, pf: 0.93, efficiency: 78, scr: 1.3, mppt: 'P&O', lvrt: 1, hvrt: 0, ramp: 1.5, designTemp: 25, designIrradiance: 950, humidity: 65, altitude: 80, soiling: 0.07 },
+    // ---- 10kV 级（余杭/萧山/富阳3站）----
+    { name: '径山镇宇航梦园渔光互补光伏项目', capacityMw: 5.44, voltageKv: 10, pf: 0.90, efficiency: 76, scr: 1.1, mppt: 'P&O', lvrt: 0, hvrt: 0, ramp: 0.5, designTemp: 25, designIrradiance: 900, humidity: 75, altitude: 80, soiling: 0.08 },
+    { name: '萧山南阳集中式光伏电站',     capacityMw: 50, voltageKv: 10, pf: 0.90, efficiency: 79, scr: 1.1, mppt: 'P&O', lvrt: 0, hvrt: 0, ramp: 0.5, designTemp: 25, designIrradiance: 900, humidity: 75, altitude: 50, soiling: 0.07 },
+    { name: '富阳渔山集中式光伏电站',     capacityMw: 30, voltageKv: 10, pf: 0.90, efficiency: 79, scr: 1.1, mppt: 'P&O', lvrt: 0, hvrt: 0, ramp: 0.5, designTemp: 25, designIrradiance: 900, humidity: 75, altitude: 50, soiling: 0.07 },
+  ]
+
+  for (const sm of stationModels) {
+    await knex('station_model_params').insert({
+      id: uuid(), root_id: uuid(), model_name: sm.name, version: 1, is_active: 1,
+      rated_capacity_mw: sm.capacityMw, rated_voltage_kv: sm.voltageKv,
+      power_factor: sm.pf, efficiency_pct: sm.efficiency, short_circuit_ratio: sm.scr,
+      mppt_algorithm: sm.mppt, power_limit_mode: 'fixed', ramp_rate_limit: sm.ramp,
+      lvrt_enabled: sm.lvrt, hvrt_enabled: sm.hvrt, island_protection: 1,
+      design_temp_c: sm.designTemp, design_irradiance: sm.designIrradiance,
+      design_humidity_pct: sm.humidity, altitude_m: sm.altitude, soiling_factor: sm.soiling,
+      modified_by: '系统初始化', change_summary: '从实际电站数据生成专属模型',
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    })
+  }
+
+  console.log('  ✓ 9个电站专属模型已创建')
+
+  // 回填 solar_pv_stations.model_id
+  for (const sm of stationModels) {
+    const model = await knex('station_model_params')
+      .where('model_name', sm.name).where('is_active', 1).first()
+    if (!model) continue
+    const station = await knex('solar_pv_stations')
+      .where('station_name', sm.name).first()
+    if (station) {
+      await knex('solar_pv_stations').where('id', station.id).update({ model_id: model.id })
+      console.log(`  ✓ ${sm.name} → model_id 已关联`)
+    }
+  }
 }

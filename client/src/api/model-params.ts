@@ -130,8 +130,8 @@ export interface StationModelParam {
   updated_at: string | null
 }
 
-export function fetchStationModels() {
-  return apiClient.get('/api/v1/power-flow/model-params/station-models')
+export function fetchStationModels(params?: { page?: number; pageSize?: number }) {
+  return apiClient.get('/api/v1/power-flow/model-params/station-models', { params })
 }
 
 export function fetchAllStationModels(rootId?: string) {
@@ -152,6 +152,10 @@ export function updateStationModel(id: string, data: any) {
 
 export function rollbackStationModel(id: string) {
   return apiClient.post(`/api/v1/power-flow/model-params/station-models/${id}/rollback`)
+}
+
+export function deleteStationModel(id: string) {
+  return apiClient.delete(`/api/v1/power-flow/model-params/station-models/${id}`)
 }
 
 export function exportStationModels(ids: string[]) {

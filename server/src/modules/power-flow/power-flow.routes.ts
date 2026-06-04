@@ -69,6 +69,7 @@ powerFlowRoutes.get('/model-params/station-models/compare', auth(['admin', 'plan
 powerFlowRoutes.get('/model-params/station-models/:id', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getStationModel)
 powerFlowRoutes.put('/model-params/station-models/:id', auth(['admin', 'planner']), ctrl.updateStationModel)
 powerFlowRoutes.post('/model-params/station-models/:id/rollback', auth(['admin']), ctrl.rollbackStationModel)
+powerFlowRoutes.delete('/model-params/station-models/:id', auth(['admin', 'planner']), ctrl.deleteStationModel)
 powerFlowRoutes.get('/model-params/station-models/:rootId/versions', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getStationModelVersionHistory)
 
 // Grid Topology Data

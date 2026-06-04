@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { submitReversePF, getTaskResult, fetchGridLoads, fetchGridBuses, fetchGridBranches, reuseHistoryParams } from '@/api/power-flow'
+import { fetchCurveTemplates, type CurveTemplate } from '@/api/model-params'
 import { ElMessage } from 'element-plus'
 import CalcProgress from '@/components/calculation/CalcProgress.vue'
 import ChartContainer from '@/components/common/ChartContainer.vue'
@@ -20,11 +21,37 @@ const feeder = useFeederSelection()
 const calcMode = ref<'single_project' | 'all_pv'>('all_pv')
 const selectedPVStationId = ref<string | null>(null)
 
-// 出力曲线（标幺值 0~1，12小时光伏出力特征）
-const pvOutputPu = [0, 0.04, 0.12, 0.29, 0.5, 0.75, 1.0, 0.92, 0.71, 0.46, 0.21, 0.07, 0]
+// 出力曲线（标幺值 0~1，13个时间点对应 6:00-18:00）
+const pvOutputPu = ref<number[]>([0, 0.04, 0.12, 0.29, 0.5, 0.75, 1.0, 0.92, 0.71, 0.46, 0.21, 0.07, 0])
 
-const imported = ref(false)
-function onImportClick() { imported.value = true }
+// 出力曲线模板
+const curveTemplates = ref<CurveTemplate[]>([])
+const weatherType = ref<'sunny' | 'cloudy' | 'rainy'>('sunny')
+
+// 从模板 24h 系数映射到 13 个时间点（6:00-18:00，每小时1点）
+function mapTemplateToPu(template: CurveTemplate): number[] {
+  const coeffs = JSON.parse(template.coefficients) as number[]
+  const result: number[] = []
+  for (let h = 6; h <= 18; h++) {
+    result.push(coeffs[h] ?? 0)
+  }
+  return result
+}
+
+function onWeatherTypeChange(type: 'sunny' | 'cloudy' | 'rainy') {
+  weatherType.value = type
+  const tpl = curveTemplates.value.find(t => t.weather_type === type)
+  if (tpl) {
+    pvOutputPu.value = mapTemplateToPu(tpl)
+  }
+}
+
+async function loadTemplates() {
+  const res = await fetchCurveTemplates()
+  curveTemplates.value = (res as any)?.data?.data || (res as any)?.data || []
+  // 默认选晴天模板
+  onWeatherTypeChange('sunny')
+}
 
 // 根据选中馈线自动确定的光伏电站列表
 const resolvedPVStations = computed(() => {
@@ -116,6 +143,7 @@ async function loadData() {
 
 onMounted(async () => {
   await loadData()
+  await loadTemplates()
   const tid = route.query.taskId as string
   if (tid) {
     taskId.value = tid
@@ -152,7 +180,7 @@ async function startCalculation() {
     const params: any = {
       feederIds: feeder.selectedFeederIds.value,
       mode: calcMode.value,
-      pvOutputPu: pvOutputPu,
+      pvOutputPu: pvOutputPu.value,
     }
     if (calcMode.value === 'single_project' && selectedPVStationId.value) {
       params.solarStationIds = [selectedPVStationId.value]
@@ -403,14 +431,19 @@ function branchRowStyle({ row }: any) {
     <div class="input-row">
       <div class="input-panel">
         <div class="panel-header">光伏出力曲线</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="font-size:12px;color:#606266">天气类型：</span>
+          <el-radio-group v-model="weatherType" size="small" @change="onWeatherTypeChange">
+            <el-radio-button value="sunny">晴天</el-radio-button>
+            <el-radio-button value="cloudy">多云</el-radio-button>
+            <el-radio-button value="rainy">雨天</el-radio-button>
+          </el-radio-group>
+        </div>
         <div class="curve-tags">
           <el-tag v-for="(v, i) in pvOutputPu" :key="i" size="small" :type="v > 0.6 ? 'danger' : v > 0.2 ? 'warning' : 'info'">
-            T+{{ i }}h: {{ (v * 100).toFixed(0) }}%
+            {{ 6 + i }}h: {{ (v * 100).toFixed(0) }}%
           </el-tag>
         </div>
-        <el-button size="small" :type="imported ? 'success' : 'default'" @click="onImportClick" style="margin-top:8px">
-          {{ imported ? '已导入' : '导入出力曲线' }}
-        </el-button>
       </div>
 
       <div class="input-panel">

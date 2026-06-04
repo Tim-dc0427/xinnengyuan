@@ -1286,8 +1286,28 @@ export class PowerFlowService {
   }
 
   // ==================== Station Model Params (集中式光伏电站模型) ====================
-  async listStationModels() {
-    return db('station_model_params').where('is_active', 1).orderBy('model_name', 'asc')
+  async listStationModels(query?: { page?: number; pageSize?: number }) {
+    const qb = db('station_model_params').where('is_active', 1)
+    const total = (await qb.clone().count('* as cnt').first())?.cnt as number || 0
+
+    if (query?.page && query?.pageSize) {
+      const offset = (query.page - 1) * query.pageSize
+      const rows = await qb.clone().orderBy('model_name', 'asc').offset(offset).limit(query.pageSize)
+      return { rows, total, page: query.page, pageSize: query.pageSize }
+    }
+
+    return qb.orderBy('model_name', 'asc')
+  }
+
+  async deleteStationModel(id: string, userId: string) {
+    const current = await db('station_model_params').where('id', id).first()
+    if (!current) throw new Error('电站模型参数未找到')
+    return db('station_model_params').where('id', id).update({
+      is_active: 0,
+      modified_by: userId,
+      change_summary: '标记删除',
+      updated_at: new Date().toISOString(),
+    })
   }
 
   async listAllStationModels(rootId?: string) {
@@ -2633,15 +2653,39 @@ export class PowerFlowService {
     // pvBusIds: undefined = 全部接入(兼容), [] = 不接入, [id...] = 只接入指定
     const pvBusIds = scenario.pvBusIds
 
-    const pvOutputByBus = new Map<string, { pvMw: number; installedCapacityMw: number }>()
+    // 非 actual 场景：批量加载模型参数
+    const modelParamsMap = new Map<string, { efficiencyPct: number; soilingFactor: number; powerFactor: number }>()
+    if (weatherScenario !== 'actual' && ratio !== undefined) {
+      const modelIds = [...new Set(stations.map(s => s.model_id).filter(Boolean))] as string[]
+      if (modelIds.length > 0) {
+        const models = await db('station_model_params')
+          .whereIn('id', modelIds).where('is_active', 1)
+          .select('id', 'efficiency_pct', 'soiling_factor', 'power_factor')
+        for (const m of models) {
+          modelParamsMap.set(m.id, {
+            efficiencyPct: m.efficiency_pct ?? 80,
+            soilingFactor: m.soiling_factor ?? 0.03,
+            powerFactor: m.power_factor ?? 0.93,
+          })
+        }
+      }
+    }
+
+    const pvOutputByBus = new Map<string, { pvMw: number; installedCapacityMw: number; powerFactor?: number }>()
     for (const st of stations) {
       if (pvBusIds !== undefined && !pvBusIds.includes(st.bus_id)) continue
 
       let pvMw: number
+      let powerFactor: number | undefined
       if (weatherScenario === 'actual' || ratio === undefined) {
         pvMw = (st.active_power_kw || 0) / 1000
       } else {
-        pvMw = st.installed_capacity_mw * ratio
+        // 场景模拟：从模型参数推算出力
+        const mp = st.model_id ? modelParamsMap.get(st.model_id) : undefined
+        const eff = (mp?.efficiencyPct ?? 80) / 100
+        const soiling = mp?.soilingFactor ?? 0.03
+        powerFactor = mp?.powerFactor
+        pvMw = st.installed_capacity_mw * eff * ratio * (1 - soiling)
       }
 
       const existing = pvOutputByBus.get(st.bus_id)
@@ -2667,12 +2711,16 @@ export class PowerFlowService {
 
     for (const [busId, pv] of pvOutputByBus) {
       const bus = input.buses.find(b => b.id === busId)
+      // 根据功率因数计算无功范围
+      const pf = pv.powerFactor ?? 0.93
+      const tanPhi = Math.tan(Math.acos(pf))
+      const qBase = pv.pvMw * tanPhi
       input.generators.push({
         busId,
         pgMw: pv.pvMw,
         vgKv: bus?.baseKv ?? 230,
-        qmaxMvar: pv.pvMw * 0.5,
-        qminMvar: -pv.pvMw * 0.3,
+        qmaxMvar: +(qBase * 1.2).toFixed(2),
+        qminMvar: +(-qBase * 0.5).toFixed(2),
         isPV: true,
         installedCapacityMw: pv.installedCapacityMw,
       })
@@ -2688,6 +2736,7 @@ export class PowerFlowService {
         'spv.id',
         'spv.station_name',
         'spv.bus_id',
+        'spv.model_id',
         'gb.name as bus_name',
         'spv.installed_capacity_mw',
         'm.active_power_kw',

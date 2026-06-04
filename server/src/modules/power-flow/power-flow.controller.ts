@@ -55,7 +55,12 @@ export class PowerFlowController {
   getConfidenceSettingVersionHistory = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getConfidenceSettingVersionHistory(req.params.rootId) }) }
 
   // ==================== Station Model Params (集中式光伏电站模型) ====================
-  listStationModels = async (_req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.listStationModels() }) }
+  listStationModels = async (req: Request, res: Response) => {
+    const page = req.query.page ? parseInt(req.query.page as string) : undefined
+    const pageSize = req.query.pageSize ? parseInt(req.query.pageSize as string) : undefined
+    res.json({ code: 200, message: 'ok', data: await this.service.listStationModels({ page, pageSize }) })
+  }
+  deleteStationModel = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.deleteStationModel(req.params.id, req.user!.id) }) }
   listAllStationModels = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.listAllStationModels(req.query.rootId as string) }) }
   getStationModel = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getStationModel(req.params.id) }) }
   createStationModel = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.createStationModel(req.body, req.user!.id) }) }
