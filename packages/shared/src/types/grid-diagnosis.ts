@@ -160,19 +160,17 @@ export interface ExtremeScenarioRequest {
 
 // -------- 时序数据 --------
 
-/** 单时刻消纳与备用分析 */
+/** 单时刻供需与备用分析 */
 export interface TimePointAnalysis {
   time: string
   temperatureC: number             // 当前环境温度
-  outputKw: number                 // 正常光伏出力
+  outputKw: number                 // 正常光伏出力（晴好天气预期）
   degradedOutputKw: number         // 极端场景光伏出力
-  dropPct: number                  // 出力骤降比例
+  dropPct: number                  // 出力骤降比例（%）
   loadMw: number                   // 本地负荷
-  absorptionCapacityMw: number     // 电网消纳能力
-  actualAbsorptionMw: number       // 实际消纳量
-  absorptionRate: number           // 消纳率 (%)
-  absorptionGapMw: number          // 消纳缺口
+  supplyGapMw: number              // 供需缺口（负荷-极端出力，正值=缺电需备用填补）
   backupNeededMw: number           // 备用容量需求
+  storageSupportHours: number      // 储能可支撑时长（当前SOC / 缺口功率）
 }
 
 /** 分时段备用电源配置建议 */
@@ -180,7 +178,7 @@ export interface BackupConfigSegment {
   timeRange: string
   loadMw: number
   pvOutputMw: number
-  absorptionGapMw: number
+  supplyGapMw: number
   backupRequiredMw: number
   recommendedType: 'storage' | 'gas_turbine' | 'demand_response' | 'grid_import'
   recommendedCapacityMw: number
@@ -230,8 +228,8 @@ export interface ScenarioConclusion {
   quantitativeMetrics: {
     totalEnergyShortfallMwh: number
     peakBackupRequiredMw: number
-    avgAbsorptionRate: number
-    maxAbsorptionGapMw: number
+    avgSupplyGuaranteeRate: number
+    maxSupplyGapMw: number
   }
   backupRecommendation: string
   riskLevel: string
@@ -246,13 +244,12 @@ export interface ScenarioDataAnalysis {
     peakDropPct: number
     worstPeriod: string
   }
-  absorption: {
+  supplyGuarantee: {
     avgRate: number
     minRate: number
     minRateHour: string
-    avgCapacityMw: number
   }
-  absorptionGap: {
+  supplyGap: {
     maxGapMw: number
     maxGapHour: string
     totalShortfallMwh: number
@@ -294,11 +291,10 @@ export interface ExtremeScenarioResult {
   stationInfo: ScenarioStationInfo
   // 汇总指标
   outputDropPct: number
-  avgAbsorptionRate: number
-  maxAbsorptionGapMw: number
+  avgSupplyGuaranteeRate: number
+  peakSupplyGapMw: number
   peakBackupRequiredMw: number
   totalEnergyShortfallMwh: number
-  absorptionCapacityChange: number
   backupCapacityRequired: number
   // 数据
   timeSeriesData: TimePointAnalysis[]

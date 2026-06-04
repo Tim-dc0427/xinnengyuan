@@ -393,51 +393,47 @@ export class GridDiagnosisService {
       rainPeakHour = rp.peakTimeHour
     }
 
-    // 场景下储能和外送降额
+    // 场景下储能降额
     let effectiveStorageMw = totalStorageMw
-    let effectiveExportMw = exportCapacityMw
-
     if (scenarioType === 'high_temperature') {
-      // 高温储能降额：温度超过35℃开始降额
       const storageDerate = Math.max(0, Math.min(0.25, (maxTemp - 35) * 0.008))
       effectiveStorageMw *= (1 - storageDerate)
-      // 线路载流量降额
-      const lineDerate = Math.max(0, Math.min(0.2, (maxTemp - 35) * 0.006))
-      effectiveExportMw *= (1 - lineDerate)
-    } else {
-      // 暴雨外送降额
-      const lineDerate = Math.min(0.3, rainfallMmh * 0.006)
-      effectiveExportMw *= (1 - lineDerate)
     }
 
-    const absorptionBase = effectiveStorageMw * 0.6 + effectiveExportMw * 0.4
-    const normalAbsorptionBase = totalStorageMw * 0.6 + exportCapacityMw * 0.4
-
     // ========== 3. 生成24小时时序 ==========
+    // 储能逐时模拟：初始SOC=80%（应急备妥状态），缺口先由储能填补，不够的才是净缺口
+    let socMwh = totalStorageMwh * 0.8
     const timeSeriesData: TimePointAnalysis[] = []
     for (let h = 0; h < 24; h++) {
-      // 温度曲线
+      // ===== 温度曲线：正弦波，最低温~5点，最高温~peakHour =====
+      // 基础正弦：midpoint + amplitude * sin((h-8)*π/12)
+      //   h=2(≈5点): sin(-π/2)=-1 → minTemp
+      //   h=8: sin(0)=0 → midpoint
+      //   h=14(peakHour): sin(π/2)=1 → maxTemp
+      //   h=20: sin(π)=0 → midpoint
+      let baseSin = Math.sin((h - 8) * Math.PI / 12)
       let tempC: number
-      const distToPeak = Math.abs(h - peakHour)
-      if (distToPeak <= durationHalf) {
-        tempC = maxTemp - (maxTemp - minTemp) * (distToPeak / durationHalf) ** 1.5
+      if (scenarioType === 'high_temperature') {
+        // 高温场景：用 sin^k 让峰值更尖锐（k>1压缩峰宽，更贴近极端高温日特点）
+        const sharpSin = Math.sign(baseSin) * Math.pow(Math.abs(baseSin), 2.2)
+        tempC = (maxTemp + minTemp) / 2 + (maxTemp - minTemp) / 2 * sharpSin
       } else {
-        const decay = (distToPeak - durationHalf) / Math.max(1, 24 - peakHour - durationHalf)
-        tempC = minTemp + (maxTemp - minTemp) * Math.exp(-decay * 2) * 0.15
+        // 暴雨场景：标准正弦即可
+        tempC = (maxTemp + minTemp) / 2 + (maxTemp - minTemp) / 2 * baseSin
       }
 
       // 光伏基础曲线
       const solarCurve = h >= 6 && h <= 18 ? Math.sin(((h - 6) / 12) * Math.PI) : 0
       const normalOutput = +(capacityMw * solarCurve).toFixed(2)
 
-      // 光伏出力降额
+      // ===== 光伏出力降额 =====
+      // 面板温度 = 环境温度 + 辐照温升（辐照越强温升越大，最高约28℃）
+      const panelTemp = tempC + solarCurve * 28
       let degradedOutput: number
       if (scenarioType === 'high_temperature') {
-        // 面板温度 > 环境温度（辐照越强温差越大）
-        const panelTemp = tempC + solarCurve * 28
-        // 温度损失：超过25℃标准温度后每度损失 pvTempCoeffPct%
+        // 温度损失：超过25℃标准测试温度后每度损失 pvTempCoeffPct%
         const tempLoss = pvTempCoeffPct / 100 * Math.max(0, panelTemp - 25)
-        // 逆变器降额：面板温度超过50℃开始
+        // 逆变器降额：面板温度超过50℃开始，上限15%
         const inverterDerate = panelTemp > 50 ? Math.min(0.15, (panelTemp - 50) * 0.005) : 0
         degradedOutput = +(normalOutput * (1 - tempLoss) * (1 - inverterDerate)).toFixed(2)
       } else {
@@ -456,14 +452,30 @@ export class GridDiagnosisService {
       const ld = hourlyLoad.get(h)
       const loadMw = ld ? +(ld.sum / ld.count).toFixed(2) : 0
 
-      // 消纳
-      const absorptionCapacityMw = +(loadMw + absorptionBase).toFixed(2)
-      const actualAbsorptionMw = Math.min(degradedOutput, absorptionCapacityMw)
-      const absorptionRate = degradedOutput > 0
-        ? +Math.min(100, (actualAbsorptionMw / degradedOutput) * 100).toFixed(2) : 100
-      const absorptionGapMw = +Math.max(0, +(degradedOutput - absorptionCapacityMw).toFixed(2)).toFixed(2)
+      // 供需缺口：负荷 - 极端出力，正值=缺电
+      const degradedOutputMw = degradedOutput
+      const rawGapMw = +(loadMw - degradedOutputMw).toFixed(2)
+
+      // 储能行为：缺电时放电填补，有余量时充电
+      let storageDischargeMw = 0
+      let netGapMw: number
+      if (rawGapMw > 0 && socMwh > 0) {
+        // 缺电 → 储能放电，放电量 = min(缺口, 额定功率, 剩余电量)
+        storageDischargeMw = Math.min(rawGapMw, effectiveStorageMw, socMwh)
+        storageDischargeMw = +storageDischargeMw.toFixed(2)
+        socMwh -= storageDischargeMw
+        netGapMw = +(rawGapMw - storageDischargeMw).toFixed(2)
+      } else if (rawGapMw < 0 && socMwh < totalStorageMwh) {
+        // 有余量且储能未满 → 充电
+        const chargeMw = Math.min(-rawGapMw, effectiveStorageMw * 0.8, totalStorageMwh - socMwh)
+        storageDischargeMw = -(+chargeMw.toFixed(2))
+        socMwh += chargeMw
+        netGapMw = 0
+      } else {
+        netGapMw = Math.max(0, rawGapMw)
+      }
       const safetyMarginMw = loadMw * 0.05
-      const backupNeededMw = +(absorptionGapMw + safetyMarginMw).toFixed(2)
+      const backupNeededMw = netGapMw > 0 ? +(netGapMw + safetyMarginMw).toFixed(2) : 0
 
       timeSeriesData.push({
         time: `${String(h).padStart(2, '0')}:00`,
@@ -472,11 +484,9 @@ export class GridDiagnosisService {
         degradedOutputKw: degradedOutput,
         dropPct,
         loadMw,
-        absorptionCapacityMw,
-        actualAbsorptionMw,
-        absorptionRate,
-        absorptionGapMw,
+        supplyGapMw: netGapMw,
         backupNeededMw,
+        storageSupportHours: 0, // 汇总后计算
       })
     }
 
@@ -485,20 +495,25 @@ export class GridDiagnosisService {
     const totalDegraded = timeSeriesData.reduce((s, d) => s + d.degradedOutputKw, 0)
     const overallDropPct = totalNormal > 0
       ? +(((totalNormal - totalDegraded) / totalNormal) * 100).toFixed(2) : 0
-    const avgAbsorptionRate = timeSeriesData.length > 0
-      ? +(timeSeriesData.reduce((s, d) => s + d.absorptionRate, 0) / timeSeriesData.length).toFixed(2) : 0
-    const maxAbsorptionGapMw = +Math.max(...timeSeriesData.map(d => d.absorptionGapMw)).toFixed(2)
+    // 供电保障率：极端出力覆盖负荷的时段比例
+    const supplyGuaranteeCount = timeSeriesData.filter(d => d.supplyGapMw <= 0).length
+    const avgSupplyGuaranteeRate = timeSeriesData.length > 0
+      ? +((supplyGuaranteeCount / timeSeriesData.length) * 100).toFixed(2) : 0
+    const peakSupplyGapMw = +Math.max(...timeSeriesData.map(d => d.supplyGapMw)).toFixed(2)
     const peakBackupMw = +Math.max(...timeSeriesData.map(d => d.backupNeededMw)).toFixed(2)
+    // 总缺电量：所有供需缺口（正值）之和
     const totalEnergyShortfallMwh = +(
-      timeSeriesData.reduce((s, d) => s + d.absorptionGapMw, 0)
+      timeSeriesData.reduce((s, d) => s + Math.max(0, d.supplyGapMw), 0)
     ).toFixed(2)
-    const totalNormalAbsorption = timeSeriesData.reduce(
-      (s, d) => s + d.loadMw + normalAbsorptionBase, 0,
-    )
-    const totalExtremeAbsorption = timeSeriesData.reduce(
-      (s, d) => s + d.absorptionCapacityMw, 0,
-    )
-    const absorptionCapacityChange = +(totalExtremeAbsorption - totalNormalAbsorption).toFixed(2)
+    // 储能支撑时长：基于实际放电量计算
+    const totalDischargedMwh = +(totalStorageMwh * 0.8 - socMwh).toFixed(2)
+    const storageSupportHours = totalStorageMw > 0 && peakSupplyGapMw > 0
+      ? +(totalDischargedMwh / peakSupplyGapMw).toFixed(1)
+      : totalStorageMw > 0 ? 99 : 0
+    // 回填 storageSupportHours 到时序数据
+    for (const d of timeSeriesData) {
+      d.storageSupportHours = storageSupportHours
+    }
 
     // ========== 5. 分时段备用配置 ==========
     const backupConfig: BackupConfigSegment[] = []
@@ -515,8 +530,8 @@ export class GridDiagnosisService {
       if (pts.length === 0) continue
       const avgLoad = +(pts.reduce((s, p) => s + p.loadMw, 0) / pts.length).toFixed(2)
       const avgPv = +(pts.reduce((s, p) => s + p.degradedOutputKw, 0) / pts.length).toFixed(2)
-      const avgGap = +(pts.reduce((s, p) => s + p.absorptionGapMw, 0) / pts.length).toFixed(2)
-      const maxGap = +Math.max(...pts.map(p => p.absorptionGapMw)).toFixed(2)
+      const avgGap = +(pts.reduce((s, p) => s + Math.max(0, p.supplyGapMw), 0) / pts.length).toFixed(2)
+      const maxGap = +Math.max(...pts.map(p => Math.max(0, p.supplyGapMw))).toFixed(2)
 
       let recType: BackupConfigSegment['recommendedType']
       let recDuration: number
@@ -533,7 +548,7 @@ export class GridDiagnosisService {
         timeRange: block.label,
         loadMw: avgLoad,
         pvOutputMw: avgPv,
-        absorptionGapMw: avgGap,
+        supplyGapMw: avgGap,
         backupRequiredMw: +(maxGap * 1.15 + avgLoad * 0.05).toFixed(2),
         recommendedType: recType,
         recommendedCapacityMw: +(maxGap * 1.2).toFixed(2),
@@ -584,7 +599,7 @@ export class GridDiagnosisService {
           expectedEffect: `采取主动散热措施后，预计面板工作温度可降低 ${(peakPanelTemp * 0.08).toFixed(1)}~${(peakPanelTemp * 0.12).toFixed(1)}℃，出力损失减少约 ${(pvTempCoeffPct * 3).toFixed(1)}~${(pvTempCoeffPct * 5).toFixed(1)} 个百分点`,
         },
         scheduling: {
-          storageStrategy: `高温预警日${String(riskStart).padStart(2, '0')}:00前将储能SOC充至90%以上，${String(riskStart).padStart(2, '0')}:00-${String(riskEnd).padStart(2, '0')}:00 储能放电支撑消纳缺口，每次放电不超过额定功率${effectiveStorageMw.toFixed(0)}MW`,
+          storageStrategy: `高温预警日${String(riskStart).padStart(2, '0')}:00前将储能SOC充至90%以上，${String(riskStart).padStart(2, '0')}:00-${String(riskEnd).padStart(2, '0')}:00 储能放电填补供需缺口，每次放电不超过额定功率${effectiveStorageMw.toFixed(0)}MW`,
           pvLimitAdvice: `建议将光伏出力上限设置在 ${(capacityMw * 0.85).toFixed(0)}MW 以内（额定${capacityMw}MW的85%），避免逆变器因过热保护跳闸`,
           loadShedAdvice: `将可中断负荷调度至 ${String(riskStart).padStart(2, '0')}:00-${String(riskEnd).padStart(2, '0')}:00 高温窗口，预计可削减 ${(capacityMw * 0.08).toFixed(1)}MW 净负荷`,
           maintenanceAdvice: `将设备检修安排在高温预警时段（${String(riskStart).padStart(2, '0')}:00-${String(riskEnd).padStart(2, '0')}:00），减少强迫停运风险`,
@@ -593,12 +608,12 @@ export class GridDiagnosisService {
 
       keyFindings = [
         `高温（${maxTemp}℃）导致光伏出力较正常日下降${overallDropPct}%，午间${String(riskStart).padStart(2, '0')}:00-${String(riskEnd).padStart(2, '0')}:00为出力骤降最严重时段`,
-        `电网消纳能力下降${Math.abs(absorptionCapacityChange).toFixed(1)}MW，最大消纳缺口${maxAbsorptionGapMw}MW，全天累计缺电${totalEnergyShortfallMwh}MWh`,
+        `最大供需缺口${peakSupplyGapMw}MW，供电保障率${avgSupplyGuaranteeRate}%，全天累计缺电${totalEnergyShortfallMwh}MWh，储能可支撑约${storageSupportHours}小时`,
         `峰值备用容量需求${peakBackupMw}MW，推荐${backupConfig.find(b => b.recommendedType === 'gas_turbine') ? '储能+' + backupConfig.find(b => b.recommendedType === 'gas_turbine')!.recommendedCapacityMw.toFixed(1) + 'MW燃气轮机组合' : '储能系统为主'}`,
       ]
 
-      riskLevel = maxAbsorptionGapMw > 10 || overallDropPct > 20 ? 'high'
-        : maxAbsorptionGapMw > 5 || overallDropPct > 10 ? 'medium' : 'low'
+      riskLevel = peakSupplyGapMw > 10 || overallDropPct > 20 ? 'high'
+        : peakSupplyGapMw > 5 || overallDropPct > 10 ? 'medium' : 'low'
       riskLevelLabel = { high: '高风险', medium: '中风险', low: '低风险' }[riskLevel] || '中风险'
     } else {
       scenarioSummary['场景类型'] = '暴雨极端场景'
@@ -627,7 +642,7 @@ export class GridDiagnosisService {
 
       keyFindings = [
         `暴雨（${rainfallMmh}mm/h，持续${rainDurationH}h）导致光伏出力较正常日下降${overallDropPct}%，${String(Math.floor(rainStart)).padStart(2, '0')}:00-${String(Math.ceil(rainEnd)).padStart(2, '0')}:00为影响最严重时段`,
-        `外送通道受限${(effectiveExportMw < exportCapacityMw ? ((1 - effectiveExportMw / exportCapacityMw) * 100).toFixed(0) : '0')}%，电网消纳能力下降${Math.abs(absorptionCapacityChange).toFixed(1)}MW`,
+        `最大供需缺口${peakSupplyGapMw}MW，供电保障率${avgSupplyGuaranteeRate}%，全天累计缺电${totalEnergyShortfallMwh}MWh，储能可支撑约${storageSupportHours}小时`,
         `峰值备用容量需求${peakBackupMw}MW，建议配置${(peakBackupMw * 1.2).toFixed(1)}MW储能应急备用`,
       ]
 
@@ -641,11 +656,11 @@ export class GridDiagnosisService {
       quantitativeMetrics: {
         totalEnergyShortfallMwh,
         peakBackupRequiredMw: peakBackupMw,
-        avgAbsorptionRate,
-        maxAbsorptionGapMw,
+        avgSupplyGuaranteeRate,
+        maxSupplyGapMw: peakSupplyGapMw,
       },
       backupRecommendation: peakBackupMw > 2
-        ? `建议配置${(peakBackupMw * 1.2).toFixed(1)}MW备用电源（储能${(totalStorageMwh / 4).toFixed(1)}MWh + 燃气轮机${(maxAbsorptionGapMw * 1.2).toFixed(1)}MW组合），保障极端场景下供电可靠性`
+        ? `建议配置${(peakBackupMw * 1.2).toFixed(1)}MW备用电源（储能${(totalStorageMwh / 4).toFixed(1)}MWh + 燃气轮机${(peakSupplyGapMw * 1.2).toFixed(1)}MW组合），保障极端场景下供电可靠性`
         : `当前系统备用充足，建议维持${totalStorageMwh.toFixed(1)}MWh储能配置，加强日常运维即可`,
       riskLevel,
       riskLevelLabel,
@@ -653,14 +668,14 @@ export class GridDiagnosisService {
 
     // ========== 数据分析 ==========
     const peakDropPoint = timeSeriesData.reduce((a, b) => b.dropPct > a.dropPct ? b : a)
-    const maxGapPoint = timeSeriesData.reduce((a, b) => b.absorptionGapMw > a.absorptionGapMw ? b : a)
-    const minRatePoint = timeSeriesData.reduce((a, b) => b.absorptionRate < a.absorptionRate ? b : a)
+    const maxGapPoint = timeSeriesData.reduce((a, b) => b.supplyGapMw > a.supplyGapMw ? b : a)
+    const minRatePoint = timeSeriesData.reduce((a, b) => b.supplyGapMw < a.supplyGapMw ? b : a)
     const maxTempPoint = timeSeriesData.reduce((a, b) => b.temperatureC > a.temperatureC ? b : a)
     const maxBackupPoint = timeSeriesData.reduce((a, b) => b.backupNeededMw > a.backupNeededMw ? b : a)
-    const gapStart = timeSeriesData.findIndex(d => d.absorptionGapMw > 1)
-    const gapEnd = timeSeriesData.length - 1 - [...timeSeriesData].reverse().findIndex(d => d.absorptionGapMw > 1)
+    const gapStart = timeSeriesData.findIndex(d => d.supplyGapMw > 1)
+    const gapEnd = timeSeriesData.length - 1 - [...timeSeriesData].reverse().findIndex(d => d.supplyGapMw > 1)
     const gapPeriod = gapStart >= 0 && gapEnd > gapStart
-      ? `${timeSeriesData[gapStart].time}-${timeSeriesData[gapEnd].time}` : '无消纳缺口'
+      ? `${timeSeriesData[gapStart].time}-${timeSeriesData[gapEnd].time}` : '无供需缺口'
 
     const dataAnalysis: ScenarioDataAnalysis = {
       outputDrop: {
@@ -670,14 +685,13 @@ export class GridDiagnosisService {
         worstPeriod: `${[timeSeriesData[6], timeSeriesData[7], timeSeriesData[12], timeSeriesData[13]]
           .sort((a, b) => b.dropPct - a.dropPct)[0].time} 前后`,
       },
-      absorption: {
-        avgRate: avgAbsorptionRate,
-        minRate: minRatePoint.absorptionRate,
+      supplyGuarantee: {
+        avgRate: avgSupplyGuaranteeRate,
+        minRate: minRatePoint.supplyGapMw > 0 ? 0 : 100,
         minRateHour: minRatePoint.time,
-        avgCapacityMw: +(timeSeriesData.reduce((s, d) => s + d.absorptionCapacityMw, 0) / timeSeriesData.length).toFixed(2),
       },
-      absorptionGap: {
-        maxGapMw: maxAbsorptionGapMw,
+      supplyGap: {
+        maxGapMw: peakSupplyGapMw,
         maxGapHour: maxGapPoint.time,
         totalShortfallMwh: totalEnergyShortfallMwh,
         gapPeriod,
@@ -701,7 +715,7 @@ export class GridDiagnosisService {
         peakRequiredMw: peakBackupMw,
         peakRequiredHour: maxBackupPoint.time,
         recommendedType: scenarioType === 'high_temperature'
-          ? (maxAbsorptionGapMw > 5 ? '燃气轮机+储能' : '储能系统')
+          ? (peakSupplyGapMw > 5 ? '燃气轮机+储能' : '储能系统')
           : '储能应急备用',
         recommendedCapacityMw: +(peakBackupMw * 1.2).toFixed(1),
       },
@@ -719,11 +733,10 @@ export class GridDiagnosisService {
       scenarioType,
       stationInfo,
       outputDropPct: overallDropPct,
-      avgAbsorptionRate,
-      maxAbsorptionGapMw,
+      avgSupplyGuaranteeRate,
+      peakSupplyGapMw,
       peakBackupRequiredMw: peakBackupMw,
       totalEnergyShortfallMwh,
-      absorptionCapacityChange,
       backupCapacityRequired: peakBackupMw,
       timeSeriesData,
       backupConfig,
@@ -2162,10 +2175,10 @@ export class GridDiagnosisService {
     children.push(
       new Paragraph({ children: [new TextRun({ text: '出力骤降分析：', bold: true })] }),
       new Paragraph({ text: `  全天出力平均骤降 ${da.outputDrop.overallDropPct}%，最大骤降发生在 ${da.outputDrop.peakDropHour}（${da.outputDrop.peakDropPct}%），最严重时段 ${da.outputDrop.worstPeriod}` }),
-      new Paragraph({ children: [new TextRun({ text: '消纳能力分析：', bold: true })] }),
-      new Paragraph({ text: `  全天平均消纳率 ${da.absorption.avgRate}%，最低消纳率 ${da.absorption.minRateHour}（${da.absorption.minRate}%），系统平均消纳能力 ${da.absorption.avgCapacityMw} MW` }),
-      new Paragraph({ children: [new TextRun({ text: '消纳缺口分析：', bold: true })] }),
-      new Paragraph({ text: `  最大消纳缺口 ${da.absorptionGap.maxGapMw} MW（${da.absorptionGap.maxGapHour}），全天累计缺电量 ${da.absorptionGap.totalShortfallMwh} MWh，缺口时段 ${da.absorptionGap.gapPeriod}` }),
+      new Paragraph({ children: [new TextRun({ text: '供电保障分析：', bold: true })] }),
+      new Paragraph({ text: `  全天供电保障率 ${da.supplyGuarantee.avgRate}%，供电最紧张时段 ${da.supplyGuarantee.minRateHour}` }),
+      new Paragraph({ children: [new TextRun({ text: '供需缺口分析：', bold: true })] }),
+      new Paragraph({ text: `  最大供需缺口 ${da.supplyGap.maxGapMw} MW（${da.supplyGap.maxGapHour}），全天累计缺电量 ${da.supplyGap.totalShortfallMwh} MWh，缺口时段 ${da.supplyGap.gapPeriod}` }),
       new Paragraph({ children: [new TextRun({ text: '备用需求分析：', bold: true })] }),
       new Paragraph({ text: `  峰值备用需求 ${da.backup.peakRequiredMw} MW（${da.backup.peakRequiredHour}），推荐 ${da.backup.recommendedType} 配置 ${da.backup.recommendedCapacityMw} MW` }),
     )
@@ -2231,8 +2244,8 @@ export class GridDiagnosisService {
     children.push(new Paragraph({ children: [new TextRun({ text: '量化指标：', bold: true })] }))
     children.push(new Paragraph({ text: `  总缺电量：${c.quantitativeMetrics.totalEnergyShortfallMwh} MWh` }))
     children.push(new Paragraph({ text: `  峰值备用需求：${c.quantitativeMetrics.peakBackupRequiredMw} MW` }))
-    children.push(new Paragraph({ text: `  平均消纳率：${c.quantitativeMetrics.avgAbsorptionRate}%` }))
-    children.push(new Paragraph({ text: `  最大消纳缺口：${c.quantitativeMetrics.maxAbsorptionGapMw} MW` }))
+    children.push(new Paragraph({ text: `  供电保障率：${c.quantitativeMetrics.avgSupplyGuaranteeRate}%` }))
+    children.push(new Paragraph({ text: `  最大供需缺口：${c.quantitativeMetrics.maxSupplyGapMw} MW` }))
     children.push(new Paragraph({ text: '', spacing: { after: 100 } }))
     children.push(new Paragraph({ text: `备用电源配置建议：${c.backupRecommendation}` }))
     children.push(new Paragraph({ text: `综合风险评级：${c.riskLevelLabel}` }))
@@ -2284,10 +2297,10 @@ export class GridDiagnosisService {
     doc.fontSize(10)
     doc.font('Helvetica-Bold').text('出力骤降分析：')
     doc.font('Helvetica').text(`  全天出力平均骤降 ${da.outputDrop.overallDropPct}%，最大骤降发生在 ${da.outputDrop.peakDropHour}（${da.outputDrop.peakDropPct}%），最严重时段 ${da.outputDrop.worstPeriod}`)
-    doc.font('Helvetica-Bold').text('消纳能力分析：')
-    doc.font('Helvetica').text(`  全天平均消纳率 ${da.absorption.avgRate}%，最低消纳率 ${da.absorption.minRateHour}（${da.absorption.minRate}%），系统平均消纳能力 ${da.absorption.avgCapacityMw} MW`)
-    doc.font('Helvetica-Bold').text('消纳缺口分析：')
-    doc.font('Helvetica').text(`  最大消纳缺口 ${da.absorptionGap.maxGapMw} MW（${da.absorptionGap.maxGapHour}），全天累计缺电量 ${da.absorptionGap.totalShortfallMwh} MWh，缺口时段 ${da.absorptionGap.gapPeriod}`)
+    doc.font('Helvetica-Bold').text('供电保障分析：')
+    doc.font('Helvetica').text(`  全天供电保障率 ${da.supplyGuarantee.avgRate}%，供电最紧张时段 ${da.supplyGuarantee.minRateHour}`)
+    doc.font('Helvetica-Bold').text('供需缺口分析：')
+    doc.font('Helvetica').text(`  最大供需缺口 ${da.supplyGap.maxGapMw} MW（${da.supplyGap.maxGapHour}），全天累计缺电量 ${da.supplyGap.totalShortfallMwh} MWh，缺口时段 ${da.supplyGap.gapPeriod}`)
     if (da.temperature) {
       doc.font('Helvetica-Bold').text('温度分析：')
       doc.font('Helvetica').text(`  最高环境温度 ${da.temperature.maxTempC}℃（${da.temperature.maxTempHour}），光伏面板峰值温度约 ${da.temperature.peakPanelTempC}℃，高温窗口 ${da.temperature.highTempWindow}`)
@@ -2345,8 +2358,8 @@ export class GridDiagnosisService {
     doc.text('量化指标：')
     doc.text(`  总缺电量：${c.quantitativeMetrics.totalEnergyShortfallMwh} MWh`)
     doc.text(`  峰值备用需求：${c.quantitativeMetrics.peakBackupRequiredMw} MW`)
-    doc.text(`  平均消纳率：${c.quantitativeMetrics.avgAbsorptionRate}%`)
-    doc.text(`  最大消纳缺口：${c.quantitativeMetrics.maxAbsorptionGapMw} MW`)
+    doc.text(`  供电保障率：${c.quantitativeMetrics.avgSupplyGuaranteeRate}%`)
+    doc.text(`  最大供需缺口：${c.quantitativeMetrics.maxSupplyGapMw} MW`)
     doc.moveDown(0.3)
     doc.text(`备用电源配置建议：${c.backupRecommendation}`)
     doc.text(`综合风险评级：${c.riskLevelLabel}`)

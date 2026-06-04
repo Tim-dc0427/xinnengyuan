@@ -107,13 +107,13 @@ async function downloadReport(format: 'word' | 'pdf') {
   }
 }
 
-// 主图: 温度 + 出力 + 负荷 + 消纳 + 缺口 (双Y轴)
+// 主图: 出力对比 + 负荷 + 供需缺口 + 环境温度 + 面板温度(双Y轴)
 const mainChartOption = computed(() => {
   if (!result.value) return {}
   const d = result.value.timeSeriesData
   return {
     tooltip: { trigger: 'axis' },
-    legend: { data: ['正常出力', '极端出力', '本地负荷', '消纳能力', '消纳缺口', '环境温度'] },
+    legend: { data: ['正常出力', '极端出力', '本地负荷', '供需缺口', '环境温度'] },
     xAxis: { type: 'category', data: d.map(p => p.time), name: '时间' },
     yAxis: [
       { type: 'value', name: 'MW' },
@@ -123,8 +123,7 @@ const mainChartOption = computed(() => {
       { name: '正常出力', type: 'line', smooth: true, data: d.map(p => p.outputKw), lineStyle: { width: 1, type: 'dashed' }, itemStyle: { color: '#91cc75' } },
       { name: '极端出力', type: 'line', smooth: true, data: d.map(p => p.degradedOutputKw), areaStyle: { opacity: 0.08 }, itemStyle: { color: '#ee6666' } },
       { name: '本地负荷', type: 'line', smooth: true, data: d.map(p => p.loadMw), itemStyle: { color: '#5470c6' } },
-      { name: '消纳能力', type: 'line', smooth: true, data: d.map(p => p.absorptionCapacityMw), lineStyle: { type: 'dotted', width: 2 }, itemStyle: { color: '#fac858' } },
-      { name: '消纳缺口', type: 'bar', data: d.map(p => p.absorptionGapMw), itemStyle: { color: '#fc8452' }, barWidth: '60%' },
+      { name: '供需缺口', type: 'bar', data: d.map(p => p.supplyGapMw > 0 ? +p.supplyGapMw.toFixed(2) : 0), itemStyle: { color: '#fc8452' }, barWidth: '60%' },
       { name: '环境温度', type: 'line', yAxisIndex: 1, smooth: true, data: d.map(p => p.temperatureC), itemStyle: { color: '#ff7875' } },
     ],
   }
@@ -227,23 +226,10 @@ loadStations()
       </div>
     </div>
 
-    <!-- 主图: 温度+出力+负荷+消纳+缺口 -->
+    <!-- 主图: 温度+出力+负荷+供需缺口 -->
     <div v-if="result" class="chart-panel" style="margin-bottom:16px">
       <div class="chart-panel-title" style="font-size:14px">极端场景模拟结果</div>
       <ChartContainer :option="mainChartOption" height="420px" :loading="loading" />
-    </div>
-
-    <!-- 备用容量需求 -->
-    <div v-if="result" class="chart-panel" style="margin-bottom:16px">
-      <div class="chart-panel-title" style="font-size:14px">备用容量需求</div>
-      <div style="display:flex;gap:32px;flex-wrap:wrap;font-size:13px;color:#606266;padding:4px 0;align-items:center">
-        <span>峰值备用需求：<b style="color:#f56c6c;font-size:18px">{{ result.peakBackupRequiredMw }} MW</b></span>
-        <span>总缺电量：<b style="color:#303133">{{ result.totalEnergyShortfallMwh }} MWh</b></span>
-        <span>推荐备用电源：<b style="color:#303133">{{ result.report.conclusion.backupRecommendation }}</b></span>
-        <span>风险评级：
-          <b :style="{ color: result.report.conclusion.riskLevel === 'high' ? '#f56c6c' : result.report.conclusion.riskLevel === 'medium' ? '#e6a23c' : '#67c23a' }">{{ result.report.conclusion.riskLevelLabel }}</b>
-        </span>
-      </div>
     </div>
 
     <!-- 24h 时序详表 -->
@@ -266,17 +252,9 @@ loadStations()
         <el-table-column label="负荷(MW)" width="85">
           <template #default="{ row }">{{ row.loadMw }}</template>
         </el-table-column>
-        <el-table-column label="消纳能力(MW)" width="100">
-          <template #default="{ row }">{{ row.absorptionCapacityMw }}</template>
-        </el-table-column>
-        <el-table-column label="消纳率(%)" width="85">
+        <el-table-column label="供需缺口(MW)" width="105">
           <template #default="{ row }">
-            <span :style="{ color: row.absorptionRate < 90 ? '#f56c6c' : row.absorptionRate < 95 ? '#e6a23c' : '#67c23a' }">{{ row.absorptionRate }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="消纳缺口(MW)" width="105">
-          <template #default="{ row }">
-            <span :style="{ color: row.absorptionGapMw > 0 ? '#f56c6c' : '#909399' }">{{ row.absorptionGapMw }}</span>
+            <span :style="{ color: row.supplyGapMw > 0 ? '#f56c6c' : '#67c23a' }">{{ row.supplyGapMw > 0 ? '+' + row.supplyGapMw : row.supplyGapMw }}</span>
           </template>
         </el-table-column>
         <el-table-column label="备用需求(MW)" width="105">
@@ -319,13 +297,13 @@ loadStations()
             <div style="font-weight:600;color:#303133;margin-top:6px">出力骤降分析</div>
             <div>全天出力平均骤降 <b style="color:#f56c6c">{{ result.report.dataAnalysis.outputDrop.overallDropPct }}%</b>，最大骤降发生在 <b>{{ result.report.dataAnalysis.outputDrop.peakDropHour }}</b>，骤降幅度达 <b style="color:#f56c6c">{{ result.report.dataAnalysis.outputDrop.peakDropPct }}%</b>，最严重时段为 {{ result.report.dataAnalysis.outputDrop.worstPeriod }}</div>
 
-            <!-- 消纳分析 -->
-            <div style="font-weight:600;color:#303133;margin-top:10px">消纳能力分析</div>
-            <div>全天平均消纳率 <b :style="{ color: result.report.dataAnalysis.absorption.avgRate >= 95 ? '#67c23a' : '#e6a23c' }">{{ result.report.dataAnalysis.absorption.avgRate }}%</b>，最低消纳率出现在 <b>{{ result.report.dataAnalysis.absorption.minRateHour }}</b>（{{ result.report.dataAnalysis.absorption.minRate }}%），系统平均消纳能力 {{ result.report.dataAnalysis.absorption.avgCapacityMw }} MW</div>
+            <!-- 供需保障分析 -->
+            <div style="font-weight:600;color:#303133;margin-top:10px">供电保障分析</div>
+            <div>全天供电保障率 <b :style="{ color: result.report.dataAnalysis.supplyGuarantee.avgRate >= 95 ? '#67c23a' : '#e6a23c' }">{{ result.report.dataAnalysis.supplyGuarantee.avgRate }}%</b>，供电最紧张时段出现在 <b>{{ result.report.dataAnalysis.supplyGuarantee.minRateHour }}</b></div>
 
-            <!-- 消纳缺口 -->
-            <div style="font-weight:600;color:#303133;margin-top:10px">消纳缺口分析</div>
-            <div>最大消纳缺口 <b style="color:#fc8452">{{ result.report.dataAnalysis.absorptionGap.maxGapMw }} MW</b>（{{ result.report.dataAnalysis.absorptionGap.maxGapHour }}），全天累计缺电量 <b>{{ result.report.dataAnalysis.absorptionGap.totalShortfallMwh }} MWh</b>，缺口时段：{{ result.report.dataAnalysis.absorptionGap.gapPeriod }}</div>
+            <!-- 供需缺口 -->
+            <div style="font-weight:600;color:#303133;margin-top:10px">供需缺口分析</div>
+            <div>最大供需缺口 <b style="color:#fc8452">{{ result.report.dataAnalysis.supplyGap.maxGapMw }} MW</b>（{{ result.report.dataAnalysis.supplyGap.maxGapHour }}），全天累计缺电量 <b>{{ result.report.dataAnalysis.supplyGap.totalShortfallMwh }} MWh</b>，缺口时段：{{ result.report.dataAnalysis.supplyGap.gapPeriod }}</div>
 
             <!-- 温度/暴雨 -->
             <template v-if="result.report.dataAnalysis.temperature">
@@ -386,8 +364,8 @@ loadStations()
           <div style="font-size:13px;color:#606266;line-height:2;padding-left:12px">
             总缺电量：{{ result.report.conclusion.quantitativeMetrics.totalEnergyShortfallMwh }} MWh |
             峰值备用需求：{{ result.report.conclusion.quantitativeMetrics.peakBackupRequiredMw }} MW |
-            平均消纳率：{{ result.report.conclusion.quantitativeMetrics.avgAbsorptionRate }}% |
-            最大消纳缺口：{{ result.report.conclusion.quantitativeMetrics.maxAbsorptionGapMw }} MW
+            供电保障率：{{ result.report.conclusion.quantitativeMetrics.avgSupplyGuaranteeRate }}% |
+            最大供需缺口：{{ result.report.conclusion.quantitativeMetrics.maxSupplyGapMw }} MW
           </div>
           <div style="font-size:13px;color:#303133;margin-top:6px;line-height:2"><b>备用电源配置建议：</b>{{ result.report.conclusion.backupRecommendation }}</div>
           <div style="font-size:14px;color:#303133;margin-top:4px;font-weight:600">

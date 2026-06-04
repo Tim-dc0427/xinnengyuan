@@ -308,6 +308,7 @@ function runNewtonRaphson(
   Psch: number[], Qsch: number[],
   slackIdx: number, pvIndices: number[], pqIndices: number[],
   pvQMin: Map<number, number>, pvQMax: Map<number, number>,
+  vSpec: Map<number, number>,
 ): { V: Complex[]; converged: boolean; iterations: number } {
   const n = buses.length
 
@@ -321,10 +322,7 @@ function runNewtonRaphson(
     return new Complex(1.0, 0)
   })
 
-  // PV 节点指定电压幅值
-  const vSpec = new Map<number, number>()
-  // 这里不从外部传入 gen 数据，改为由调用者计算 V_spec 传参
-  // 我们通过构造时传入 vSpec 来处理
+  // PV 节点指定电压幅值：由调用者通过 vSpec 参数传入
 
   let converged = false
   let iter = 0
@@ -601,7 +599,7 @@ export function calculatePowerFlow(
   // 运行潮流计算
   const { V, converged, iterations } = runNewtonRaphson(
     buses, Y, Psch, Qsch, slackIdx, pvIndices, pqIndices,
-    pvQMin, pvQMax,
+    pvQMin, pvQMax, vSpec,
   )
 
   // 提取计算结果
