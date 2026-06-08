@@ -140,8 +140,10 @@ async function loadAll() {
     const allEqs = await fetchEquipment()
     const eqByPlant: Record<string, any[]> = {}
     allEqs.forEach((eq: any) => {
-      if (!eqByPlant[eq.plant_id]) eqByPlant[eq.plant_id] = []
-      eqByPlant[eq.plant_id].push(eq)
+      const key = eq.station_id || eq.plant_id
+      if (!key) return
+      if (!eqByPlant[key]) eqByPlant[key] = []
+      eqByPlant[key].push(eq)
     })
     equipmentMap.value = eqByPlant
     // 并行获取可靠性评分（失败则用虚拟数据）
