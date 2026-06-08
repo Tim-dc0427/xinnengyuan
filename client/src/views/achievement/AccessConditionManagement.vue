@@ -226,7 +226,15 @@ function passesAllEnabled(r: ResourceItem, conds: any[]): boolean {
 }
 const allResources = computed(() => { let l = resources.value; if (filterText.value) l = l.filter(r => r.name.includes(filterText.value) || r.zone?.includes(filterText.value)); return l })
 
-// 分页
+// 分页（Tab1 接入点清单用）
+const matchPage = ref(1)
+const matchPageSize = ref(20)
+const pagedMatched = computed(() => {
+  const start = (matchPage.value - 1) * matchPageSize.value
+  return matchedResources.value.slice(start, start + matchPageSize.value)
+})
+
+// 分页（Tab2 接入点列表用）
 const currentPage = ref(1)
 const pageSize = ref(20)
 const pagedResources = computed(() => {
@@ -294,7 +302,7 @@ function planSummary(plan: ConditionPlan): string {
             <el-button type="primary" size="small" @click="evaluateAll">筛选</el-button>
           </div>
         </div>
-        <el-table :data="matchedResources" stripe size="small" v-loading="loading">
+        <el-table :data="pagedMatched" stripe size="small" v-loading="loading" max-height="400">
           <el-table-column prop="name" label="名称" width="180" show-overflow-tooltip />
           <el-table-column label="区域" width="70"><template #default="{ row }">{{ valOrDash(row.zone) }}</template></el-table-column>
           <el-table-column label="电压" width="70"><template #default="{ row }">{{ valOrDash(row.voltageKv, 'kV') }}</template></el-table-column>
@@ -302,6 +310,16 @@ function planSummary(plan: ConditionPlan): string {
           <el-table-column label="距离" width="65"><template #default="{ row }">{{ valOrDash(row.distanceKm, 'km') }}</template></el-table-column>
           <el-table-column label="评分" width="60" sortable prop="score"><template #default="{ row }"><span class="score-text" :style="{ color: row.score >= 80 ? '#67C23A' : row.score >= 50 ? '#E6A23C' : '#F56C6C' }">{{ row.score }}</span></template></el-table-column>
         </el-table>
+        <div style="display:flex;justify-content:flex-end;margin-top:12px">
+          <el-pagination
+            v-model:current-page="matchPage"
+            v-model:page-size="matchPageSize"
+            :page-sizes="[15, 20, 50, 100]"
+            :total="matchedResources.length"
+            layout="total, sizes, prev, pager, next"
+            small
+          />
+        </div>
       </div>
 
       <!-- 优质资源清单 -->

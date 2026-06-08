@@ -24,6 +24,38 @@ export class PowerFlowService {
 
   // ==================== Indicators ====================
   async getIndicators(query: any) {
+    // 无筛选参数时始终实时计算全量数据，避免读取其他模块残留的单区域缓存
+    const hasFilter = !!(query.voltageLevel || query.region)
+
+    if (!hasFilter) {
+      const pf = await this.runPowerFlow()
+      const nodes = pf.nodeResults.map((n: any) => ({
+        ...n, threePhaseImbalance: n.threePhaseImbalance ?? 0,
+      }))
+      const total = nodes.length || 1
+      const qualified = nodes.filter((n: any) => Math.abs(n.voltagePu - 1) <= 0.05).length
+      return {
+        total_loss_kw: pf.totalLossMw * 1000,
+        three_phase_imbalance_pct: nodes.reduce((max: number, n: any) => Math.max(max, n.threePhaseImbalance || 0), 0),
+        reverse_power_detected: nodes.filter((n: any) => n.reversePower).length,
+        node_results: nodes,
+        branch_results: pf.branchResults,
+        summary: {
+          totalNodes: total,
+          qualifiedNodes: qualified,
+          voltageQualifiedRate: (qualified / total * 100).toFixed(1),
+          maxVoltageDeviation: Number(Math.max(...nodes.map((n: any) => Math.abs(n.voltagePu - 1)), 0).toFixed(4)),
+          totalLoadMw: pf.totalLoadMw,
+          totalGenMw: pf.totalGenMw,
+          totalLossMw: pf.totalLossMw,
+          lossPercent: pf.lossPercent,
+          iterations: pf.iterations,
+          converged: pf.converged,
+        },
+      }
+    }
+
+    // 有筛选参数时优先使用缓存
     const record = await db('calc_results')
       .where('is_latest', true)
       .orderBy('created_at', 'desc')
@@ -31,7 +63,6 @@ export class PowerFlowService {
       .first()
 
     if (!record) {
-      // 无缓存结果时通过牛顿-拉夫逊潮流计算实时求解
       const pf = await this.runPowerFlow(query.voltageLevel, query.region)
       const nodes = pf.nodeResults.map((n: any) => ({
         ...n, threePhaseImbalance: n.threePhaseImbalance ?? 0,
@@ -153,13 +184,30 @@ export class PowerFlowService {
   }
 
   async getNodeStability(query: any) {
-    const record = await db('calc_results').where('is_latest', true).orderBy('created_at', 'desc').first()
+    // 无筛选参数时始终实时计算全量数据，避免读取其他模块残留的单区域缓存
+    const hasFilter = !!(query.voltageLevel || query.region)
 
+    if (!hasFilter) {
+      const pf = await this.runPowerFlow()
+      return pf.nodeResults.map((n: any) => ({
+        nodeId: n.nodeId,
+        busId: n.busId,
+        name: n.name,
+        zone: n.zone,
+        voltageLevel: n.voltageLevel,
+        voltagePu: n.voltagePu,
+        angleDeg: n.angleDeg,
+        stabilityMargin: n.stabilityMargin,
+        isWeakNode: n.isWeakNode,
+      }))
+    }
+
+    // 有筛选参数时优先使用缓存
+    const record = await db('calc_results').where('is_latest', true).orderBy('created_at', 'desc').first()
     const matchedBusIds = await this.getMatchedBusIds(query.voltageLevel, query.region)
     const busSet = new Set(matchedBusIds)
 
     if (!record?.node_results) {
-      // 无缓存结果时通过潮流计算实时求解
       const pf = await this.runPowerFlow(query.voltageLevel, query.region)
       return pf.nodeResults.map((n: any) => ({
         nodeId: n.nodeId,
@@ -192,9 +240,6 @@ export class PowerFlowService {
   }
 
   async getThreePhase(query: any) {
-    const matchedBusIds = await this.getMatchedBusIds(query.voltageLevel, query.region)
-    const busSet = new Set(matchedBusIds)
-
     // 光伏关联节点：从 solar_pv_stations 获取实际并网的母线
     const pvRows = await db('solar_pv_stations')
       .where('status', 'active')
@@ -202,24 +247,33 @@ export class PowerFlowService {
     const pvBusIds = new Set(pvRows.map((r: any) => r.bus_id))
     const pvGenMap = new Map(pvRows.map((r: any) => [r.bus_id, r.station_name]))
 
-    // 先尝试从 calc_results 取最新结果
-    const record = await db('calc_results')
-      .where('is_latest', true)
-      .whereNotNull('node_results')
-      .orderBy('created_at', 'desc')
-      .first()
+    // 无筛选参数时始终实时计算全量数据，避免读取其他模块残留的单区域缓存
+    const hasFilter = !!(query.voltageLevel || query.region)
 
     let nodeResults: any[]
 
-    if (record?.node_results) {
-      const allNodes = typeof record.node_results === 'string'
-        ? JSON.parse(record.node_results)
-        : record.node_results
-      nodeResults = busSet.size > 0 ? this.filterNodesByBus(allNodes, busSet) : allNodes
-    } else {
-      // 无缓存：通过潮流计算获取节点数据
-      const pf = await this.runPowerFlow(query.voltageLevel, query.region)
+    if (!hasFilter) {
+      const pf = await this.runPowerFlow()
       nodeResults = pf.nodeResults
+    } else {
+      const matchedBusIds = await this.getMatchedBusIds(query.voltageLevel, query.region)
+      const busSet = new Set(matchedBusIds)
+
+      const record = await db('calc_results')
+        .where('is_latest', true)
+        .whereNotNull('node_results')
+        .orderBy('created_at', 'desc')
+        .first()
+
+      if (record?.node_results) {
+        const allNodes = typeof record.node_results === 'string'
+          ? JSON.parse(record.node_results)
+          : record.node_results
+        nodeResults = busSet.size > 0 ? this.filterNodesByBus(allNodes, busSet) : allNodes
+      } else {
+        const pf = await this.runPowerFlow(query.voltageLevel, query.region)
+        nodeResults = pf.nodeResults
+      }
     }
 
     return nodeResults.map((n: any) => {
