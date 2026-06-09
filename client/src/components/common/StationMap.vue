@@ -17,6 +17,7 @@ const mapContainer = ref<HTMLElement | null>(null)
 let map: L.Map | null = null
 let markerLayer = L.layerGroup()
 let labelLayer = L.layerGroup()
+let isFirstFit = true
 
 const voltageColors: Record<string, string> = {
   '500kV': '#f56c6c',
@@ -85,6 +86,7 @@ function renderMarkers() {
     let tipHtml = `${snap?.stationName || station.stationName} (${station.gridConnectionVoltageKv}kV)`
     if (isBackfeed) tipHtml += ' ⚠倒送'
     tipHtml += `<br/>${station.zone} | ${station.installedCapacityMw}MW`
+    tipHtml += `<br/>坐标：${station.longitude.toFixed(4)}, ${station.latitude.toFixed(4)}`
     if (snap) {
       tipHtml += `<br/>P: ${snap.activePowerKw.toFixed(1)}kW | Q: ${snap.reactivePowerKvar.toFixed(1)}kvar | S: ${snap.apparentPowerKva.toFixed(1)}kVA`
     }
@@ -151,7 +153,13 @@ function fitToData() {
   ).pad(0.1))
 }
 
-watch(() => props.stations, () => renderMarkers(), { deep: true })
+watch(() => props.stations, () => {
+  renderMarkers()
+  if (isFirstFit && props.stations.length > 0) {
+    nextTick(() => fitToData())
+    isFirstFit = false
+  }
+}, { deep: true })
 watch(() => props.snapshots, () => renderMarkers(), { deep: true })
 watch(() => props.activeId, () => renderMarkers())
 

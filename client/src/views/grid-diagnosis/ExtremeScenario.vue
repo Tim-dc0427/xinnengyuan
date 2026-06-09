@@ -19,7 +19,7 @@ const preset = ref<'mild' | 'moderate' | 'severe' | 'custom'>('moderate')
 
 // 高温参数
 const highTempParams = reactive<HighTempParams>({
-  maxTemperatureC: 40,
+  maxTemperatureC: 42,
   minTemperatureC: 25,
   peakTimeHour: 14,
   durationHalfHours: 3,
@@ -35,9 +35,9 @@ const rainstormParams = reactive<RainstormParams>({
 
 // 预设填充
 const highTempPresets: Record<string, HighTempParams> = {
-  mild: { maxTemperatureC: 35, minTemperatureC: 25, peakTimeHour: 14, durationHalfHours: 2 },
-  moderate: { maxTemperatureC: 40, minTemperatureC: 25, peakTimeHour: 14, durationHalfHours: 3 },
-  severe: { maxTemperatureC: 45, minTemperatureC: 28, peakTimeHour: 14, durationHalfHours: 5 },
+  mild: { maxTemperatureC: 35, minTemperatureC: 22, peakTimeHour: 14, durationHalfHours: 2 },
+  moderate: { maxTemperatureC: 42, minTemperatureC: 25, peakTimeHour: 14, durationHalfHours: 3 },
+  severe: { maxTemperatureC: 50, minTemperatureC: 28, peakTimeHour: 14, durationHalfHours: 5 },
 }
 
 const rainstormPresets: Record<string, RainstormParams> = {
@@ -107,9 +107,9 @@ async function downloadReport(format: 'word' | 'pdf') {
   }
 }
 
-// 主图: 出力对比 + 负荷 + 供需缺口 + 环境温度 + 面板温度(双Y轴)
-const mainChartOption = computed(() => {
-  if (!result.value) return {}
+// 高温场景图: 出力 + 负荷 + 供需缺口 + 环境温度(双Y轴)
+const highTempChartOption = computed(() => {
+  if (!result.value || scenarioType.value !== 'high_temperature') return {}
   const d = result.value.timeSeriesData
   return {
     tooltip: { trigger: 'axis' },
@@ -117,14 +117,36 @@ const mainChartOption = computed(() => {
     xAxis: { type: 'category', data: d.map(p => p.time), name: '时间' },
     yAxis: [
       { type: 'value', name: 'MW' },
-      { type: 'value', name: '℃' },
+      { type: 'value', name: '℃', min: 10, max: 60 },
     ],
     series: [
       { name: '正常出力', type: 'line', smooth: true, data: d.map(p => p.outputKw), lineStyle: { width: 1, type: 'dashed' }, itemStyle: { color: '#91cc75' } },
       { name: '极端出力', type: 'line', smooth: true, data: d.map(p => p.degradedOutputKw), areaStyle: { opacity: 0.08 }, itemStyle: { color: '#ee6666' } },
       { name: '本地负荷', type: 'line', smooth: true, data: d.map(p => p.loadMw), itemStyle: { color: '#5470c6' } },
       { name: '供需缺口', type: 'bar', data: d.map(p => p.supplyGapMw > 0 ? +p.supplyGapMw.toFixed(2) : 0), itemStyle: { color: '#fc8452' }, barWidth: '60%' },
-      { name: '环境温度', type: 'line', yAxisIndex: 1, smooth: true, data: d.map(p => p.temperatureC), itemStyle: { color: '#ff7875' } },
+      { name: '环境温度', type: 'line', yAxisIndex: 1, smooth: true, data: d.map(p => p.temperatureC), itemStyle: { color: '#fac858' } },
+    ],
+  }
+})
+
+// 暴雨场景图: 出力 + 负荷 + 供需缺口 + 降雨强度(双Y轴)
+const rainstormChartOption = computed(() => {
+  if (!result.value || scenarioType.value !== 'rainstorm') return {}
+  const d = result.value.timeSeriesData
+  return {
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['正常出力', '极端出力', '本地负荷', '供需缺口', '降雨强度'] },
+    xAxis: { type: 'category', data: d.map(p => p.time), name: '时间' },
+    yAxis: [
+      { type: 'value', name: 'MW' },
+      { type: 'value', name: 'mm/h', min: 0, max: 50 },
+    ],
+    series: [
+      { name: '正常出力', type: 'line', smooth: true, data: d.map(p => p.outputKw), lineStyle: { width: 1, type: 'dashed' }, itemStyle: { color: '#91cc75' } },
+      { name: '极端出力', type: 'line', smooth: true, data: d.map(p => p.degradedOutputKw), areaStyle: { opacity: 0.08 }, itemStyle: { color: '#ee6666' } },
+      { name: '本地负荷', type: 'line', smooth: true, data: d.map(p => p.loadMw), itemStyle: { color: '#5470c6' } },
+      { name: '供需缺口', type: 'bar', data: d.map(p => p.supplyGapMw > 0 ? +p.supplyGapMw.toFixed(2) : 0), itemStyle: { color: '#fc8452' }, barWidth: '60%' },
+      { name: '降雨强度', type: 'line', yAxisIndex: 1, smooth: true, data: d.map(p => p.rainfallIntensityMmh ?? 0), itemStyle: { color: '#73c0de' } },
     ],
   }
 })
@@ -162,12 +184,12 @@ loadStations()
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 24px">
           <div style="display:flex;align-items:center;gap:8px">
             <span style="font-size:12px;color:#606266;width:70px;text-align:right">最高温度</span>
-            <el-slider v-model="highTempParams.maxTemperatureC" :min="35" :max="50" :step="1" style="flex:1" @input="onParamChange" />
+            <el-slider v-model="highTempParams.maxTemperatureC" :min="30" :max="55" :step="1" style="flex:1" @input="onParamChange" />
             <span style="font-size:12px;color:#303133;width:38px;text-align:right">{{ highTempParams.maxTemperatureC }}℃</span>
           </div>
           <div style="display:flex;align-items:center;gap:8px">
             <span style="font-size:12px;color:#606266;width:70px;text-align:right">最低温度</span>
-            <el-slider v-model="highTempParams.minTemperatureC" :min="20" :max="30" :step="1" style="flex:1" @input="onParamChange" />
+            <el-slider v-model="highTempParams.minTemperatureC" :min="18" :max="32" :step="1" style="flex:1" @input="onParamChange" />
             <span style="font-size:12px;color:#303133;width:38px;text-align:right">{{ highTempParams.minTemperatureC }}℃</span>
           </div>
           <div style="display:flex;align-items:center;gap:8px">
@@ -226,10 +248,16 @@ loadStations()
       </div>
     </div>
 
-    <!-- 主图: 温度+出力+负荷+供需缺口 -->
-    <div v-if="result" class="chart-panel" style="margin-bottom:16px">
-      <div class="chart-panel-title" style="font-size:14px">极端场景模拟结果</div>
-      <ChartContainer :option="mainChartOption" height="420px" :loading="loading" />
+    <!-- 高温场景图: 出力+负荷+供需缺口+环境温度 -->
+    <div v-if="result && scenarioType === 'high_temperature'" class="chart-panel" style="margin-bottom:16px">
+      <div class="chart-panel-title" style="font-size:14px">极端场景模拟结果 — 高温</div>
+      <ChartContainer :option="highTempChartOption" height="420px" :loading="loading" />
+    </div>
+
+    <!-- 暴雨场景图: 出力+负荷+供需缺口+降雨强度 -->
+    <div v-if="result && scenarioType === 'rainstorm'" class="chart-panel" style="margin-bottom:16px">
+      <div class="chart-panel-title" style="font-size:14px">极端场景模拟结果 — 暴雨</div>
+      <ChartContainer :option="rainstormChartOption" height="420px" :loading="loading" />
     </div>
 
     <!-- 24h 时序详表 -->
@@ -237,7 +265,7 @@ loadStations()
       <div class="chart-panel-title" style="font-size:14px">24小时时序详情</div>
       <el-table :data="result.timeSeriesData" size="small" stripe max-height="450">
         <el-table-column prop="time" label="时间" width="80" />
-        <el-table-column label="温度(℃)" width="80">
+        <el-table-column v-if="scenarioType === 'high_temperature'" label="温度(℃)" width="80">
           <template #default="{ row }">{{ row.temperatureC }}</template>
         </el-table-column>
         <el-table-column label="正常出力(MW)" width="100">

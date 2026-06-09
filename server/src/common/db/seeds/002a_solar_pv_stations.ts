@@ -21,6 +21,8 @@ export async function seed(knex: Knex): Promise<void> {
     stationName: string
     busName: string
     capacityMw: number
+    actualRuntimeHours: number
+    prevActualRuntimeHours: number
     panelType: string
     inverterCapacityMw: number
     gridVoltageKv: number
@@ -36,6 +38,8 @@ export async function seed(knex: Knex): Promise<void> {
       stationName: '径山镇宇航梦园渔光互补光伏项目',
       busName: '余杭10kV',
       capacityMw: 5.44,
+      actualRuntimeHours: 1180,
+      prevActualRuntimeHours: 0,
       panelType: '多晶硅450W组件',
       inverterCapacityMw: 5.44,
       gridVoltageKv: 10,
@@ -48,6 +52,8 @@ export async function seed(knex: Knex): Promise<void> {
       stationName: '舒能渔光互补光伏项目',
       busName: '钱塘变220kV',
       capacityMw: 100,
+      actualRuntimeHours: 1080,
+      prevActualRuntimeHours: 1120,
       panelType: '单晶硅PERC 310W组件',
       inverterCapacityMw: 100,
       gridVoltageKv: 220,
@@ -58,8 +64,10 @@ export async function seed(knex: Knex): Promise<void> {
     },
     {
       stationName: '嘉达渔光互补光伏项目',
-      busName: '钱塘变220kV',
+      busName: '钱塘东变220kV',
       capacityMw: 400,
+      actualRuntimeHours: 1280,
+      prevActualRuntimeHours: 0,
       panelType: '双面双玻540W组件',
       inverterCapacityMw: 400,
       gridVoltageKv: 220,
@@ -70,8 +78,10 @@ export async function seed(knex: Knex): Promise<void> {
     },
     {
       stationName: '凌能渔光互补光伏项目',
-      busName: '钱塘变220kV',
+      busName: '钱塘西变220kV',
       capacityMw: 550,
+      actualRuntimeHours: 1300,
+      prevActualRuntimeHours: 0,
       panelType: '双面双玻580W组件',
       inverterCapacityMw: 550,
       gridVoltageKv: 220,
@@ -84,6 +94,8 @@ export async function seed(knex: Knex): Promise<void> {
       stationName: '华洋山地光伏电站',
       busName: '建德变110kV',
       capacityMw: 155,
+      actualRuntimeHours: 1080,
+      prevActualRuntimeHours: 1120,
       panelType: '单晶硅550W双面组件',
       inverterCapacityMw: 155,
       gridVoltageKv: 110,
@@ -96,6 +108,8 @@ export async function seed(knex: Knex): Promise<void> {
       stationName: '临安青山集中式光伏电站',
       busName: '临安变110kV',
       capacityMw: 60,
+      actualRuntimeHours: 1150,
+      prevActualRuntimeHours: 1160,
       panelType: '单晶硅450W组件',
       inverterCapacityMw: 60,
       gridVoltageKv: 110,
@@ -108,6 +122,8 @@ export async function seed(knex: Knex): Promise<void> {
       stationName: '临安太湖源集中式光伏电站',
       busName: '临安东变110kV',
       capacityMw: 40,
+      actualRuntimeHours: 1120,
+      prevActualRuntimeHours: 1100,
       panelType: '单晶硅450W组件',
       inverterCapacityMw: 40,
       gridVoltageKv: 110,
@@ -120,6 +136,8 @@ export async function seed(knex: Knex): Promise<void> {
       stationName: '萧山南阳集中式光伏电站',
       busName: '萧山10kV',
       capacityMw: 50,
+      actualRuntimeHours: 1200,
+      prevActualRuntimeHours: 1180,
       panelType: '单晶硅540W组件',
       inverterCapacityMw: 50,
       gridVoltageKv: 10,
@@ -132,6 +150,8 @@ export async function seed(knex: Knex): Promise<void> {
       stationName: '富阳渔山集中式光伏电站',
       busName: '富阳10kV',
       capacityMw: 30,
+      actualRuntimeHours: 1160,
+      prevActualRuntimeHours: 1190,
       panelType: '单晶硅540W组件',
       inverterCapacityMw: 30,
       gridVoltageKv: 10,
@@ -157,6 +177,8 @@ export async function seed(knex: Knex): Promise<void> {
       station_name: def.stationName,
       bus_id: busId,
       installed_capacity_mw: def.capacityMw,
+      actual_runtime_hours: def.actualRuntimeHours,
+      prev_actual_runtime_hours: def.prevActualRuntimeHours,
       panel_type: def.panelType,
       inverter_capacity_mw: def.inverterCapacityMw,
       grid_connection_voltage_kv: def.gridVoltageKv,

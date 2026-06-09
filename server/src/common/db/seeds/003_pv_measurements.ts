@@ -24,7 +24,7 @@ export async function seed(knex: Knex): Promise<void> {
 
   const stations = await knex('solar_pv_stations')
     .join('grid_buses', 'grid_buses.id', 'solar_pv_stations.bus_id')
-    .select('solar_pv_stations.id', 'solar_pv_stations.plant_id', 'solar_pv_stations.station_name', 'solar_pv_stations.installed_capacity_mw', 'solar_pv_stations.grid_connection_voltage_kv', 'grid_buses.zone')
+    .select('solar_pv_stations.id', 'solar_pv_stations.plant_id', 'solar_pv_stations.station_name', 'solar_pv_stations.installed_capacity_mw', 'solar_pv_stations.grid_connection_voltage_kv', 'solar_pv_stations.installed_date', 'grid_buses.zone')
   if (stations.length === 0) { console.log('No solar PV stations found, skipping PV measurement seed.'); return }
 
   const batchSize = 200
@@ -61,26 +61,52 @@ export async function seed(knex: Knex): Promise<void> {
         else if (wr < 0.85) { weather = '阴天'; cloudFactor = 0.2 + seededRandom(weatherDayOffset * 13) * 0.2; tempBias = -2; humidBias = 15 }
         else { weather = '雨天'; cloudFactor = 0.05 + seededRandom(weatherDayOffset * 17) * 0.15; tempBias = -4; humidBias = 25 }
 
+        // 先计算24小时的原始hourCloudVar，再3点滑动平均消除离群尖刺
+        const rawCloudVars: number[] = []
         for (let h = 0; h < 24; h++) {
-          // 日射曲线：5:30日出→12:00峰值→18:30日落
+          rawCloudVars.push(0.85 + seededRandom(stationDayOffset * 31 + h * 17) * 0.3)
+        }
+        const smoothCloudVars = rawCloudVars.map((v, h) => {
+          if (h === 0) return (v + rawCloudVars[1]) / 2
+          if (h === 23) return (rawCloudVars[22] + v) / 2
+          return (rawCloudVars[h - 1] + v + rawCloudVars[h + 1]) / 3
+        })
+
+        for (let h = 0; h < 24; h++) {
+          // 日射曲线：5:00日出→12:00峰值→18:00日落（5-18h正弦窗口）
           let solarRatio = 0
-          if (h >= 6 && h <= 18) {
-            solarRatio = Math.sin(((h - 6) / 12) * Math.PI) // 0→1→0
-          } else if (h === 5) solarRatio = 0.05
-          else if (h === 19) solarRatio = 0.03
+          if (h >= 5 && h <= 18) {
+            solarRatio = Math.sin(((h - 5) / 13) * Math.PI)
+          } else if (h === 4) {
+            solarRatio = 0.01
+          } else if (h === 19) {
+            solarRatio = 0.02
+          }
 
-          // 标准辐照度：峰值1000W/m² × 日射比例 × 云量因子（每小时微调±15%模拟云层飘动，电站级独立）
-          const hourCloudVar = 0.85 + seededRandom(stationDayOffset * 31 + h * 17) * 0.3
-          const irradianceWm2 = Math.round(solarRatio * 1000 * cloudFactor * hourCloudVar)
-
-          // 光伏效率：组件效率78-84% × 逆变器效率× 温度折减
-          const panelEff = 0.78 + seededRandom(stationIdx * 13 + h * 3) * 0.06
-          const powerKw = Math.round((irradianceWm2 / 1000) * capacityKw * panelEff)
+          const irradianceWm2 = Math.round(solarRatio * 1000 * cloudFactor * smoothCloudVars[h])
 
           // 温度：基础18°C + 日照升温（中午最高+12°C） + 天气偏差（电站级微调）
           const tempC = +(18 + solarRatio * 12 + tempBias + (seededRandom(stationDayOffset * 47 + h) - 0.5) * 1.5).toFixed(1)
           // 湿度：基础50% - 日照降湿（中午最低-25%）+ 天气偏差（电站级微调）
           const humidityPct = Math.round(Math.max(15, Math.min(95, 55 - solarRatio * 25 + humidBias + (seededRandom(stationDayOffset * 19 + h) - 0.5) * 6)))
+
+          // 光伏效率：组件效率78-84% × 逆变器效率88-99% × 温度折减（-0.35%/°C，基准25°C）
+          const panelEff = 0.78 + seededRandom(stationIdx * 13 + h * 3) * 0.06
+          const inverterEff = irradianceWm2 > 0
+            ? +(0.88 + seededRandom(stationDayOffset * 79 + h) * 0.11).toFixed(3)
+            : null
+          // 温度折减：-0.5%/°C（基准15°C），全温区生效，确保不同电站间方向一致
+          const tempDerating = Math.max(0.87, Math.min(1.05, 1 - 0.005 * (tempC - 15)))
+          // 设备年限衰减：LID初始衰减前0.5年约2% + 长期衰减0.5%/年
+          const yearsSinceInstall = (date.getTime() - new Date(s.installed_date || '2024-01-01').getTime()) / (365.25 * 86400000)
+          const ageDerating = yearsSinceInstall <= 0
+            ? 1
+            : yearsSinceInstall < 0.5
+              ? +(1 - 0.02 * (yearsSinceInstall / 0.5)).toFixed(4)   // LID期：线性衰减2%
+              : +(0.98 - 0.005 * (yearsSinceInstall - 0.5)).toFixed(4)  // 长期：0.5%/年
+          const powerKw = irradianceWm2 > 0
+            ? Math.round((irradianceWm2 / 1000) * capacityKw * panelEff * inverterEff! * tempDerating * ageDerating)
+            : 0
 
           const timeStr = `${dateStr}T${String(h).padStart(2, '0')}:${String(Math.floor(seededRandom(stationDayOffset * 67 + h) * 60)).padStart(2, '0')}:00`
 
@@ -93,7 +119,7 @@ export async function seed(knex: Knex): Promise<void> {
             frequency_hz: +(50 + seededRandom(stationDayOffset * 61 + h) * 0.08 - 0.04).toFixed(3),
             power_factor: +(0.94 + seededRandom(stationDayOffset * 71 + h) * 0.05).toFixed(3),
             temperature_c: tempC, irradiance_wm2: irradianceWm2, humidity_pct: humidityPct,
-            inverter_efficiency: +(0.965 + seededRandom(stationDayOffset * 79 + h) * 0.025).toFixed(3),
+            inverter_efficiency: inverterEff,
             confidence_pct: Math.round(70 + seededRandom(stationDayOffset * 83 + h) * 30),
             expected_weather: weather, actual_weather: weather,
           })
@@ -111,6 +137,10 @@ export async function seed(knex: Knex): Promise<void> {
     console.log(`  ✓ ${year}/${monthStart}-${monthEnd}: 24h×${totalDays}天`)
   }
 
+  // 清空旧数据，避免多次seed产生混合数据
+  await knex('pv_output_measurements').whereBetween('time', ['2025-03-01T00:00:00', '2026-06-02T23:59:59']).delete()
+  console.log('  ✓ 已清空旧PV测量数据')
+
   // 2026年3-6月（6月仅到2日）
   await generateForPeriod(2026, 3, 6)
   // 删除6月2日之后的未来数据
@@ -118,9 +148,58 @@ export async function seed(knex: Knex): Promise<void> {
   // 2025年3-5月（同比对比）
   await generateForPeriod(2025, 3, 5)
 
+  // ==================== 历史月度稀疏数据（设备年限分析用） ====================
+  const historicalStations = stations.filter((s: any) => {
+    if (!s.installed_date) return false
+    return new Date(s.installed_date) < new Date('2025-03-01')
+  })
+  if (historicalStations.length > 0) {
+    const histRecords: any[] = []
+    const avgEff = 0.81
+    for (const hs of historicalStations) {
+      const s = hs as any
+      const stationIdx = stations.indexOf(hs)
+      const capKw = s.installed_capacity_mw * 1000
+      const installDate = new Date(s.installed_date || '2024-01-01')
+      const endDate = new Date('2025-02-28')
+      // 每月生成一条正午代表记录
+      const cursor = new Date(installDate)
+      cursor.setDate(1)
+      while (cursor <= endDate) {
+        const yearsSinceInstall = (cursor.getTime() - installDate.getTime()) / (365.25 * 86400000)
+        const degradation = Math.max(0, 1 - 0.005 * yearsSinceInstall) // 年衰减0.5%
+        // 典型正午出力：辐照度800W/m² × 容量 × 效率 × 衰减
+        const irradiance = 800 + seededRandom(stationIdx * 100 + cursor.getFullYear() * 12 + cursor.getMonth()) * 200
+        const powerKw = Math.round((irradiance / 1000) * capKw * avgEff * degradation)
+        histRecords.push({
+          id: uuid(),
+          time: `${cursor.toISOString().slice(0, 7)}-15T12:00:00`,
+          plant_id: s.plant_id || '',
+          station_id: s.id,
+          active_power_kw: powerKw,
+          reactive_power_kvar: Math.round(powerKw * 0.07),
+          voltage_v: Number(((s.grid_connection_voltage_kv || 10) * 1000 * 1.0).toFixed(1)),
+          current_a: Math.round(powerKw / (s.grid_connection_voltage_kv || 10)),
+          frequency_hz: 50.0,
+          power_factor: 0.96,
+          temperature_c: null,   // 历史稀疏数据不含环境因子，不参与4因子对齐分析
+          irradiance_wm2: Math.round(irradiance),
+          humidity_pct: null,
+          inverter_efficiency: null,
+          confidence_pct: 80,
+          expected_weather: '晴',
+          actual_weather: '晴',
+        })
+        cursor.setMonth(cursor.getMonth() + 1)
+      }
+    }
+    await knex('pv_output_measurements').insert(histRecords)
+    console.log(`  ✓ 历史月度数据: ${histRecords.length} 条 (${historicalStations.length} 个老电站)`)
+  }
+
   // ==================== 告警样本：模拟真实电压波动事件 ====================
   // 场景：云层快速移动导致辐照度骤变，逆变器调节滞后，十几分钟内电压累积偏移 >5%
-  const alertStations = (await knex('solar_pv_stations').select('id', 'grid_connection_voltage_kv').limit(4)) as any[]
+  const alertStations = (await knex('solar_pv_stations').select('id', 'grid_connection_voltage_kv', 'installed_capacity_mw').limit(4)) as any[]
   const alertEvents = [
     {
       station: alertStations[0], date: '2026-06-02',
@@ -172,7 +251,7 @@ export async function seed(knex: Knex): Promise<void> {
         frequency_hz: 50.01,
         power_factor: 0.96,
         temperature_c: 28,
-        irradiance_wm2: Math.round(r.powerKw / (evt.station.grid_connection_voltage_kv || 10) * 100),
+        irradiance_wm2: Math.round(r.powerKw / (evt.station.installed_capacity_mw || 1) / 0.81),
         humidity_pct: 55,
         inverter_efficiency: 0.97,
         confidence_pct: 90,
@@ -219,11 +298,13 @@ export async function seed(knex: Knex): Promise<void> {
   const carbonRecords: any[] = []
   const co2PerKwh = 0.85; const coalPerKwh = 0.32; const so2PerKwh = 0.003; const noxPerKwh = 0.002
 
+  // 浙江各月等效利用小时数（日均，h/day）：1月2.0 2月2.7 3月3.0 4月3.5 5月3.5 6月3.3
+  const monthlyDailyHours = [0, 2.0, 2.7, 3.0, 3.5, 3.5, 3.3]
   for (const st of stationsForCarbon as any[]) {
     const capKw = st.installed_capacity_mw * 1000
     for (let m = 1; m <= 6; m++) {
       const monthDays = [31, 28, 31, 30, 31, 30][m - 1]
-      const dailyHours = 2.5 + m * 0.8 + seededRandom(m * 100 + stationsForCarbon.indexOf(st) * 7) * 1.5
+      const dailyHours = monthlyDailyHours[m] + seededRandom(m * 100 + stationsForCarbon.indexOf(st) * 7) * 0.5 - 0.25
       const monthlyOutputKwh = Math.round(capKw * dailyHours * monthDays)
       carbonRecords.push({
         id: uuid(), plant_id: st.plant_id || '', period_type: 'monthly',

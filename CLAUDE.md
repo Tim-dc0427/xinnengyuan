@@ -177,6 +177,7 @@ cd client && npm run build
 
 ## 编码约定
 
+- **禁止自作主张添加未要求的功能**：只做用户明确要求的事，不擅自扩展范围。用户说改A就只改A，不顺手改B、C、D。
 - TypeScript 严格模式
 - 组件使用 `<script setup lang="ts">` + 命名导出
 - API 封装统一放在 `client/src/api/`

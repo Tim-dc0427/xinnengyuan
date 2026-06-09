@@ -5,7 +5,6 @@ import { fetchCarbonStats, fetchCarbonDynamic, fetchStations } from '@/api/grid-
 import type { StationOption } from '@new-energy/shared'
 
 const stations = ref<StationOption[]>([])
-const selectedStation = ref('')
 const groupBy = ref<'station' | 'zone'>('station')
 const dateRange = ref<[string, string]>(['2026-03-01', '2026-05-31'])
 const loading = ref(false)
@@ -23,7 +22,6 @@ async function loadStats() {
   loading.value = true
   try {
     const data = await fetchCarbonStats({
-      stationId: groupBy.value === 'station' && selectedStation.value ? selectedStation.value : undefined,
       startDate: dateRange.value[0], endDate: dateRange.value[1], groupBy: groupBy.value,
     })
     carbonData.value = data || []
@@ -44,37 +42,95 @@ async function loadDynamic() {
   } finally { loading.value = false }
 }
 
+// 电站/区域 CO₂ 减排纵向柱状图
 const barOption = computed(() => {
   const names = carbonData.value.map((r) => r.stationName || r.groupKey || r.stationId)
   return {
     tooltip: { trigger: 'axis' },
-    grid: { left: '3%', right: '4%', containLabel: true },
-    xAxis: { type: 'category', data: names, axisLabel: { rotate: 20 } },
+    grid: { left: '3%', right: '4%', bottom: 80, containLabel: true },
+    xAxis: { type: 'category', data: names, axisLabel: { rotate: 20, interval: 0 } },
     yAxis: { type: 'value', name: '吨' },
-    series: [{ name: 'CO₂减排量', type: 'bar', data: carbonData.value.map((r) => +((r.co2ReductionKg || 0) / 1000).toFixed(1)) }],
+    series: [{
+      name: 'CO₂减排量',
+      type: 'bar',
+      data: carbonData.value.map((r) => +((r.co2ReductionKg || 0) / 1000).toFixed(1)),
+      itemStyle: { color: '#388e3c' },
+      label: { show: true, position: 'top', fontSize: 11, formatter: '{c}' },
+    }],
   }
 })
 
-const dynamicOption = computed(() => {
+// 有光伏 vs 无光伏 碳排放对比曲线（堆叠面积图：底部=有光伏金色，中部=碳减排绿色高亮，顶部=无光伏灰色）
+const comparisonOption = computed(() => {
   if (!dynamicData.value) return {}
   const ts = dynamicData.value.timeSeries
   const times = ts.map((d: any) => d.time.slice(11, 16))
-  const cumulative: number[] = []
-  let sum = 0
-  for (const d of ts) { sum += d.co2ReductionKg; cumulative.push(+sum.toFixed(1)) }
+  const withPv = ts.map((d: any) => +(d.thermalCo2Kg || 0).toFixed(1))
+  const reduction = ts.map((d: any) => +(d.co2ReductionKg || 0).toFixed(1))
+  const withoutPv = withPv.map((v: number, i: number) => +(v + reduction[i]).toFixed(1))
+  const maxReduction = Math.max(...reduction, 1)
   return {
-    tooltip: { trigger: 'axis' },
-    legend: { data: ['火电实际碳排放(kg)', '光伏碳减排(kg)', '累计碳减排(kg)'] },
-    grid: { top: 40, right: 60, bottom: 40, left: 60 },
-    xAxis: { type: 'category', data: times, name: '时间' },
-    yAxis: [
-      { type: 'value', name: '每小时 (kg)' },
-      { type: 'value', name: '累计 (kg)' },
-    ],
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params: any[]) => {
+        if (!params?.length) return ''
+        const ti = params[0]?.axisValue || ''
+        const wv = params.find((p: any) => p.seriesName === '有光伏碳排放(kg)')?.value ?? '-'
+        const wo = params.find((p: any) => p.seriesName === '无光伏碳排放(kg)')?.value ?? '-'
+        const rd = params.find((p: any) => p.seriesName === '碳减排量(kg)')?.value ?? '-'
+        return `${ti}<br/>无光伏碳排放：${wo} kg<br/>有光伏碳排放：${wv} kg<br/><b>碳减排量：${rd} kg</b>`
+      },
+    },
+    legend: { data: ['无光伏碳排放(kg)', '有光伏碳排放(kg)', '碳减排量(kg)'], top: 0 },
+    grid: { top: 40, right: 40, bottom: 40, left: 60 },
+    xAxis: { type: 'category', data: times, name: '时间', boundaryGap: false },
+    yAxis: { type: 'value', name: 'kg' },
     series: [
-      { name: '火电实际碳排放(kg)', type: 'bar', data: ts.map((d: any) => d.thermalCo2Kg), barWidth: '35%', itemStyle: { color: '#fab6b6' } },
-      { name: '光伏碳减排(kg)', type: 'bar', data: ts.map((d: any) => d.co2ReductionKg), barWidth: '35%', itemStyle: { color: '#67c23a' } },
-      { name: '累计碳减排(kg)', type: 'line', yAxisIndex: 1, data: cumulative, smooth: true, areaStyle: { opacity: 0.15 }, itemStyle: { color: '#409EFF' } },
+      {
+        name: '有光伏碳排放(kg)',
+        type: 'line',
+        stack: 'total',
+        data: withPv,
+        areaStyle: { color: '#f9e4b7' },
+        lineStyle: { color: '#f0a030', width: 2 },
+        itemStyle: { color: '#f0a030' },
+        smooth: true,
+        symbol: 'none',
+        emphasis: { focus: 'series' },
+      },
+      {
+        name: '碳减排量(kg)',
+        type: 'line',
+        stack: 'total',
+        data: reduction,
+        areaStyle: { color: '#4caf50', opacity: 0.35 },
+        lineStyle: { color: '#388e3c', width: 1, type: 'dashed' },
+        itemStyle: { color: '#388e3c' },
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 5,
+        emphasis: { focus: 'series' },
+        label: {
+          show: true,
+          position: 'inside',
+          fontSize: 10,
+          color: '#2e7d32',
+          formatter: (p: any) => {
+            if (p.value > maxReduction * 0.3 || p.dataIndex % 3 === 0) return p.value.toFixed(0)
+            return ''
+          },
+        },
+      },
+      {
+        name: '无光伏碳排放(kg)',
+        type: 'line',
+        data: withoutPv,
+        lineStyle: { color: '#909399', width: 2, type: 'dashed' },
+        smooth: true,
+        symbol: 'none',
+        itemStyle: { color: '#909399' },
+        emphasis: { focus: 'series' },
+      },
     ],
   }
 })
@@ -82,7 +138,6 @@ const dynamicOption = computed(() => {
 onMounted(async () => {
   stations.value = (await fetchStations()) || []
   if (stations.value.length > 0) {
-    selectedStation.value = stations.value[0].id
     dynamicStation.value = stations.value[0].id
   }
   await loadStats()
@@ -112,7 +167,7 @@ onMounted(async () => {
 
 
         <div v-if="dynamicData" class="chart-panel" style="margin-bottom:16px">
-          <ChartContainer :option="dynamicOption" height="350px" :loading="loading" />
+          <ChartContainer :option="comparisonOption" height="350px" :loading="loading" />
         </div>
 
         <div v-if="dynamicData" class="chart-panel">
@@ -142,18 +197,16 @@ onMounted(async () => {
               <el-radio-button value="station">按电站</el-radio-button>
             </el-radio-group>
           </div>
-          <div class="filter-group" v-if="groupBy === 'station'">
-            <span class="filter-label">电站</span>
-            <el-select v-model="selectedStation" size="small" style="width:220px" @change="loadStats" filterable clearable placeholder="全部电站">
-              <el-option v-for="s in stations" :key="s.id" :label="s.stationName" :value="s.id" />
-            </el-select>
-          </div>
           <div class="filter-group">
             <span class="filter-label">日期范围</span>
             <el-date-picker v-model="dateRange[0]" type="date" value-format="YYYY-MM-DD" placeholder="开始" size="small" @change="loadStats" style="width:130px" />
             <span style="color:#909399;margin:0 4px">至</span>
             <el-date-picker v-model="dateRange[1]" type="date" value-format="YYYY-MM-DD" placeholder="结束" size="small" @change="loadStats" style="width:130px" />
           </div>
+        </div>
+
+        <div class="chart-panel" style="margin-bottom:16px">
+          <ChartContainer :option="barOption" height="350px" :loading="loading" />
         </div>
 
         <div class="chart-panel" style="margin-bottom:16px">
@@ -177,10 +230,6 @@ onMounted(async () => {
               <template #default="{ row }">{{ row.co2PerMwh }}</template>
             </el-table-column>
           </el-table>
-        </div>
-
-        <div class="chart-panel">
-          <ChartContainer :option="barOption" height="350px" :loading="loading" />
         </div>
       </el-tab-pane>
     </el-tabs>

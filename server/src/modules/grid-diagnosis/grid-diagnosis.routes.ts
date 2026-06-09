@@ -28,6 +28,8 @@ gridDiagnosisRoutes.post('/backfeed/detect', auth(['admin', 'planner', 'operator
 
 // Equipment
 gridDiagnosisRoutes.get('/equipment/capacity', auth(['admin', 'planner', 'operator']), ctrl.calculateCapacity)
+gridDiagnosisRoutes.get('/equipment/power', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getEquipmentPower)
+gridDiagnosisRoutes.get('/equipment/power-hours', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getAvailableHours)
 gridDiagnosisRoutes.get('/equipment/reliability/:id', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.assessReliability)
 gridDiagnosisRoutes.get('/equipment/lifecycle/:id', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getLifecycle)
 gridDiagnosisRoutes.post('/equipment/lifecycle/predict', auth(['admin', 'planner']), ctrl.predictLife)

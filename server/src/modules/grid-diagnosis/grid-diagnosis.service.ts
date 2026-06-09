@@ -115,6 +115,8 @@ export class GridDiagnosisService {
         'spv.id as stationId',
         'spv.station_name as stationName',
         'spv.installed_capacity_mw as installedCapacityMw',
+        'spv.actual_runtime_hours as actualRuntimeHours',
+        'spv.prev_actual_runtime_hours as prevActualRuntimeHours',
         'gb.zone',
         'gb.voltage_level as voltageLevel',
         db.raw('SUM(pvo.active_power_kw * 1) as totalOutputKwh'),
@@ -125,7 +127,11 @@ export class GridDiagnosisService {
 
     const stationRows = await stationAgg.orderBy('totalOutputKwh', 'desc')
 
-    // 构建 current 数组（station 直接映射，zone/voltage_level 聚合）
+    // 查询天数，用于年化实际运行小时数按比例缩放
+    const queryDays = Math.max(1, Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / 86400000))
+    const dayRatio = queryDays / 365
+
+    // 构建 current 数组
     let current: any[]
     if (groupBy === 'station') {
       current = stationRows.map((r: any) => ({
@@ -135,6 +141,8 @@ export class GridDiagnosisService {
         zone: r.zone,
         voltageLevel: r.voltageLevel,
         installedCapacityMw: r.installedCapacityMw,
+        generationHours: +((r.actualRuntimeHours || 0) * dayRatio).toFixed(1),
+        prevActualRuntimeHours: r.prevActualRuntimeHours || 0,
         totalOutputKwh: r.totalOutputKwh,
         avgOutputKw: r.avgOutputKw,
         maxOutputKw: r.maxOutputKw,
@@ -142,6 +150,7 @@ export class GridDiagnosisService {
       }))
     } else {
       const groupField = groupBy === 'zone' ? 'zone' : 'voltageLevel'
+      const isVoltageLevel = groupBy === 'voltage_level'
       const grouped = new Map<string, any>()
       for (const r of stationRows as any[]) {
         const key = r[groupField] || 'unknown'
@@ -150,6 +159,8 @@ export class GridDiagnosisService {
             groupKey: key,
             groupType: groupBy as string,
             installedCapacityMw: 0,
+            runtimeHoursWeighted: 0,
+            prevRuntimeHoursWeighted: 0,
             totalOutputKwh: 0,
             avgOutputKw: 0,
             maxOutputKw: 0,
@@ -158,6 +169,8 @@ export class GridDiagnosisService {
         }
         const g = grouped.get(key)!
         g.installedCapacityMw += r.installedCapacityMw
+        g.runtimeHoursWeighted += (r.installedCapacityMw || 0) * (r.actualRuntimeHours || 0)
+        g.prevRuntimeHoursWeighted += (r.installedCapacityMw || 0) * (r.prevActualRuntimeHours || 0)
         g.totalOutputKwh += r.totalOutputKwh
         g.avgOutputKw += r.avgOutputKw
         g.maxOutputKw = Math.max(g.maxOutputKw, r.maxOutputKw)
@@ -165,15 +178,25 @@ export class GridDiagnosisService {
       }
       current = Array.from(grouped.values())
       for (const row of current) {
+        if (isVoltageLevel) {
+          // 电压等级：等效利用小时 = 发电量/装机容量
+          const capKw = (row.installedCapacityMw || 0) * 1000
+          row.generationHours = capKw > 0 ? +((row.totalOutputKwh || 0) / capKw).toFixed(1) : 0
+        } else {
+          // 区域：实际发电小时，加权平均后按时间段缩放
+          row.generationHours = row.installedCapacityMw > 0
+            ? +((row.runtimeHoursWeighted / row.installedCapacityMw) * dayRatio).toFixed(1)
+            : 0
+          // 对比期实际发电小时（同比环比用）
+          row.prevGenerationHours = row.installedCapacityMw > 0
+            ? +((row.prevRuntimeHoursWeighted / row.installedCapacityMw) * dayRatio).toFixed(1)
+            : 0
+        }
+        delete row.runtimeHoursWeighted
+        delete row.prevRuntimeHoursWeighted
         row.avgOutputKw = +(row.avgOutputKw / row.stationCount).toFixed(2)
       }
       current.sort((a, b) => b.totalOutputKwh - a.totalOutputKwh)
-    }
-
-    // 计算发电小时数
-    for (const row of current) {
-      const capKw = (row.installedCapacityMw || 0) * 1000
-      row.generationHours = capKw > 0 ? +((row.totalOutputKwh || 0) / capKw).toFixed(1) : 0
     }
 
     // 同比/环比计算（所有分组模式均支持）
@@ -204,15 +227,26 @@ export class GridDiagnosisService {
 
       const prevMap = new Map(prevData.map((r: any) => [r.groupKey, r.totalOutputKwh]))
 
+      const isVoltageLevel = groupBy === 'voltage_level'
+
       for (const row of current as any[]) {
         const prev = prevMap.get(row.groupKey) || 0
-        const capKw = (row.installedCapacityMw || 0) * 1000
-        const prevHours = capKw > 0 ? +(prev / capKw).toFixed(1) : 0
 
         row.prevTotalOutputKwh = prev
         row.changePct = prev > 0 ? +(((row.totalOutputKwh - prev) / prev) * 100).toFixed(1) : null
-        row.prevGenerationHours = prevHours
-        row.generationHoursChangePct = prevHours > 0 ? +(((row.generationHours - prevHours) / prevHours) * 100).toFixed(1) : null
+
+        if (isVoltageLevel) {
+          // 等效利用小时 = prev发电量/装机容量
+          const capKw = (row.installedCapacityMw || 0) * 1000
+          const prevHours = capKw > 0 ? +(prev / capKw).toFixed(1) : 0
+          row.prevGenerationHours = prevHours
+          row.generationHoursChangePct = prevHours > 0 ? +(((row.generationHours - prevHours) / prevHours) * 100).toFixed(1) : null
+        } else {
+          // 实际发电小时：prev 已在聚合时从 prevActualRuntimeHours 独立算好
+          row.generationHoursChangePct = row.prevGenerationHours > 0
+            ? +(((row.generationHours - row.prevGenerationHours) / row.prevGenerationHours) * 100).toFixed(1)
+            : null
+        }
       }
     }
 
@@ -220,12 +254,11 @@ export class GridDiagnosisService {
   }
 
   // ==================== Influencing Factors ====================
-  async getFactors(query: { stationId: string; startDate: string; endDate: string }) {
-    const { stationId, startDate, endDate } = query
+  async getFactors(query: { stationId: string; startDate?: string; endDate?: string }) {
+    const { stationId } = query
 
     const data = await db('pv_output_measurements')
       .where('station_id', stationId)
-      .whereBetween('time', [startDate, endDate])
       .select('active_power_kw', 'temperature_c', 'irradiance_wm2', 'humidity_pct', 'inverter_efficiency')
       .orderBy('time', 'asc')
 
@@ -236,68 +269,206 @@ export class GridDiagnosisService {
       { key: 'inverter_efficiency', label: '逆变器效率', field: 'inverter_efficiency' },
     ]
 
-    const results = factors.map((f) => {
-      // 对齐 x/y
-      const pairs: Array<{ x: number; y: number }> = []
-      for (const d of data as any[]) {
-        if (d[f.field] != null && d.active_power_kw != null) {
-          pairs.push({ x: d[f.field], y: d.active_power_kw })
-        }
+    const factorUnitMap: Record<string, string> = {
+      irradiance: 'W/m²',
+      temperature: '°C',
+      humidity: '%',
+      inverter_efficiency: '',
+    }
+
+    // 构建全因子对齐数据集（排除出力为0的数据——逆变器停机时效率值无分析意义）
+    const aligned: Array<Record<string, number>> = []
+    for (const d of data as any[]) {
+      const row: Record<string, number> = {}
+      let valid = d.active_power_kw != null && d.active_power_kw > 0
+      for (const f of factors) {
+        if (d[f.field] == null) { valid = false; break }
+        row[f.key] = d[f.field]
       }
-      const xAligned = pairs.map((p) => p.x)
-      const yAligned = pairs.map((p) => p.y)
-      const correlation = this.pearsonCorrelation(xAligned, yAligned)
+      if (valid) {
+        row['output'] = d.active_power_kw
+        aligned.push(row)
+      }
+    }
+
+    // 因子字段名列表
+    const factorKeys = factors.map(f => f.key)
+
+    // 基准光照：取中位数，用于将出力标准化到同一光照水平
+    const irradVals = aligned.map(r => r['irradiance']).filter(v => v > 0).sort((a, b) => a - b)
+    const baseIrradiance = irradVals.length > 0 ? irradVals[Math.floor(irradVals.length / 2)] : 500
+
+    const results = factors.map((f) => {
+      const xVals = aligned.map(r => r[f.key])
+      const yVals = aligned.map(r => r.output)
+      const pearsonR = this.pearsonCorrelation(xVals, yVals)
+
+      // 偏相关分析（对数空间，控制其他因子，解耦乘法模型）
+      const controlKeys = factorKeys.filter(k => k !== f.key)
+      const controlVars = controlKeys.map(k => aligned.map(r => r[k]))
+
+      const logAligned = aligned.filter(
+        r => r[f.key] > 0 && r.output > 0 && controlKeys.every(k => r[k] > 0),
+      )
+      let partialR = 0
+      if (logAligned.length >= 10) {
+        const logX = logAligned.map(r => Math.log(r[f.key]))
+        const logY = logAligned.map(r => Math.log(r.output))
+        const logControls = controlKeys.map(k => logAligned.map(r => Math.log(r[k])))
+        partialR = this.partialCorrelation(logX, logY, logControls)
+      }
+
+      // 控制变量描述性统计
+      const controlDetails = controlKeys.map((ck, i) => {
+        const cFactor = factors.find(fc => fc.key === ck)!
+        const vals = controlVars[i]
+        const n = vals.length
+        const mean = vals.reduce((a, b) => a + b, 0) / n
+        const stdDev = this.stdDev(vals)
+        return {
+          factorKey: ck,
+          factorLabel: cFactor.label,
+          unit: factorUnitMap[cFactor.key] || '',
+          mean: +mean.toFixed(2),
+          stdDev: +stdDev.toFixed(2),
+          min: +Math.min(...vals).toFixed(2),
+          max: +Math.max(...vals).toFixed(2),
+        }
+      })
+
+      const controlledText = controlDetails.map(c => c.factorLabel).join('、')
+
+      const trendDir = (r: number) => r > 0 ? '正相关' : '负相关'
+      const trendStr = (r: number) => {
+        const abs = Math.abs(r)
+        return `${trendDir(r)}（${abs > 0.7 ? '强' : abs > 0.3 ? '中等' : '弱'}）`
+      }
+
+      const isIrradiance = f.key === 'irradiance'
+      const yLabel = isIrradiance ? '出力' : '等效出力（已剔除光照影响）'
+      const impactDescription = `${f.label}与${yLabel}：`
+        + `简单${trendStr(pearsonR)}，`
+        + `独立${trendStr(partialR)}`
 
       return {
         stationId,
         factorType: f.key,
         factorLabel: f.label,
-        correlationCoefficient: +correlation.toFixed(4),
-        impactDescription: `${f.label}与光伏出力的相关系数为 ${correlation.toFixed(3)}`,
-        chartData: pairs.slice(0, 500), // 限制点数
+        correlationCoefficient: +pearsonR.toFixed(4),
+        partialCorrelationCoefficient: +partialR.toFixed(4),
+        controlledVariables: controlledText,
+        controlDetails,
+        impactDescription,
+        chartData: aligned.map(r => ({ x: r[f.key], y: r.output })).slice(0, 500),
+        baseIrradiance,
+        normalizedChartData: aligned
+          .map(r => ({
+            x: r[f.key],
+            y: r['irradiance'] > 0 ? +(r.output / r['irradiance'] * baseIrradiance).toFixed(1) : 0,
+          }))
+          .filter(d => d.y > 0)
+          .slice(0, 500),
       }
     })
 
-    // 设备年限因子 — 基于 equipment 安装日期
+    // 设备年限因子 — 全量历史数据，按周聚合，光照修正后分析衰减趋势
     const equipment = await db('equipment')
       .where('station_id', stationId)
       .where('equipment_type', 'INVERTER')
       .orderBy('installation_date', 'asc')
       .first()
 
-    if (equipment && data.length > 0) {
+    if (equipment) {
       const installDate = new Date(equipment.installation_date)
-      const queryEndDate = new Date(endDate)
-      const ageYears = +((queryEndDate.getTime() - installDate.getTime()) / (365.25 * 86400000)).toFixed(2)
+      const nowDate = new Date()
+      const ageYears = +((nowDate.getTime() - installDate.getTime()) / (365.25 * 86400000)).toFixed(2)
 
-      // 按日聚合出力，观察随时间推移的趋势（作为年限代理）
-      const dailyMap = new Map<string, { sum: number; count: number }>()
-      for (const d of data as any[]) {
-        const day = String(d.time).slice(0, 10)
-        if (!dailyMap.has(day)) dailyMap.set(day, { sum: 0, count: 0 })
-        const entry = dailyMap.get(day)!
-        entry.sum += d.active_power_kw
-        entry.count += 1
+      // 全量数据按周聚合（含温度、逆变器效率以做偏相关控制）
+      const allData = await db('pv_output_measurements')
+        .where('station_id', stationId)
+        .where('active_power_kw', '>', 0)
+        .where('irradiance_wm2', '>', 0)
+        .select('time', 'active_power_kw', 'irradiance_wm2', 'temperature_c', 'inverter_efficiency')
+        .orderBy('time', 'asc')
+
+      const weekMap = new Map<string, { sumOutput: number; sumIrrad: number; sumTemp: number; sumInv: number; tempCount: number; invCount: number; count: number }>()
+      for (const d of allData as any[]) {
+        const t = new Date(d.time)
+        const weekStart = new Date(t.getFullYear(), 0, 1 + (Math.floor((t.getTime() - new Date(t.getFullYear(), 0, 1).getTime()) / 86400000 / 7)) * 7)
+        const weekKey = weekStart.toISOString().slice(0, 10)
+        if (!weekMap.has(weekKey)) weekMap.set(weekKey, { sumOutput: 0, sumIrrad: 0, sumTemp: 0, sumInv: 0, tempCount: 0, invCount: 0, count: 0 })
+        const entry = weekMap.get(weekKey)!
+        entry.sumOutput += d.active_power_kw
+        entry.sumIrrad += d.irradiance_wm2
+        if (d.temperature_c != null) { entry.sumTemp += d.temperature_c; entry.tempCount++ }
+        if (d.inverter_efficiency != null) { entry.sumInv += d.inverter_efficiency; entry.invCount++ }
+        entry.count++
       }
-      const dailyData = Array.from(dailyMap.entries())
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([_day, v], i) => ({
-          x: +(ageYears * (i / Math.max(1, dailyMap.size - 1))).toFixed(2),
-          y: +(v.sum / v.count).toFixed(1),
-        }))
 
-      // 计算出力趋势（斜率≈衰减率）
-      const xArr = dailyData.map((d) => d.x)
-      const yArr = dailyData.map((d) => d.y)
-      const ageCorrelation = this.pearsonCorrelation(xArr, yArr)
+      const allIrrad = Array.from(weekMap.values()).map(v => v.sumIrrad / v.count).filter(v => v > 0).sort((a, b) => a - b)
+      const baseIrrad = allIrrad.length > 0 ? allIrrad[Math.floor(allIrrad.length / 2)] : 500
+
+      const weeklyData: Array<{ x: number; y: number; temp?: number; inv?: number }> = []
+      for (const [weekStart, v] of weekMap) {
+        const daysFromInstall = (new Date(weekStart).getTime() - installDate.getTime()) / (365.25 * 86400000)
+        const avgOutput = v.sumOutput / v.count
+        const avgIrrad = v.sumIrrad / v.count
+        const equivOutput = avgIrrad > 0 ? +(avgOutput / avgIrrad * baseIrrad).toFixed(1) : 0
+        if (equivOutput <= 0 || daysFromInstall < 0) continue
+        const pt: any = { x: +daysFromInstall.toFixed(2), y: equivOutput }
+        if (v.tempCount > 0) pt.temp = +(v.sumTemp / v.tempCount).toFixed(1)
+        if (v.invCount > 0) pt.inv = +(v.sumInv / v.invCount).toFixed(3)
+        weeklyData.push(pt)
+      }
+
+      // 简单相关系数
+      const xArr = weeklyData.map(d => d.x)
+      const yArr = weeklyData.map(d => d.y)
+      const ageCorrelation = weeklyData.length >= 4 ? this.pearsonCorrelation(xArr, yArr) : 0
+
+      // 偏相关：控制温度+逆变器效率（对数空间，排除其他因素干扰）
+      let partialR = ageCorrelation
+      const controlLabels: string[] = []
+      const controlDetails: any[] = []
+      const hasTemp = weeklyData.filter(d => d.temp != null).length >= 4
+      const hasInv = weeklyData.filter(d => d.inv != null).length >= 4
+
+      if (hasTemp || hasInv) {
+        const partialRows = weeklyData.filter(d => d.y > 0 && (hasTemp ? d.temp != null : true) && (hasInv ? d.inv != null : true))
+        if (partialRows.length >= 4) {
+          const logX = partialRows.map(d => Math.log(Math.max(0.01, d.x)))
+          const logY = partialRows.map(d => Math.log(d.y))
+          const controls: number[][] = []
+          if (hasTemp) { controls.push(partialRows.map(d => Math.log(d.temp!))); controlLabels.push('温度') }
+          if (hasInv) { controls.push(partialRows.map(d => Math.log(d.inv!))); controlLabels.push('逆变器效率') }
+          partialR = this.partialCorrelation(logX, logY, controls)
+        }
+        if (hasTemp) {
+          const temps = weeklyData.filter(d => d.temp != null).map(d => d.temp!)
+          controlDetails.push({ factorKey: 'temperature', factorLabel: '温度', unit: '°C', mean: +(temps.reduce((a,b)=>a+b,0)/temps.length).toFixed(2), stdDev: +this.stdDev(temps).toFixed(2), min: +Math.min(...temps).toFixed(2), max: +Math.max(...temps).toFixed(2) })
+        }
+        if (hasInv) {
+          const invs = weeklyData.filter(d => d.inv != null).map(d => d.inv!)
+          controlDetails.push({ factorKey: 'inverter_efficiency', factorLabel: '逆变器效率', unit: '', mean: +(invs.reduce((a,b)=>a+b,0)/invs.length).toFixed(4), stdDev: +this.stdDev(invs).toFixed(4), min: +Math.min(...invs).toFixed(4), max: +Math.max(...invs).toFixed(4) })
+        }
+      }
 
       results.push({
         stationId,
         factorType: 'equipment_age',
         factorLabel: '设备年限',
         correlationCoefficient: +ageCorrelation.toFixed(4),
-        impactDescription: `设备已运行${ageYears}年，出力与年限相关系数${ageCorrelation.toFixed(3)}`,
-        chartData: dailyData,
+        partialCorrelationCoefficient: +partialR.toFixed(4),
+        controlledVariables: controlLabels.join('、'),
+        controlDetails,
+        impactDescription: `设备年限与等效出力（光照修正，排除${controlLabels.join('、') || '无'}干扰）：`
+          + `${Math.abs(partialR) < 0.3 ? '趋势不显著'
+            : `${partialR < 0 ? '负相关（衰减趋势' : '正相关（上升趋势'}`
+              + `，${Math.abs(partialR) > 0.7 ? '强' : '中等'}）`}`,
+        chartData: weeklyData.map(d => ({ x: d.x, y: d.y })).slice(0, 500),
+        normalizedChartData: weeklyData.map(d => ({ x: d.x, y: d.y })).slice(0, 500),
+        baseIrradiance: baseIrrad,
+        ageYears,
       } as any)
     } else {
       results.push({
@@ -305,8 +476,13 @@ export class GridDiagnosisService {
         factorType: 'equipment_age',
         factorLabel: '设备年限',
         correlationCoefficient: 0,
+        partialCorrelationCoefficient: 0,
+        controlledVariables: '',
+        controlDetails: [],
         impactDescription: '暂无设备年限数据',
         chartData: [],
+        normalizedChartData: [],
+        baseIrradiance: 0,
       })
     }
 
@@ -391,6 +567,9 @@ export class GridDiagnosisService {
       rainfallMmh = rp.rainfallIntensityMmh
       rainDurationH = rp.durationHours
       rainPeakHour = rp.peakTimeHour
+      // 暴雨日温度低于晴热日，典型夏季暴雨 22~28°C
+      maxTemp = 28
+      minTemp = 22
     }
 
     // 场景下储能降额
@@ -404,6 +583,7 @@ export class GridDiagnosisService {
     // 储能逐时模拟：初始SOC=80%（应急备妥状态），缺口先由储能填补，不够的才是净缺口
     let socMwh = totalStorageMwh * 0.8
     const timeSeriesData: TimePointAnalysis[] = []
+    let hourlyRainfallMmh: number | undefined
     for (let h = 0; h < 24; h++) {
       // ===== 温度曲线：正弦波，最低温~5点，最高温~peakHour =====
       // 基础正弦：midpoint + amplitude * sin((h-8)*π/12)
@@ -433,16 +613,24 @@ export class GridDiagnosisService {
       if (scenarioType === 'high_temperature') {
         // 温度损失：超过25℃标准测试温度后每度损失 pvTempCoeffPct%
         const tempLoss = pvTempCoeffPct / 100 * Math.max(0, panelTemp - 25)
-        // 逆变器降额：面板温度超过50℃开始，上限15%
-        const inverterDerate = panelTemp > 50 ? Math.min(0.15, (panelTemp - 50) * 0.005) : 0
-        degradedOutput = +(normalOutput * (1 - tempLoss) * (1 - inverterDerate)).toFixed(2)
+        // 逆变器效率温敏：环境每升10℃效率约降0.5%，所有温度段均生效
+        const inverterEffLoss = Math.max(0, (tempC - 25) * 0.0005)
+        // 逆变器保护降额：环境温度超过45℃开始，上限12%
+        const inverterDerate = tempC > 45 ? Math.min(0.12, (tempC - 45) * 0.008) : 0
+        degradedOutput = +(normalOutput * (1 - tempLoss) * (1 - inverterEffLoss) * (1 - inverterDerate)).toFixed(2)
       } else {
-        // 暴雨：云层削减辐照
+        // 暴雨：云层削减辐照（云层基础削减因子 + 降雨强度附加）
         const rainStart = rainPeakHour - rainDurationH / 2
         const rainEnd = rainPeakHour + rainDurationH / 2
         const inRain = h >= rainStart && h <= rainEnd
-        const rainFactor = inRain ? 1 - (1 - Math.abs(h - rainPeakHour) / (rainDurationH / 2)) * 0.3 : 0.15
-        degradedOutput = +(normalOutput * (1 - cloudCoverRatio * rainFactor)).toFixed(2)
+        // 降雨强度因子：雨区中心最强，边缘递减，非雨区为0
+        const rainIntensity = inRain ? 1 - Math.abs(h - rainPeakHour) / (rainDurationH / 2) : 0
+        // 逐时降雨强度 mm/h（中心=rainfallMmh，边缘→0，非雨区=0）
+        hourlyRainfallMmh = inRain ? +(rainfallMmh * rainIntensity).toFixed(1) : 0
+        // 云层削减因子：基础0.75（纯云层），降雨中心叠加0.25 → 1.0
+        const cloudBaseFactor = 0.75
+        const rainFactor = cloudBaseFactor + rainIntensity * 0.25
+        degradedOutput = +(normalOutput * Math.max(0.05, 1 - cloudCoverRatio * rainFactor)).toFixed(2)
       }
 
       const dropPct = normalOutput > 0
@@ -480,6 +668,7 @@ export class GridDiagnosisService {
       timeSeriesData.push({
         time: `${String(h).padStart(2, '0')}:00`,
         temperatureC: +tempC.toFixed(1),
+        rainfallIntensityMmh: hourlyRainfallMmh,
         outputKw: normalOutput,
         degradedOutputKw: degradedOutput,
         dropPct,
@@ -780,7 +969,7 @@ export class GridDiagnosisService {
       }))
     }
 
-    // 按电站
+    // 按电站：聚合多个月份数据
     const rows = await db('carbon_emissions as ce')
       .join('solar_pv_stations as spv', 'spv.plant_id', 'ce.plant_id')
       .join('grid_buses as gb', 'gb.id', 'spv.bus_id')
@@ -794,14 +983,14 @@ export class GridDiagnosisService {
         'spv.station_name as stationName',
         'gb.zone',
         'gb.voltage_level as voltageLevel',
-        'ce.period_start as periodStart',
-        'ce.total_output_kwh as totalOutputKwh',
-        'ce.co2_reduction_kg as co2ReductionKg',
-        'ce.coal_saving_ton as coalSavingTon',
-        'ce.so2_reduction_kg as so2ReductionKg',
-        'ce.nox_reduction_kg as noxReductionKg',
+        db.raw('SUM(ce.total_output_kwh) as totalOutputKwh'),
+        db.raw('SUM(ce.co2_reduction_kg) as co2ReductionKg'),
+        db.raw('SUM(ce.coal_saving_ton) as coalSavingTon'),
+        db.raw('SUM(ce.so2_reduction_kg) as so2ReductionKg'),
+        db.raw('SUM(ce.nox_reduction_kg) as noxReductionKg'),
       )
-      .orderBy('ce.period_start', 'desc')
+      .groupBy('spv.id')
+      .orderBy('co2ReductionKg', 'desc')
 
     return rows.map((r: any) => ({
       ...r,
@@ -817,6 +1006,14 @@ export class GridDiagnosisService {
     const co2PerKwh = 0.85; const coalPerKwh = 0.32
     let timeSeries: { time: string; outputKwh: number; co2ReductionKg: number; coalSavingKg: number; thermalCo2Kg: number }[] = []
 
+    // 查询电站容量用于负荷估算
+    const st = await db('solar_pv_stations').where('id', stationId).select('bus_id', 'installed_capacity_mw', 'station_name').first()
+    const busId = (st as any)?.bus_id
+    const capMw: number = (st as any)?.installed_capacity_mw || 50
+    // 日负荷标幺曲线 + 峰值负荷（按电站容量1.5倍估算，光伏渗透率约67%）
+    const lc = [0.45,0.40,0.38,0.35,0.38,0.50,0.65,0.78,0.88,0.92,0.95,0.92,0.88,0.90,0.92,0.95,0.98,1.0,0.95,0.88,0.78,0.65,0.55,0.48]
+    const peakLoadMw = capMw * 1.5
+
     if (granularity === 'hour') {
       // 直接从逐小时种子数据查询光伏出力
       const pvRows = await db('pv_output_measurements')
@@ -824,9 +1021,7 @@ export class GridDiagnosisService {
         .select(db.raw("strftime('%Y-%m-%dT%H:00', time) as hour"), db.raw('AVG(active_power_kw) as avgPvKw'))
         .groupBy('hour').orderBy('hour', 'asc')
 
-      // 查询负荷数据
-      const st = await db('solar_pv_stations').where('id', stationId).select('bus_id').first()
-      const busId = (st as any)?.bus_id
+      // 查询负荷数据（优先使用实测，否则按电站容量估算）
       const loadRows = busId ? await db('load_measurements')
         .where('bus_id', busId).whereBetween('time', [startDate, endDate])
         .select(db.raw("strftime('%Y-%m-%dT%H:00', time) as hour"), 'active_power_mw')
@@ -838,8 +1033,7 @@ export class GridDiagnosisService {
         const pvMw = +(pvKwh / 1000).toFixed(2)
         let loadMw = loadMap.get(pr.hour) || 0
         if (!loadMap.size) {
-          const lc = [0.45,0.40,0.38,0.35,0.38,0.50,0.65,0.78,0.88,0.92,0.95,0.92,0.88,0.90,0.92,0.95,0.98,1.0,0.95,0.88,0.78,0.65,0.55,0.48]
-          loadMw = +(lc[parseInt(pr.hour.slice(11,13)) || 0] * 50).toFixed(2)
+          loadMw = +(lc[parseInt(pr.hour.slice(11,13)) || 0] * peakLoadMw).toFixed(2)
         }
         const thermalMw = Math.max(0, loadMw - pvMw)
         const thermalCo2 = +(thermalMw * 1000 * co2PerKwh).toFixed(2)
@@ -847,18 +1041,31 @@ export class GridDiagnosisService {
         timeSeries.push({ time: pr.hour, outputKwh: pvKwh, co2ReductionKg: pvCo2, coalSavingKg: +(pvKwh * coalPerKwh).toFixed(2), thermalCo2Kg: thermalCo2 })
       }
     } else {
+      // 日模式：基于电站容量估算日负荷（日均负荷 × 24h），然后扣除光伏出力得火电部分
       const rows = await db('pv_output_measurements')
         .where('station_id', stationId).whereBetween('time', [startDate, endDate])
         .select(db.raw("strftime('%Y-%m-%d', time) as period"), db.raw('SUM(active_power_kw * 1) as outputKwh'))
         .groupBy('period').orderBy('period', 'asc')
-      timeSeries = (rows as any[]).map((r: any) => ({ time: r.period, outputKwh: +r.outputKwh.toFixed(2), co2ReductionKg: +(r.outputKwh * co2PerKwh).toFixed(2), coalSavingKg: +(r.outputKwh * coalPerKwh).toFixed(2), thermalCo2Kg: +(r.outputKwh * co2PerKwh).toFixed(2) }))
+      // 日均负荷 ≈ 峰值负荷 × 日负荷率(0.72) × 24h
+      const avgDailyLoadKwh = peakLoadMw * 1000 * 0.72 * 24
+      timeSeries = (rows as any[]).map((r: any) => {
+        const pvKwh = +r.outputKwh.toFixed(2)
+        const thermalKwh = Math.max(0, avgDailyLoadKwh - pvKwh)
+        return {
+          time: r.period,
+          outputKwh: pvKwh,
+          co2ReductionKg: +(pvKwh * co2PerKwh).toFixed(2),
+          coalSavingKg: +(pvKwh * coalPerKwh).toFixed(2),
+          thermalCo2Kg: +(thermalKwh * co2PerKwh).toFixed(2),
+        }
+      })
     }
 
     const totalOutputKwh = +timeSeries.reduce((s: any, d: any) => s + d.outputKwh, 0).toFixed(2)
     const totalCo2ReductionKg = +timeSeries.reduce((s: any, d: any) => s + d.co2ReductionKg, 0).toFixed(2)
     const totalCoalSavingKg = +timeSeries.reduce((s: any, d: any) => s + d.coalSavingKg, 0).toFixed(2)
-    const station = await db('solar_pv_stations').where('id', stationId).select('station_name').first()
-    return { stationId, stationName: (station as any)?.station_name || '', granularity, totalOutputKwh, co2ReductionKg: totalCo2ReductionKg, coalSavingTon: +(totalCoalSavingKg / 1000).toFixed(2), timeSeries, thermalFactor: { co2PerKwh, coalPerKwh, equivalentTrees: +(totalCo2ReductionKg * 0.05).toFixed(0) } }
+    const stationName = (st as any)?.station_name || ''
+    return { stationId, stationName, granularity, totalOutputKwh, co2ReductionKg: totalCo2ReductionKg, coalSavingTon: +(totalCoalSavingKg / 1000).toFixed(2), timeSeries, thermalFactor: { co2PerKwh, coalPerKwh, equivalentTrees: +(totalCo2ReductionKg * 0.05).toFixed(0) } }
   }
 
   // ==================== Joint Output Analysis ====================
@@ -901,48 +1108,58 @@ export class GridDiagnosisService {
     }))
 
     // 获取负荷曲线（用于智能充放电策略）
+    // 负荷种子已统一使用本地时间（无时区），与PV数据strftime结果一致
     const busId = (st as any)?.bus_id
     const loadRows = busId ? await db('load_measurements')
       .where('bus_id', busId).whereBetween('time', [startDate, endDate])
-      .select(db.raw("strftime('%Y-%m-%dT%H:00', time) as hour"), 'active_power_mw')
-      .orderBy('time', 'asc') : []
-    const loadMap = new Map((loadRows as any[]).map((r: any) => [r.hour, (r.active_power_mw || 0) * 1000]))
+      .select(db.raw("strftime('%Y-%m-%dT%H:00', time) as hour"), db.raw('AVG(active_power_mw) as avg_load_mw'))
+      .groupBy('hour').orderBy('hour', 'asc') : []
+    const loadMap = new Map((loadRows as any[]).map((r: any) => [r.hour, (r.avg_load_mw || 0) * 1000]))
 
-    // 削峰填谷策略（动态跟随光伏实际出力）
-    // 午间充电(11-14h)：光伏超出日均值1.2倍时充电
-    // 早晚放电(7-9h,17-20h)：光伏低于日均值0.5倍时放电
-    const pvAvg = hourlyPv.reduce((s, d) => s + d.pvOutputKw, 0) / hourlyPv.length
-    // 根据日期计算初始SOC（15%-35%），避免每天起点相同
-    const dateSeed = startDate.split('-').reduce((s, n) => s * 31 + parseInt(n), 0)
-    const initSocRatio = 0.15 + ((dateSeed * 127 + 311) % 200) / 1000
-    let socKwh = ratedCapacityKwh * initSocRatio
-    const timeSeries = hourlyPv.map((d) => {
-      const hour = parseInt(d.time.slice(11, 13))
-      let chargeKw = 0; let dischargeKw = 0
-
-      if (hour >= 11 && hour <= 14 && socKwh < ratedCapacityKwh * 0.95 && d.pvOutputKw > pvAvg * 1.2) {
-        // 午间光伏高出力时充电，充电量 = min(超出部分, 剩余功率空间, SOC空间)
-        const excess = d.pvOutputKw - pvAvg * 1.2
-        chargeKw = Math.min(excess, ratedPowerKw, (ratedCapacityKwh - socKwh) / 1)
-        socKwh += chargeKw
-      } else if ((hour >= 7 && hour <= 9) || (hour >= 17 && hour <= 20)) {
-        if (socKwh > ratedCapacityKwh * 0.05 && d.pvOutputKw < pvAvg * 0.5) {
-          // 早晚光伏低出力时放电，放电量 = min(缺口, 额定功率, SOC)
-          const shortage = pvAvg * 0.5 - d.pvOutputKw
-          dischargeKw = Math.min(shortage, ratedPowerKw, socKwh / 1)
-          socKwh -= dischargeKw
-        }
-      }
-
-      return {
-        time: d.time,
-        pvOutputKw: d.pvOutputKw,
-        storageChargeKw: +chargeKw.toFixed(2),
-        storageDischargeKw: +dischargeKw.toFixed(2),
-        jointOutputKw: +(d.pvOutputKw + dischargeKw - chargeKw).toFixed(2),
-        socKwh: +socKwh.toFixed(2),
-      }
+    // 联合出力目标：跟随负荷曲线，保持稳定接近用户负荷
+    // 光伏超出负荷 → 多余部分储能充电；光伏低于负荷 → 储能放电补充缺口
+    const hourlyPvWithLoad = hourlyPv.map((d) => {
+      const loadKw = loadMap.get(d.time) // 该时刻负荷(kW)
+      return { ...d, loadKw }
     })
+    // 有负荷数据的时刻用实际负荷，无负荷数据的时刻用光伏均值作为参考负荷
+    const validLoads = hourlyPvWithLoad.filter((d) => d.loadKw != null).map((d) => d.loadKw!)
+    const avgLoad = validLoads.length > 0
+      ? validLoads.reduce((s, v) => s + v, 0) / validLoads.length
+      : hourlyPv.reduce((s, d) => s + d.pvOutputKw, 0) / hourlyPv.length
+
+    // 模拟一天的充放电循环（返回时序+终了SOC）
+    function simulateDay(initSocKwh: number) {
+      let soc = initSocKwh
+      const ts = hourlyPvWithLoad.map((d) => {
+        const targetLoadKw = d.loadKw != null ? d.loadKw : avgLoad
+        let chargeKw = 0; let dischargeKw = 0
+        const surplus = d.pvOutputKw - targetLoadKw
+
+        if (surplus > 0 && soc < ratedCapacityKwh * 0.98) {
+          chargeKw = Math.min(surplus, ratedPowerKw, (ratedCapacityKwh - soc))
+          soc += chargeKw * 0.95 // 充电效率95%
+        } else if (surplus < 0 && soc > ratedCapacityKwh * 0.02) {
+          const deficit = -surplus
+          dischargeKw = Math.min(deficit, ratedPowerKw, soc)
+          soc -= dischargeKw
+        }
+
+        return {
+          time: d.time,
+          pvOutputKw: d.pvOutputKw,
+          storageChargeKw: +chargeKw.toFixed(2),
+          storageDischargeKw: +dischargeKw.toFixed(2),
+          jointOutputKw: +(d.pvOutputKw + dischargeKw - chargeKw).toFixed(2),
+          socKwh: +soc.toFixed(2),
+        }
+      })
+      return { timeSeries: ts, endSoc: soc }
+    }
+
+    // 两遍模拟：第一遍SOC=0跑出白天充电→跨夜剩余电量，第二遍用跨夜SOC作为初始值
+    const firstPass = simulateDay(0)
+    const timeSeries = simulateDay(firstPass.endSoc).timeSeries
 
     // 计算指标
     const pvValues = timeSeries.map((d) => d.pvOutputKw)
@@ -1015,6 +1232,24 @@ export class GridDiagnosisService {
       'solar_pv_stations.grid_connection_voltage_kv as gridVoltageKv',
     )
 
+    // 批量查询各电站近90天实际运行峰值功率
+    const stationIds = [...new Set(rows.map((r: any) => r.stationId).filter(Boolean))] as string[]
+    const stationPeakKw: Record<string, number> = {}
+    if (stationIds.length > 0) {
+      const peakRows = await db('pv_output_measurements')
+        .whereIn('station_id', stationIds)
+        .groupBy('station_id')
+        .select('station_id')
+        .max('active_power_kw as maxKw')
+      for (const pr of peakRows as any[]) {
+        if (pr.station_id && pr.maxKw != null) {
+          stationPeakKw[pr.station_id] = pr.maxKw
+        }
+      }
+    }
+
+    const pf = 0.95 // 功率因数，与种子数据线电流计算保持一致
+
     return rows.map((r: any) => {
       const ratedVoltageKv = r.ratedVoltageKv || r.gridVoltageKv || 10
       const ratedCapacityKva = r.ratedCapacityKva || 0
@@ -1027,9 +1262,33 @@ export class GridDiagnosisService {
       // 穿越电流（取短路电流的60%作为穿越电流估算值）
       const throughCurrentA = shortCircuitCurrentA * 0.6
 
-      // 负载率估算（基于光伏电站装机容量与设备额定容量之比）
-      const stationMw = r.stationCapacityMw || 0
-      const loadRate = ratedCapacityKva > 0 ? (stationMw * 1000) / ratedCapacityKva : 0
+      // 负载率：基于实际运行峰值功率计算
+      const stationId = r.stationId as string
+      const peakKw = stationPeakKw[stationId] || 0
+      let loadRate: number
+      if (peakKw > 0) {
+        // 有实际运行数据：用峰值功率折算实际电流/视在功率
+        if (['BREAKER', 'CABLE', 'SWITCH'].includes(r.equipmentType)) {
+          // 断路器/电缆/开关设备：实际运行电流 / 额定电流
+          const actualCurrentA = ratedVoltageKv > 0 ? peakKw / (Math.sqrt(3) * ratedVoltageKv * pf) : 0
+          loadRate = ratedCurrentA > 0 ? actualCurrentA / ratedCurrentA : 0
+        } else {
+          // 变压器/逆变器/储能：实际视在功率 / 额定容量
+          const peakKva = peakKw / pf
+          loadRate = ratedCapacityKva > 0 ? peakKva / ratedCapacityKva : 0
+        }
+      } else {
+        // 无运行数据时回退用装机容量估算
+        const stationMw = r.stationCapacityMw || 0
+        const fallbackKw = stationMw * 1000
+        if (['BREAKER', 'CABLE', 'SWITCH'].includes(r.equipmentType)) {
+          const fallbackCurrentA = ratedVoltageKv > 0 ? fallbackKw / (Math.sqrt(3) * ratedVoltageKv * pf) : 0
+          loadRate = ratedCurrentA > 0 ? fallbackCurrentA / ratedCurrentA : 0
+        } else {
+          const fallbackKva = fallbackKw / pf
+          loadRate = ratedCapacityKva > 0 ? fallbackKva / ratedCapacityKva : 0
+        }
+      }
 
       // 过载判断
       const isOverloaded = loadRate > 0.8
@@ -1123,6 +1382,60 @@ export class GridDiagnosisService {
     else grade = 'C'
 
     return { equipmentId, reliability, failureRate, grade }
+  }
+
+  /** 获取指定小时设备级功率（按额定容量比例分配） */
+  async getEquipmentPower(stationId: string, hourTime: string) {
+    // 获取该电站所有运行中设备
+    const equipment = await db('equipment')
+      .where('station_id', stationId)
+      .where('status', 'operational')
+      .select('id', 'name', 'equipment_type', 'rated_capacity_kva')
+    if (!equipment.length) return { time: hourTime, stationActivePowerKw: 0, stationReactivePowerKvar: 0, totalRatedCapacityKva: 0, items: [] }
+
+    // 该小时的电站级功率（取该小时内的平均值）
+    const hourStart = hourTime.includes('T') ? hourTime : `${hourTime}T00:00:00`
+    const hourEnd = hourTime.includes('T') ? hourTime.replace(/:\d{2}:\d{2}$/, ':59:59') : `${hourTime}T23:59:59`
+    const m = await db('pv_output_measurements')
+      .where('station_id', stationId)
+      .where('time', '>=', hourStart)
+      .where('time', '<=', hourEnd)
+      .avg('active_power_kw as avgP')
+      .avg('reactive_power_kvar as avgQ')
+      .first() as { avgP: number | null; avgQ: number | null } | undefined
+    const stationActiveKw = m?.avgP ?? 0
+    const stationReactiveKvar = m?.avgQ ?? 0
+
+    // 按额定容量比例分配
+    const totalCapacity = equipment.reduce((s, e) => s + (e.rated_capacity_kva || 0), 0)
+    const items = equipment.map((eq) => {
+      const ratio = totalCapacity > 0 ? (eq.rated_capacity_kva || 0) / totalCapacity : 0
+      // 非功率型设备（电缆、开关、断路器）不分配功率
+      const isPowerBearing = ['TRANSFORMER', 'INVERTER', 'BATTERY'].includes(eq.equipment_type)
+      const p = isPowerBearing ? +(stationActiveKw * ratio).toFixed(2) : null
+      const q = isPowerBearing ? +(stationReactiveKvar * ratio).toFixed(2) : null
+      const s = p != null && q != null ? +Math.sqrt(p * p + q * q).toFixed(2) : null
+      return {
+        equipmentId: eq.id,
+        equipmentName: eq.name || eq.id,
+        equipmentType: eq.equipment_type,
+        ratedCapacityKva: eq.rated_capacity_kva || 0,
+        activePowerKw: p,
+        reactivePowerKvar: q,
+        apparentPowerKva: s,
+      }
+    })
+    return { time: hourTime, stationActivePowerKw: stationActiveKw, stationReactivePowerKvar: stationReactiveKvar, totalRatedCapacityKva: totalCapacity, items }
+  }
+
+  /** 获取某电站有功率数据的小时列表 */
+  async getAvailableHours(stationId: string) {
+    const rows = await db('pv_output_measurements')
+      .where('station_id', stationId)
+      .select(db.raw("DISTINCT strftime('%Y-%m-%dT%H', time) as hour"))
+      .orderBy('hour', 'desc')
+      .limit(168) // 最近7天
+    return (rows as any[]).map(r => r.hour + ':00:00')
   }
 
   async getLifecycle(equipmentId: string) {
@@ -2133,6 +2446,87 @@ export class GridDiagnosisService {
     return denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom
   }
 
+  /** 多元线性回归残差：Y 对 X 矩阵回归后的残差向量 */
+  private regressionResiduals(Y: number[], X: number[][]): number[] {
+    const n = Y.length
+    const k = X.length // 自变量个数
+    if (n < k + 2) return Y.map(() => 0)
+
+    // 构建设计矩阵 [1, X₁, X₂, ... Xₖ]
+    // 用正规方程 (XᵀX)β = XᵀY 求解
+    const p = k + 1 // 含截距项
+    const XtX: number[][] = Array.from({ length: p }, () => Array(p).fill(0))
+    const XtY: number[] = Array(p).fill(0)
+
+    for (let i = 0; i < n; i++) {
+      const row = [1, ...X.map(col => col[i])]
+      for (let r = 0; r < p; r++) {
+        XtY[r] += row[r] * Y[i]
+        for (let c = 0; c < p; c++) {
+          XtX[r][c] += row[r] * row[c]
+        }
+      }
+    }
+
+    // 高斯消元求解 β
+    const beta = this.gaussElimination(XtX, XtY)
+    if (!beta) return Y.map(() => 0)
+
+    // 计算残差 Y - Xβ
+    const residuals: number[] = []
+    for (let i = 0; i < n; i++) {
+      let pred = beta[0] // 截距
+      for (let j = 0; j < k; j++) {
+        pred += beta[j + 1] * X[j][i]
+      }
+      residuals.push(Y[i] - pred)
+    }
+    return residuals
+  }
+
+  /** 偏相关系数：控制 controlVars 后，x 与 y 的净相关 */
+  private partialCorrelation(
+    x: number[], y: number[], controlVars: number[][],
+  ): number {
+    const validControlVars = controlVars.filter(c => c.length === x.length)
+    if (validControlVars.length === 0) return this.pearsonCorrelation(x, y)
+
+    const xRes = this.regressionResiduals(x, validControlVars)
+    const yRes = this.regressionResiduals(y, validControlVars)
+    return this.pearsonCorrelation(xRes, yRes)
+  }
+
+  /** 高斯消元求解线性方程组 Ax = b */
+  private gaussElimination(A: number[][], b: number[]): number[] | null {
+    const n = A.length
+    const M: number[][] = A.map((row, i) => [...row, b[i]])
+
+    for (let col = 0; col < n; col++) {
+      // 部分主元选取
+      let maxRow = col
+      for (let row = col + 1; row < n; row++) {
+        if (Math.abs(M[row][col]) > Math.abs(M[maxRow][col])) maxRow = row
+      }
+      if (Math.abs(M[maxRow][col]) < 1e-12) return null
+      ;[M[col], M[maxRow]] = [M[maxRow], M[col]]
+
+      for (let row = col + 1; row < n; row++) {
+        const factor = M[row][col] / M[col][col]
+        for (let j = col; j <= n; j++) {
+          M[row][j] -= factor * M[col][j]
+        }
+      }
+    }
+
+    const x: number[] = Array(n).fill(0)
+    for (let i = n - 1; i >= 0; i--) {
+      let sum = M[i][n]
+      for (let j = i + 1; j < n; j++) sum -= M[i][j] * x[j]
+      x[i] = sum / M[i][i]
+    }
+    return x
+  }
+
   private stdDev(values: number[]): number {
     if (values.length === 0) return 0
     const mean = values.reduce((a, b) => a + b, 0) / values.length
@@ -2266,17 +2660,21 @@ export class GridDiagnosisService {
     doc.on('data', (chunk: Buffer) => buffers.push(chunk))
     const endPromise = new Promise<Buffer>((resolve) => { doc.on('end', () => resolve(Buffer.concat(buffers))) })
 
+    // 注册中文字体（Windows 系统黑体）
+    doc.registerFont('SimHei', 'C:\\Windows\\Fonts\\simhei.ttf')
+    const F = 'SimHei'
+
     const r = result.report
     const si = r.stationInfo
     const sa = r.strategyAnalysis
     const c = r.conclusion
 
-    doc.fontSize(18).text('极端场景应对方案报告', { align: 'center' })
+    doc.font(F).fontSize(18).text('极端场景应对方案报告', { align: 'center' })
     doc.moveDown(0.8)
 
     // 一
-    doc.fontSize(14).text('一、模拟电站基础信息')
-    doc.fontSize(10)
+    doc.font(F).fontSize(14).text('一、模拟电站基础信息')
+    doc.font(F).fontSize(10)
       .text(`电站名称：${si.stationName}`)
       .text(`装机容量：${si.installedCapacityMw} MW`)
       .text(`并网电压等级：${si.gridConnectionVoltageKv} kV`)
@@ -2284,64 +2682,63 @@ export class GridDiagnosisService {
       .text(`关联母线：${si.busName}`)
       .text(`储能配置：${si.storagePowerMw}MW / ${si.storageCapacityMwh}MWh`)
     doc.moveDown(0.3)
-    doc.font('Helvetica-Bold').text('模拟参数：')
-    doc.font('Helvetica').fontSize(10)
+    doc.font(F).fontSize(10).text('模拟参数：')
     for (const [k, v] of Object.entries(r.scenarioParams)) {
-      doc.text(`  ${k}：${v}`)
+      doc.font(F).fontSize(10).text(`  ${k}：${v}`)
     }
     doc.moveDown(0.5)
 
     // 二、数据分析
     const da = r.dataAnalysis
-    doc.fontSize(14).text('二、模拟数据分析')
-    doc.fontSize(10)
-    doc.font('Helvetica-Bold').text('出力骤降分析：')
-    doc.font('Helvetica').text(`  全天出力平均骤降 ${da.outputDrop.overallDropPct}%，最大骤降发生在 ${da.outputDrop.peakDropHour}（${da.outputDrop.peakDropPct}%），最严重时段 ${da.outputDrop.worstPeriod}`)
-    doc.font('Helvetica-Bold').text('供电保障分析：')
-    doc.font('Helvetica').text(`  全天供电保障率 ${da.supplyGuarantee.avgRate}%，供电最紧张时段 ${da.supplyGuarantee.minRateHour}`)
-    doc.font('Helvetica-Bold').text('供需缺口分析：')
-    doc.font('Helvetica').text(`  最大供需缺口 ${da.supplyGap.maxGapMw} MW（${da.supplyGap.maxGapHour}），全天累计缺电量 ${da.supplyGap.totalShortfallMwh} MWh，缺口时段 ${da.supplyGap.gapPeriod}`)
+    doc.font(F).fontSize(14).text('二、模拟数据分析')
+    doc.font(F).fontSize(10)
+    doc.font(F).text('【出力骤降分析】')
+    doc.font(F).text(`  全天出力平均骤降 ${da.outputDrop.overallDropPct}%，最大骤降发生在 ${da.outputDrop.peakDropHour}（${da.outputDrop.peakDropPct}%），最严重时段 ${da.outputDrop.worstPeriod}`)
+    doc.font(F).text('【供电保障分析】')
+    doc.font(F).text(`  全天供电保障率 ${da.supplyGuarantee.avgRate}%，供电最紧张时段 ${da.supplyGuarantee.minRateHour}`)
+    doc.font(F).text('【供需缺口分析】')
+    doc.font(F).text(`  最大供需缺口 ${da.supplyGap.maxGapMw} MW（${da.supplyGap.maxGapHour}），全天累计缺电量 ${da.supplyGap.totalShortfallMwh} MWh，缺口时段 ${da.supplyGap.gapPeriod}`)
     if (da.temperature) {
-      doc.font('Helvetica-Bold').text('温度分析：')
-      doc.font('Helvetica').text(`  最高环境温度 ${da.temperature.maxTempC}℃（${da.temperature.maxTempHour}），光伏面板峰值温度约 ${da.temperature.peakPanelTempC}℃，高温窗口 ${da.temperature.highTempWindow}`)
+      doc.font(F).text('【温度分析】')
+      doc.font(F).text(`  最高环境温度 ${da.temperature.maxTempC}℃（${da.temperature.maxTempHour}），光伏面板峰值温度约 ${da.temperature.peakPanelTempC}℃，高温窗口 ${da.temperature.highTempWindow}`)
     }
     if (da.rainstorm) {
-      doc.font('Helvetica-Bold').text('暴雨影响分析：')
-      doc.font('Helvetica').text(`  最大降雨强度 ${da.rainstorm.maxIntensityMmh} mm/h，云层覆盖率 ${da.rainstorm.cloudCoverPct}%，影响时长 ${da.rainstorm.affectedHours}h，最严重时段 ${da.rainstorm.worstPeriod}`)
+      doc.font(F).text('【暴雨影响分析】')
+      doc.font(F).text(`  最大降雨强度 ${da.rainstorm.maxIntensityMmh} mm/h，云层覆盖率 ${da.rainstorm.cloudCoverPct}%，影响时长 ${da.rainstorm.affectedHours}h，最严重时段 ${da.rainstorm.worstPeriod}`)
     }
-    doc.font('Helvetica-Bold').text('备用需求分析：')
-    doc.font('Helvetica').text(`  峰值备用需求 ${da.backup.peakRequiredMw} MW（${da.backup.peakRequiredHour}），推荐 ${da.backup.recommendedType} 配置 ${da.backup.recommendedCapacityMw} MW`)
+    doc.font(F).text('【备用需求分析】')
+    doc.font(F).text(`  峰值备用需求 ${da.backup.peakRequiredMw} MW（${da.backup.peakRequiredHour}），推荐 ${da.backup.recommendedType} 配置 ${da.backup.recommendedCapacityMw} MW`)
     doc.moveDown(0.5)
 
     // 三
-    doc.fontSize(14).text('三、策略分析')
-    doc.fontSize(10)
+    doc.font(F).fontSize(14).text('三、策略分析')
+    doc.font(F).fontSize(10)
 
     if (sa.cooling) {
-      doc.fontSize(11).text('散热策略')
-      doc.fontSize(10)
+      doc.font(F).fontSize(11).text('散热策略')
+      doc.font(F).fontSize(10)
         .text(`面板温度估算：${sa.cooling.panelTempEstimate}`)
         .text(`逆变器风险时段：${sa.cooling.inverterRiskPeriods}`)
         .text('散热措施：')
-      for (const m of sa.cooling.measures) { doc.text(`  • ${m}`) }
-      doc.text(`预期效果：${sa.cooling.expectedEffect}`)
+      for (const m of sa.cooling.measures) { doc.font(F).text(`  • ${m}`) }
+      doc.font(F).text(`预期效果：${sa.cooling.expectedEffect}`)
       doc.moveDown(0.3)
     }
 
     if (sa.protection) {
-      doc.fontSize(11).text('防护策略')
-      doc.fontSize(10)
+      doc.font(F).fontSize(11).text('防护策略')
+      doc.font(F).fontSize(10)
         .text(`防水评估：${sa.protection.waterproofAssessment}`)
         .text(`线路保护：${sa.protection.lineProtectionAdvice}`)
         .text(`排水建议：${sa.protection.drainageAdvice}`)
         .text('应急物资：')
-      for (const s of sa.protection.emergencySupplies) { doc.text(`  • ${s}`) }
+      for (const s of sa.protection.emergencySupplies) { doc.font(F).text(`  • ${s}`) }
       doc.moveDown(0.3)
     }
 
     if (sa.scheduling) {
-      doc.fontSize(11).text('调度策略')
-      doc.fontSize(10)
+      doc.font(F).fontSize(11).text('调度策略')
+      doc.font(F).fontSize(10)
         .text(`储能调度：${sa.scheduling.storageStrategy}`)
         .text(`光伏建议：${sa.scheduling.pvLimitAdvice}`)
         .text(`负荷调度：${sa.scheduling.loadShedAdvice}`)
@@ -2350,19 +2747,19 @@ export class GridDiagnosisService {
     }
 
     // 四
-    doc.fontSize(14).text('四、总结报告')
-    doc.fontSize(10)
+    doc.font(F).fontSize(14).text('四、总结报告')
+    doc.font(F).fontSize(10)
     doc.text('关键结论：')
-    for (const f of c.keyFindings) { doc.text(`  • ${f}`) }
+    for (const f of c.keyFindings) { doc.font(F).text(`  • ${f}`) }
     doc.moveDown(0.3)
-    doc.text('量化指标：')
-    doc.text(`  总缺电量：${c.quantitativeMetrics.totalEnergyShortfallMwh} MWh`)
-    doc.text(`  峰值备用需求：${c.quantitativeMetrics.peakBackupRequiredMw} MW`)
-    doc.text(`  供电保障率：${c.quantitativeMetrics.avgSupplyGuaranteeRate}%`)
-    doc.text(`  最大供需缺口：${c.quantitativeMetrics.maxSupplyGapMw} MW`)
+    doc.font(F).text('量化指标：')
+    doc.font(F).text(`  总缺电量：${c.quantitativeMetrics.totalEnergyShortfallMwh} MWh`)
+    doc.font(F).text(`  峰值备用需求：${c.quantitativeMetrics.peakBackupRequiredMw} MW`)
+    doc.font(F).text(`  供电保障率：${c.quantitativeMetrics.avgSupplyGuaranteeRate}%`)
+    doc.font(F).text(`  最大供需缺口：${c.quantitativeMetrics.maxSupplyGapMw} MW`)
     doc.moveDown(0.3)
-    doc.text(`备用电源配置建议：${c.backupRecommendation}`)
-    doc.text(`综合风险评级：${c.riskLevelLabel}`)
+    doc.font(F).text(`备用电源配置建议：${c.backupRecommendation}`)
+    doc.font(F).text(`综合风险评级：${c.riskLevelLabel}`)
 
     doc.end()
     const buffer = await endPromise

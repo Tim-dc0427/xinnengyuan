@@ -54,11 +54,11 @@ export async function fetchPvOutputStats(query: PvOutputStatsQuery) {
 // ==================== 影响因素分析 ====================
 export async function fetchFactorAnalysis(query: {
   stationId: string
-  startDate: string
-  endDate: string
+  startDate?: string
+  endDate?: string
 }) {
   const res = await apiClient.get('/api/v1/grid-diagnosis/pv-output/factors', { params: query })
-  return res.data?.data as (FactorAnalysisResult & { factorLabel?: string; ageYears?: number })[]
+  return res.data?.data as FactorAnalysisResult[]
 }
 
 // ==================== 极端场景模拟 ====================
@@ -136,6 +136,17 @@ export async function fetchEquipmentCapacity(query: { equipmentType?: string; st
 export async function fetchEquipmentReliability(equipmentId: string) {
   const res = await apiClient.get(`/api/v1/grid-diagnosis/equipment/reliability/${equipmentId}`)
   return res.data?.data as { equipmentId: string; reliability: number; failureRate: number; grade: string }
+}
+
+// ==================== 设备级功率（按时段） ====================
+export async function fetchEquipmentPower(stationId: string, time: string) {
+  const res = await apiClient.get('/api/v1/grid-diagnosis/equipment/power', { params: { stationId, time } })
+  return res.data?.data as import('@new-energy/shared').EquipmentPowerResponse
+}
+
+export async function fetchAvailableHours(stationId: string) {
+  const res = await apiClient.get('/api/v1/grid-diagnosis/equipment/power-hours', { params: { stationId } })
+  return res.data?.data as string[]
 }
 
 // ==================== 设备生命周期 ====================

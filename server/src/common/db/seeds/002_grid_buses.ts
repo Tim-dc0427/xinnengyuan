@@ -66,7 +66,7 @@ export async function seed(knex: Knex): Promise<void> {
     { name: '西湖', zone: '西湖区', load220Mw: 80, load110Mw: 150, load10Mw: 200, n220: 2, n110: 2, n10: 2, ampTx220to110: 280, ampTx110to10: 130, ampLine220: 480, ampLine110: 180, ampLine10: 120 },
     { name: '拱墅', zone: '拱墅区', load220Mw: 70, load110Mw: 140, load10Mw: 190, n220: 2, n110: 2, n10: 2, ampTx220to110: 280, ampTx110to10: 130, ampLine220: 480, ampLine110: 180, ampLine10: 120 },
     { name: '上城', zone: '上城区', load220Mw: 60, load110Mw: 130, load10Mw: 180, n220: 1, n110: 2, n10: 2, ampTx220to110: 260, ampTx110to10: 100, ampLine220: 440, ampLine110: 160, ampLine10: 100 },
-    { name: '钱塘', zone: '钱塘区', load220Mw: 100, load110Mw: 160, load10Mw: 200, n220: 2, n110: 2, n10: 2, ampTx220to110: 300, ampTx110to10: 130, ampLine220: 480, ampLine110: 180, ampLine10: 140 },
+    { name: '钱塘', zone: '钱塘区', load220Mw: 180, load110Mw: 260, load10Mw: 300, n220: 3, n110: 2, n10: 2, ampTx220to110: 360, ampTx110to10: 180, ampLine220: 520, ampLine110: 200, ampLine10: 160 },
     { name: '临平', zone: '临平区', load220Mw: 70, load110Mw: 120, load10Mw: 150, n220: 1, n110: 2, n10: 1, ampTx220to110: 300, ampTx110to10: 200, ampLine220: 440, ampLine110: 180, ampLine10: 140 },
     { name: '富阳', zone: '富阳区', load220Mw: 60, load110Mw: 100, load10Mw: 120, n220: 1, n110: 2, n10: 2, ampTx220to110: 220, ampTx110to10: 80, ampLine220: 400, ampLine110: 140, ampLine10: 100 },
     { name: '临安', zone: '临安区', load220Mw: 50, load110Mw: 80, load10Mw: 100, n220: 2, n110: 2, n10: 2, ampTx220to110: 200, ampTx110to10: 65, ampLine220: 440, ampLine110: 120, ampLine10: 100 },

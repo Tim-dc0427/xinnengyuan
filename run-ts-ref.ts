@@ -1,7 +1,7 @@
 /**
  * TypeScript 版 NR 计算参照结果
- * 运行: cd e:/新能源 && npx tsx e:/新能源项目/run-ts-reference.ts
- * 或:   cd e:/新能源/server && npx tsx run-ts-reference.ts (先复制到server目录)
+ * 运行: cd e:/xinnengyuan && npx tsx e:/xinnengyuan/run-ts-reference.ts
+ * 或:   cd e:/xinnengyuan/server && npx tsx run-ts-reference.ts (先复制到server目录)
  */
 import Database from 'better-sqlite3';
 import { calculatePowerFlow } from './server/src/modules/power-flow/power-flow-calculator';

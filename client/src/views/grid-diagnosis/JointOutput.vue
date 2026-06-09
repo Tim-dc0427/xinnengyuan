@@ -38,26 +38,32 @@ const chartOption = computed(() => {
     series.push({
       name: '光伏出力', type: 'line', smooth: true,
       data: ts.map((d) => d.pvOutputKw),
-      areaStyle: { opacity: 0.1 },
+      areaStyle: { color: '#409eff', opacity: 0.1 },
+      itemStyle: { color: '#409eff' },
     })
   }
   if (viewMode.value === 'storage_only' || viewMode.value === 'joint') {
     series.push({
       name: '储能充电', type: 'line',
-      data: ts.map((d) => d.storageChargeKw),
+      data: ts.map((d) => -d.storageChargeKw), // 负值表示充能（吸收功率）
       lineStyle: { type: 'dotted' },
+      areaStyle: { color: '#67c23a', opacity: 0.25 },
+      itemStyle: { color: '#67c23a' },
     })
     series.push({
       name: '储能放电', type: 'line',
       data: ts.map((d) => d.storageDischargeKw),
       lineStyle: { type: 'dotted' },
+      areaStyle: { color: '#e6a23c', opacity: 0.25 },
+      itemStyle: { color: '#e6a23c' },
     })
   }
   if (viewMode.value === 'joint') {
     series.push({
       name: '联合出力', type: 'line', smooth: true,
       data: ts.map((d) => d.jointOutputKw),
-      areaStyle: { opacity: 0.2 },
+      areaStyle: { color: '#c9a94e', opacity: 0.2 },
+      itemStyle: { color: '#c9a94e' },
     })
   }
 

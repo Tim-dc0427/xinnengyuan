@@ -59,6 +59,20 @@ export class GridDiagnosisController {
     res.json({ code: 200, message: 'ok', data })
   }
 
+  getEquipmentPower = async (req: Request, res: Response) => {
+    const { stationId, time } = req.query as any
+    if (!stationId || !time) return res.status(400).json({ code: 400, message: '缺少参数 stationId/time' })
+    const data = await this.service.getEquipmentPower(stationId, time)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
+  getAvailableHours = async (req: Request, res: Response) => {
+    const { stationId } = req.query as any
+    if (!stationId) return res.status(400).json({ code: 400, message: '缺少参数 stationId' })
+    const data = await this.service.getAvailableHours(stationId)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
   assessReliability = async (req: Request, res: Response) => {
     const data = await this.service.assessReliability(req.params.id)
     res.json({ code: 200, message: 'ok', data })

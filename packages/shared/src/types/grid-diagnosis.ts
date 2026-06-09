@@ -121,13 +121,29 @@ export interface StorageOption {
 }
 
 // ==================== Influencing Factors ====================
+export interface ControlVariableDetail {
+  factorKey: string
+  factorLabel: string
+  unit: string
+  mean: number
+  stdDev: number
+  min: number
+  max: number
+}
+
 export interface FactorAnalysisResult {
-  plantId: string
-  plantName: string
-  correlationCoefficient: number
+  stationId: string
   factorType: 'irradiance' | 'temperature' | 'humidity' | 'equipment_age' | 'inverter_efficiency'
+  factorLabel: string
+  correlationCoefficient: number
+  partialCorrelationCoefficient: number
+  controlledVariables: string
+  controlDetails: ControlVariableDetail[]
   impactDescription: string
   chartData: Array<{ x: number; y: number }>
+  normalizedChartData: Array<{ x: number; y: number }>
+  baseIrradiance?: number
+  ageYears?: number
 }
 
 // ==================== Extreme Scenario ====================
@@ -137,8 +153,8 @@ export type ExtremeScenarioType = 'high_temperature' | 'rainstorm'
 
 /** 高温场景参数 */
 export interface HighTempParams {
-  maxTemperatureC: number          // 最高温度 ℃ (35~50)
-  minTemperatureC: number          // 最低温度 ℃ (20~30)
+  maxTemperatureC: number          // 最高温度 ℃ (30~55)
+  minTemperatureC: number          // 最低温度 ℃ (18~32)
   peakTimeHour: number             // 峰值时刻 小时 (12~16)
   durationHalfHours: number        // 高温持续半宽 h (2~6)
 }
@@ -164,6 +180,7 @@ export interface ExtremeScenarioRequest {
 export interface TimePointAnalysis {
   time: string
   temperatureC: number             // 当前环境温度
+  rainfallIntensityMmh?: number    // 逐时降雨强度 mm/h（暴雨场景）
   outputKw: number                 // 正常光伏出力（晴好天气预期）
   degradedOutputKw: number         // 极端场景光伏出力
   dropPct: number                  // 出力骤降比例（%）
@@ -387,6 +404,24 @@ export interface EquipmentCapacityResult {
   isOverloaded: boolean
   riskLevel: string
   assessment: Record<string, any>
+}
+
+export interface EquipmentPowerItem {
+  equipmentId: string
+  equipmentName: string
+  equipmentType: string
+  ratedCapacityKva: number
+  activePowerKw: number | null
+  reactivePowerKvar: number | null
+  apparentPowerKva: number | null
+}
+
+export interface EquipmentPowerResponse {
+  time: string
+  stationActivePowerKw: number
+  stationReactivePowerKvar: number
+  totalRatedCapacityKva: number
+  items: EquipmentPowerItem[]
 }
 
 export interface EquipmentLifecycle {
