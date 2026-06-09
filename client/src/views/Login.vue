@@ -15,7 +15,7 @@ async function handleLogin() {
   try {
     await authStore.login(form.value)
     ElMessage.success('登录成功')
-    router.push('/dashboard')
+    router.push('/')
   } catch {
     ElMessage.error('用户名或密码错误')
   } finally {

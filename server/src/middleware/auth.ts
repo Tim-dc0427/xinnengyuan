@@ -28,7 +28,7 @@ async function getAdminId(): Promise<string | null> {
   return cachedAdminId
 }
 
-export function auth(_allowedRoles: UserRole[]) {
+export function auth(allowedRoles: UserRole[]) {
   return async (req: Request, res: Response, next: NextFunction) => {
     const authHeader = req.headers.authorization
 
@@ -68,6 +68,14 @@ export function auth(_allowedRoles: UserRole[]) {
       if (!exists) {
         const adminId = await getAdminId()
         req.user.id = adminId || '00000000-0000-0000-0000-000000000000'
+      }
+    }
+
+    // 角色权限校验
+    if (req.user && allowedRoles.length > 0) {
+      const userRole = req.user.role
+      if (userRole !== 'admin' && !allowedRoles.includes(userRole)) {
+        return res.status(403).json({ code: 403, message: '无权限访问', data: null })
       }
     }
 

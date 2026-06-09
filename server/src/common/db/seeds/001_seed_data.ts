@@ -56,6 +56,7 @@ export async function seed(knex: Knex): Promise<void> {
   await knex('pv_output_measurements').del()
   await knex('audit_logs').del()
   await knex('users').del()
+  await knex('departments').del()
   await knex('roles').del()
 
   // Roles
@@ -71,13 +72,21 @@ export async function seed(knex: Knex): Promise<void> {
     { id: viewerRoleId, name: 'viewer', permissions: '["read"]' },
   ])
 
+  // Departments
+  const deptGridId = uuid()
+  const deptPvId = uuid()
+  await knex('departments').insert([
+    { id: deptGridId, name: '电网组', parent_id: null, sort_order: 1 },
+    { id: deptPvId, name: '光伏组', parent_id: null, sort_order: 2 },
+  ])
+
   // Users
   const passwordHash = await bcrypt.hash('password123', 10)
   await knex('users').insert([
-    { id: uuid(), username: 'admin', password_hash: passwordHash, display_name: '系统管理员', role_id: adminRoleId, department: '信息中心' },
-    { id: uuid(), username: 'planner', password_hash: passwordHash, display_name: '规划人员', role_id: plannerRoleId, department: '规划部' },
-    { id: uuid(), username: 'operator', password_hash: passwordHash, display_name: '运行人员', role_id: operatorRoleId, department: '运检部' },
-    { id: uuid(), username: 'viewer', password_hash: passwordHash, display_name: '查看人员', role_id: viewerRoleId, department: '发展部' },
+    { id: uuid(), username: 'admin', password_hash: passwordHash, display_name: '系统管理员', role_id: adminRoleId, department: '电网组', department_id: deptGridId },
+    { id: uuid(), username: 'planner', password_hash: passwordHash, display_name: '规划人员', role_id: plannerRoleId, department: '光伏组', department_id: deptPvId },
+    { id: uuid(), username: 'operator', password_hash: passwordHash, display_name: '运行人员', role_id: operatorRoleId, department: '光伏组', department_id: deptPvId },
+    { id: uuid(), username: 'viewer', password_hash: passwordHash, display_name: '查看人员', role_id: viewerRoleId, department: '光伏组', department_id: deptPvId },
   ])
 
   // Equipment（独立储能电站设备，不关联 power_plants）

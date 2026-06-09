@@ -429,6 +429,31 @@ const routes: RouteRecordRaw[] = [
           },
         ],
       },
+      // Module 6: System Management
+      {
+        path: 'system/users',
+        name: 'UserManage',
+        component: () => import('@/views/system/UserManage.vue'),
+        meta: { title: '用户管理', roles: ['admin'] },
+      },
+      {
+        path: 'system/roles',
+        name: 'RoleManage',
+        component: () => import('@/views/system/RoleManage.vue'),
+        meta: { title: '角色管理', roles: ['admin'] },
+      },
+      {
+        path: 'system/departments',
+        name: 'DepartmentManage',
+        component: () => import('@/views/system/DepartmentManage.vue'),
+        meta: { title: '组织管理', roles: ['admin'] },
+      },
+      {
+        path: 'system/audit-logs',
+        name: 'AuditLogs',
+        component: () => import('@/views/system/AuditLogs.vue'),
+        meta: { title: '操作日志', roles: ['admin'] },
+      },
     ],
   },
   {

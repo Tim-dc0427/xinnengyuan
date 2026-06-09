@@ -1,8 +1,23 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { Bell, ArrowDown } from '@element-plus/icons-vue'
+import { useAuthStore } from '@/stores/auth.store'
+import { ElMessage } from 'element-plus'
 
+const router = useRouter()
+const authStore = useAuthStore()
 const alertCount = ref(3)
+
+const displayName = computed(() => authStore.user?.displayName || '管理员')
+
+function handleCommand(cmd: string) {
+  if (cmd === 'logout') {
+    authStore.logout()
+    ElMessage.success('已退出登录')
+    router.push('/login')
+  }
+}
 </script>
 
 <template>
@@ -11,15 +26,15 @@ const alertCount = ref(3)
       <el-badge :value="alertCount" class="notification-badge">
         <el-button :icon="Bell" circle />
       </el-badge>
-      <el-dropdown>
+      <el-dropdown @command="handleCommand">
         <span class="user-info">
-          管理员
+          {{ displayName }}
           <el-icon><ArrowDown /></el-icon>
         </span>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item>个人设置</el-dropdown-item>
-            <el-dropdown-item divided>退出登录</el-dropdown-item>
+            <el-dropdown-item command="settings">个人设置</el-dropdown-item>
+            <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>

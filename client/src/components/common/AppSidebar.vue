@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Monitor, Edit, Collection, DataAnalysis, Connection, ArrowDown } from '@element-plus/icons-vue'
+import { Monitor, Edit, Collection, DataAnalysis, Connection, Setting, ArrowDown } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -51,6 +51,15 @@ const menuItems: MenuItem[] = [
     children: [
       { path: '/resources/hub', title: '互动资源库' },
       { path: '/resources/scenarios', title: '互动场景库' },
+    ],
+  },
+  {
+    title: '系统管理', icon: Setting,
+    children: [
+      { path: '/system/users', title: '用户管理' },
+      { path: '/system/roles', title: '角色管理' },
+      { path: '/system/departments', title: '组织管理' },
+      { path: '/system/audit-logs', title: '操作日志' },
     ],
   },
 ]

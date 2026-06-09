@@ -7,6 +7,7 @@ import { powerFlowRoutes } from '../modules/power-flow/power-flow.routes.js'
 import { resourceRoutes } from '../modules/resource/resource.routes.js'
 import { dataValidationRoutes } from '../modules/data-validation/data-validation.routes.js'
 import { scenarioRoutes } from '../modules/scenario/scenario.routes.js'
+import { systemRoutes } from '../modules/system/system.routes.js'
 
 export function registerRoutes(app: Express) {
   app.use('/api/v1/auth', authRoutes)
@@ -17,6 +18,7 @@ export function registerRoutes(app: Express) {
   app.use('/api/v1/resource', resourceRoutes)
   app.use('/api/v1/data-validation', dataValidationRoutes)
   app.use('/api/v1/scenario', scenarioRoutes)
+  app.use('/api/v1/system', systemRoutes)
 
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() })
