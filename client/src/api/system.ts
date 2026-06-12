@@ -61,3 +61,9 @@ export function getAuditLogs(params?: { page?: number; pageSize?: number; userId
 export function getUserOptions() {
   return apiClient.get<{ code: number; data: { id: string; username: string; display_name: string }[] }>('/api/v1/system/user-options')
 }
+
+// ==================== 数据范围 ====================
+export async function fetchDataRanges() {
+  const res = await apiClient.get('/api/v1/system/data-ranges')
+  return res.data?.data as Record<string, { minTime: string | null; maxTime: string | null; count: number }>
+}

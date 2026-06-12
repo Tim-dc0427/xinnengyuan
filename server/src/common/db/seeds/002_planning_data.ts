@@ -2,28 +2,17 @@ import type { Knex } from 'knex'
 import { v4 as uuid } from 'uuid'
 
 export async function seed(knex: Knex): Promise<void> {
-  // Clear planning tables
+  // 仅清空规划模块自身管理的表
   await knex('equipment_lifecycle_records').del()
-  await knex('equipment_ledger').del()
   await knex('cost_comparison_records').del()
   await knex('unit_cost_params').del()
   await knex('absorption_plans').del()
   await knex('candidate_points').del()
   await knex('constraint_rules').del()
-  await knex('pv_cost_library').del()
 
   const now = new Date().toISOString()
 
-  // ==================== PV Cost Library ====================
-  await knex('pv_cost_library').insert([
-    { id: 'cl-seed-1', model_name: '高效单晶组件HC-550W', model_type: 'pv_module', manufacturer: '隆基绿能', unit_cost_per_kw: 1800, rated_power_kw: 0.55, efficiency_pct: 21.5, lifespan_years: 30, remark: '主流高效型号', created_at: new Date().toISOString() },
-    { id: 'cl-seed-2', model_name: '组串式逆变器SG-250KW', model_type: 'inverter', manufacturer: '华为数字能源', unit_cost_per_kw: 350, rated_power_kw: 250, efficiency_pct: 98.5, lifespan_years: 15, remark: '智能运维支持', created_at: new Date().toISOString() },
-    { id: 'cl-seed-3', model_name: '双面双玻组件T-660W', model_type: 'pv_module', manufacturer: '天合光能', unit_cost_per_kw: 2100, rated_power_kw: 0.66, efficiency_pct: 22.3, lifespan_years: 30, remark: '高发电量', created_at: new Date().toISOString() },
-    { id: 'cl-seed-4', model_name: '箱式变压器S11-2000', model_type: 'transformer', manufacturer: '特变电工', unit_cost_per_kw: 120, rated_power_kw: 2000, efficiency_pct: 99.0, lifespan_years: 25, remark: '升压并网', created_at: new Date().toISOString() },
-    { id: 'cl-seed-5', model_name: '光伏电缆PV1-F 4mm²', model_type: 'cable', manufacturer: '远东电缆', unit_cost_per_kw: 45, rated_power_kw: 0, efficiency_pct: 0, lifespan_years: 25, remark: '耐候光伏专用电缆', created_at: new Date().toISOString() },
-  ])
-
-  // Constraint Rules
+  // ==================== Constraint Rules ====================
   await knex('constraint_rules').insert([
     { id: 'cr-seed-1', rule_name: '最小光照资源', rule_type: 'irradiance', weight: 0.30, enabled: true, params: JSON.stringify({ minAnnualIrradiance: 1300, unit: 'kWh/m²' }), description: '年均日照辐射量不低于1300kWh/m²', plan_id: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
     { id: 'cr-seed-2', rule_name: '并网距离约束', rule_type: 'grid', weight: 0.25, enabled: true, params: JSON.stringify({ maxDistanceKm: 20 }), description: '接入点距最近变电站不超过20km', plan_id: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() },

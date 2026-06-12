@@ -55,3 +55,4 @@ gridDiagnosisRoutes.get('/power-quality/equipment-impact', auth(['admin', 'plann
 gridDiagnosisRoutes.get('/power-quality/complaint-stats', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getComplaintStats)
 gridDiagnosisRoutes.get('/power-quality/hotspot-distribution', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getHotspotDistribution)
 gridDiagnosisRoutes.get('/power-quality/equipment-events', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getEquipmentEvents)
+gridDiagnosisRoutes.get('/power-quality/complaint-tickets', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getComplaintTickets)

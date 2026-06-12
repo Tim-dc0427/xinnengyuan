@@ -36,7 +36,7 @@ export async function seed(knex: Knex): Promise<void> {
   const stationDefs: StationDef[] = [
     {
       stationName: '径山镇宇航梦园渔光互补光伏项目',
-      busName: '余杭10kV',
+      busName: '径山光伏并网',
       capacityMw: 5.44,
       actualRuntimeHours: 1180,
       prevActualRuntimeHours: 0,
@@ -50,7 +50,7 @@ export async function seed(knex: Knex): Promise<void> {
     },
     {
       stationName: '舒能渔光互补光伏项目',
-      busName: '钱塘变220kV',
+      busName: '义蓬光伏并网',
       capacityMw: 100,
       actualRuntimeHours: 1080,
       prevActualRuntimeHours: 1120,
@@ -64,7 +64,7 @@ export async function seed(knex: Knex): Promise<void> {
     },
     {
       stationName: '嘉达渔光互补光伏项目',
-      busName: '钱塘东变220kV',
+      busName: '临江光伏并网',
       capacityMw: 400,
       actualRuntimeHours: 1280,
       prevActualRuntimeHours: 0,
@@ -78,7 +78,7 @@ export async function seed(knex: Knex): Promise<void> {
     },
     {
       stationName: '凌能渔光互补光伏项目',
-      busName: '钱塘西变220kV',
+      busName: '新湾光伏并网',
       capacityMw: 550,
       actualRuntimeHours: 1300,
       prevActualRuntimeHours: 0,
@@ -92,7 +92,7 @@ export async function seed(knex: Knex): Promise<void> {
     },
     {
       stationName: '华洋山地光伏电站',
-      busName: '建德变110kV',
+      busName: '华洋光伏并网',
       capacityMw: 155,
       actualRuntimeHours: 1080,
       prevActualRuntimeHours: 1120,
@@ -106,7 +106,7 @@ export async function seed(knex: Knex): Promise<void> {
     },
     {
       stationName: '临安青山集中式光伏电站',
-      busName: '临安变110kV',
+      busName: '青山光伏并网',
       capacityMw: 60,
       actualRuntimeHours: 1150,
       prevActualRuntimeHours: 1160,
@@ -120,7 +120,7 @@ export async function seed(knex: Knex): Promise<void> {
     },
     {
       stationName: '临安太湖源集中式光伏电站',
-      busName: '临安东变110kV',
+      busName: '太湖源光伏并网',
       capacityMw: 40,
       actualRuntimeHours: 1120,
       prevActualRuntimeHours: 1100,
@@ -134,7 +134,7 @@ export async function seed(knex: Knex): Promise<void> {
     },
     {
       stationName: '萧山南阳集中式光伏电站',
-      busName: '萧山10kV',
+      busName: '南阳光伏并网',
       capacityMw: 50,
       actualRuntimeHours: 1200,
       prevActualRuntimeHours: 1180,
@@ -148,7 +148,7 @@ export async function seed(knex: Knex): Promise<void> {
     },
     {
       stationName: '富阳渔山集中式光伏电站',
-      busName: '富阳10kV',
+      busName: '渔山光伏并网',
       capacityMw: 30,
       actualRuntimeHours: 1160,
       prevActualRuntimeHours: 1190,
@@ -225,10 +225,14 @@ export async function seed(knex: Knex): Promise<void> {
       const isMedium = capMw >= 30
       const installDate = s.installed_date || '2024-01-01'
 
-      // 变压器
+      // 变压器及其短路参数（GB/T 6451 / IEC 60076）
+      // 选型原则：双主变并列运行，单台容量覆盖 ≥50% 全站峰值视在功率
+      // 400MW 光伏站全站峰值视在 ≈421MVA（pf=0.95），单台≥210MVA，取 240MVA
       let trafoModel: string, trafoKva: number, trafoKv: number
-      if (capMw >= 350) {
-        trafoModel = 'SZ11-180000/220'; trafoKva = 180000; trafoKv = 220
+      if (capMw >= 450) {
+        trafoModel = 'SZ11-300000/220'; trafoKva = 300000; trafoKv = 220
+      } else if (capMw >= 350) {
+        trafoModel = 'SZ11-240000/220'; trafoKva = 240000; trafoKv = 220
       } else if (capMw >= 200) {
         trafoModel = 'SZ11-120000/220'; trafoKva = 120000; trafoKv = 220
       } else if (capMw >= 100) {
@@ -241,6 +245,19 @@ export async function seed(knex: Knex): Promise<void> {
         trafoModel = 'S11-6300/35'; trafoKva = 6300; trafoKv = 35
       }
 
+      // 根据型号确定短路参数
+      const trafoScParams: Record<string, { ukPct: number; ithKa: number; tthS: number; ipeakKa: number }> = {
+        'SZ11-300000/220': { ukPct: 14.5, ithKa: 63, tthS: 2, ipeakKa: 160 },
+        'SZ11-240000/220': { ukPct: 14.0, ithKa: 50, tthS: 2, ipeakKa: 125 },
+        'SZ11-180000/220': { ukPct: 13.5, ithKa: 40, tthS: 2, ipeakKa: 100 },
+        'SZ11-120000/220': { ukPct: 13.0, ithKa: 31.5, tthS: 2, ipeakKa: 80 },
+        'SZ11-75000/110':  { ukPct: 10.5, ithKa: 25, tthS: 2, ipeakKa: 63 },
+        'SZ11-50000/110':  { ukPct: 10.5, ithKa: 20, tthS: 2, ipeakKa: 50 },
+        'SZ11-31500/110':  { ukPct: 10.5, ithKa: 16, tthS: 2, ipeakKa: 40 },
+        'S11-6300/35':     { ukPct: 7.5, ithKa: 6.3, tthS: 2, ipeakKa: 16 },
+      }
+      const scp = trafoScParams[trafoModel]
+
       const mainTrafoId = uuid()
       stationEquipment.push({
         id: mainTrafoId,
@@ -251,8 +268,14 @@ export async function seed(knex: Knex): Promise<void> {
         rated_capacity_kva: trafoKva,
         rated_voltage_kv: trafoKv,
         rated_current_a: Math.round(trafoKva / trafoKv * 0.7),
+        short_circuit_impedance_pct: scp.ukPct,
+        rated_thermal_withstand_current_ka: scp.ithKa,
+        rated_thermal_duration_s: scp.tthS,
+        rated_peak_withstand_current_ka: scp.ipeakKa,
+        rated_temp_rise_c: 8,
         installation_date: installDate,
         design_life_years: 25,
+        failure_rate: trafoKv >= 220 ? 0.005 : trafoKv >= 110 ? 0.006 : 0.006,
         grade: 'A',
         status: 'operational',
         created_at: now,
@@ -280,8 +303,14 @@ export async function seed(knex: Knex): Promise<void> {
           rated_capacity_kva: trafoKva,
           rated_voltage_kv: trafoKv,
           rated_current_a: Math.round(trafoKva / trafoKv * 0.7),
+          short_circuit_impedance_pct: scp.ukPct,
+          rated_thermal_withstand_current_ka: scp.ithKa,
+          rated_thermal_duration_s: scp.tthS,
+          rated_peak_withstand_current_ka: scp.ipeakKa,
           installation_date: installDate,
+          rated_temp_rise_c: 8,
           design_life_years: 25,
+          failure_rate: trafoKv >= 220 ? 0.007 : trafoKv >= 110 ? 0.008 : 0.008,
           grade: 'B',
           status: 'operational',
           created_at: now,
@@ -310,8 +339,10 @@ export async function seed(knex: Knex): Promise<void> {
           rated_capacity_kva: capMw >= 20 ? 110 : 300,
           rated_voltage_kv: 0.8,
           rated_current_a: capMw >= 20 ? 80 : 216,
+          rated_temp_rise_c: 6,
           installation_date: installDate,
           design_life_years: 15,
+          failure_rate: 0.012,
           grade: 'B',
           status: 'operational',
           created_at: now,
@@ -346,8 +377,10 @@ export async function seed(knex: Knex): Promise<void> {
             rated_capacity_kva: battKva,
             rated_voltage_kv: 0.768,
             rated_current_a: Math.round(battKva / 0.768),
+            rated_temp_rise_c: 5,
             installation_date: installDate,
             design_life_years: 12,
+            failure_rate: (isLarge ? 0.005 : i === 1 ? 0.005 : 0.008),
             grade: isLarge ? 'A' : i === 1 ? 'A' : 'B',
             status: 'operational',
             created_at: now,
@@ -377,8 +410,10 @@ export async function seed(knex: Knex): Promise<void> {
             rated_capacity_kva: Math.round(battKva / pcsCount),
             rated_voltage_kv: 0.8,
             rated_current_a: Math.round(battKva / pcsCount / 0.8),
+            rated_temp_rise_c: 6,
             installation_date: installDate,
             design_life_years: 15,
+            failure_rate: (isLarge ? 0.007 : i === 1 ? 0.007 : 0.012),
             grade: isLarge ? 'A' : i === 1 ? 'A' : 'B',
             status: 'operational',
             created_at: now,
@@ -416,7 +451,10 @@ export async function seed(knex: Knex): Promise<void> {
           id: brkId, station_id: s.id, name: `${sn}-并网断路器`, equipment_type: 'BREAKER',
           model_number: breakingKa >= 63 ? 'LW-252/63kA' : breakingKa >= 40 ? 'LW-126/40kA' : breakingKa >= 25 ? 'ZN-40.5/25kA' : 'ZN-12/16kA',
           rated_capacity_kva: brkRatedKva, rated_voltage_kv: gridKv, rated_current_a: lineCurrentA,
-          installation_date: installDate, design_life_years: 20, grade: brkGrade, status: 'operational',
+          rated_temp_rise_c: 4,
+          installation_date: installDate, design_life_years: 20,
+          failure_rate: brkGrade === 'A' ? 0.003 : brkGrade === 'B' ? 0.004 : 0.006,
+          grade: brkGrade, status: 'operational',
           created_at: now, updated_at: now,
         })
         equipLifecycle.push({
@@ -434,7 +472,10 @@ export async function seed(knex: Knex): Promise<void> {
           id: cableId, station_id: s.id, name: `${sn}-并网电力电缆`, equipment_type: 'CABLE',
           model_number: gridKv >= 110 ? 'YJLW03-630' : 'YJV22-240',
           rated_capacity_kva: cableRatedKva, rated_voltage_kv: gridKv, rated_current_a: cableAmp,
-          installation_date: installDate, design_life_years: 30, grade: cableGrade, status: 'operational',
+          rated_temp_rise_c: 3,
+          installation_date: installDate, design_life_years: 30,
+          failure_rate: cableGrade === 'A' ? 0.007 : cableGrade === 'B' ? 0.012 : 0.020,
+          grade: cableGrade, status: 'operational',
           created_at: now, updated_at: now,
         })
         equipLifecycle.push({
@@ -448,11 +489,36 @@ export async function seed(knex: Knex): Promise<void> {
         const swGrade = switchFactor >= 1.3 ? 'A' : switchFactor >= 1.0 ? 'B' : 'C'
         const swRatedKva = Math.round(switchRatedA * gridKv * Math.sqrt(3))
         const swId = uuid()
+
+        // 开关柜短路参数（按 KYN 型号 + 等级）
+        const swModel = gridKv >= 110 ? 'KYN61-40.5' : 'KYN28-12'
+        const swScParams: Record<string, Record<string, { ithKa: number; tthS: number; ipeakKa: number; ibreakKa: number }>> = {
+          'KYN61-40.5': {
+            A: { ithKa: 31.5, tthS: 4, ipeakKa: 80, ibreakKa: 31.5 },
+            B: { ithKa: 25, tthS: 4, ipeakKa: 63, ibreakKa: 25 },
+            C: { ithKa: 20, tthS: 4, ipeakKa: 50, ibreakKa: 20 },
+          },
+          'KYN28-12': {
+            A: { ithKa: 31.5, tthS: 4, ipeakKa: 80, ibreakKa: 31.5 },
+            B: { ithKa: 25, tthS: 4, ipeakKa: 63, ibreakKa: 25 },
+            C: { ithKa: 20, tthS: 4, ipeakKa: 50, ibreakKa: 20 },
+          },
+        }
+        const swSc = swScParams[swModel]?.[swGrade] || swScParams['KYN28-12']['B']
+
         stationEquipment.push({
           id: swId, station_id: s.id, name: `${sn}-并网开关柜`, equipment_type: 'SWITCH',
-          model_number: gridKv >= 110 ? 'KYN61-40.5' : 'KYN28-12',
+          model_number: swModel,
           rated_capacity_kva: swRatedKva, rated_voltage_kv: gridKv, rated_current_a: switchRatedA,
-          installation_date: installDate, design_life_years: 20, grade: swGrade, status: 'operational',
+          rated_temp_rise_c: 4,
+          short_circuit_impedance_pct: null,
+          rated_thermal_withstand_current_ka: swSc.ithKa,
+          rated_thermal_duration_s: swSc.tthS,
+          rated_peak_withstand_current_ka: swSc.ipeakKa,
+          rated_breaking_current_ka: swSc.ibreakKa,
+          installation_date: installDate, design_life_years: 20,
+          failure_rate: swGrade === 'A' ? 0.003 : swGrade === 'B' ? 0.005 : 0.008,
+          grade: swGrade, status: 'operational',
           created_at: now, updated_at: now,
         })
         equipLifecycle.push({
@@ -536,43 +602,78 @@ export async function seed(knex: Knex): Promise<void> {
       console.log(`  ✓ ${ledgerRows.length} equipment_ledger records`)
     }
 
-    // 注入故障事件，制造差异化可靠性等级
+    // 注入故障事件（按设备类型+役龄，参照 IEEE 493 / CIGRE TB 793 / 国家能源局2024年报）
+    // 故障率量级：逆变器 ≈0.1次/年、电缆≈0.04、变压器≈0.03、断路器≈0.02、开关柜≈0.02、电池≈0.03
     const faultEvents: any[] = []
-    for (const s of insertedStations) {
-      const eqs = stationEquipment.filter((e: any) => e.station_id === s.id)
-      // 舒能 100MW（2015年投运，最老）→ 3次故障 → C级
-      if (s.station_name.includes('舒能')) {
-        for (const eq of eqs.slice(0, 2)) {
+    for (const eq of stationEquipment) {
+      const eqSt = insertedStations.find((s: any) => s.id === eq.station_id)
+      if (!eqSt) continue
+      const eqName: string = eq.name || ''
+      const eqType: string = eq.equipment_type || ''
+      const installYr = new Date(eqSt.installed_date || eq.installation_date || '2024-01-01').getFullYear()
+      const age = 2026 - installYr
+
+      // 舒能站（2015投运，11年役龄）— 老旧站，多种设备累积故障
+      if (eqSt.station_name.includes('舒能')) {
+        if (eqType === 'INVERTER' && eqName.includes('逆变器') && !eqName.includes('PCS')) {
           faultEvents.push(
-            { id: uuid(), equipment_id: eq.id, event_type: 'FAULT', event_date: '2020-07-15', description: '绝缘老化导致局部放电超标', remaining_life_years: 15, created_at: now },
-            { id: uuid(), equipment_id: eq.id, event_type: 'FAULT', event_date: '2022-11-03', description: '冷却系统故障致绕组温度过高', remaining_life_years: 12, created_at: now },
-            { id: uuid(), equipment_id: eq.id, event_type: 'FAULT', event_date: '2024-05-20', description: '套管密封损坏导致油泄漏', remaining_life_years: 8, created_at: now },
+            { id: uuid(), equipment_id: eq.id, event_type: 'FAULT', event_date: '2019-08-15', description: 'IGBT模块过流损坏', remaining_life_years: 10, created_at: now },
+            { id: uuid(), equipment_id: eq.id, event_type: 'FAULT', event_date: '2023-06-20', description: '直流侧绝缘阻抗下降', remaining_life_years: 7, created_at: now },
+          )
+        }
+        if (eqName.includes('PCS') && eqName.includes('1')) {
+          faultEvents.push(
+            { id: uuid(), equipment_id: eq.id, event_type: 'FAULT', event_date: '2022-03-10', description: '交流滤波器电容老化', remaining_life_years: 8, created_at: now },
+          )
+        }
+        if (eqName.includes('PCS') && eqName.includes('2')) {
+          faultEvents.push(
+            { id: uuid(), equipment_id: eq.id, event_type: 'FAULT', event_date: '2024-11-05', description: 'MPPT控制器失效', remaining_life_years: 5, created_at: now },
+          )
+        }
+        if (eqType === 'CABLE') {
+          faultEvents.push(
+            { id: uuid(), equipment_id: eq.id, event_type: 'FAULT', event_date: '2021-07-30', description: '电缆接头过热', remaining_life_years: 20, created_at: now },
+          )
+        }
+        if (eqType === 'TRANSFORMER') {
+          faultEvents.push(
+            { id: uuid(), equipment_id: eq.id, event_type: 'FAULT', event_date: '2020-05-12', description: '冷却系统故障致绕组温度过高', remaining_life_years: 19, created_at: now },
+          )
+        }
+        if (eqType === 'BREAKER') {
+          faultEvents.push(
+            { id: uuid(), equipment_id: eq.id, event_type: 'FAULT', event_date: '2023-09-18', description: '触头烧蚀导致接触电阻超标', remaining_life_years: 12, created_at: now },
           )
         }
       }
-      // 华洋山地 155MW → 2次故障 → B/C级
-      else if (s.station_name.includes('华洋')) {
-        for (const eq of eqs.slice(0, 1)) {
-          faultEvents.push(
-            { id: uuid(), equipment_id: eq.id, event_type: 'FAULT', event_date: '2025-03-10', description: '雷击导致绝缘子闪络', remaining_life_years: 18, created_at: now },
-          )
-        }
+
+      // 华洋站（2024投运，~2年役龄）— 山地环境，雷击风险
+      if (eqSt.station_name.includes('华洋') && eqType === 'BREAKER') {
+        faultEvents.push(
+          { id: uuid(), equipment_id: eq.id, event_type: 'FAULT', event_date: '2025-07-22', description: '雷击导致绝缘子闪络', remaining_life_years: 18, created_at: now },
+        )
       }
-      // 临安青山 60MW → 1次故障 → B级
-      else if (s.station_name.includes('青山')) {
-        for (const eq of eqs.slice(0, 1)) {
-          faultEvents.push(
-            { id: uuid(), equipment_id: eq.id, event_type: 'FAULT', event_date: '2025-09-22', description: '逆变器IGBT模块过流损坏', remaining_life_years: 12, created_at: now },
-          )
-        }
+
+      // 青山站（2024投运，~2年役龄）— 逆变器早期故障
+      if (eqSt.station_name.includes('青山') && eqType === 'INVERTER' && !eqName.includes('PCS')) {
+        faultEvents.push(
+          { id: uuid(), equipment_id: eq.id, event_type: 'FAULT', event_date: '2025-09-22', description: 'IGBT模块过流损坏（早期失效）', remaining_life_years: 12, created_at: now },
+        )
       }
-      // 临安太湖源 → 1次故障 → B级
-      else if (s.station_name.includes('太湖源')) {
-        for (const eq of eqs.slice(0, 1)) {
-          faultEvents.push(
-            { id: uuid(), equipment_id: eq.id, event_type: 'FAULT', event_date: '2026-01-08', description: '接线端子松动导致接触电阻增大', remaining_life_years: 10, created_at: now },
-          )
-        }
+
+      // 太湖源站（2024投运，~2年役龄）— 接线工艺问题
+      if (eqSt.station_name.includes('太湖源') && eqType === 'SWITCH') {
+        faultEvents.push(
+          { id: uuid(), equipment_id: eq.id, event_type: 'FAULT', event_date: '2026-01-08', description: '二次回路接线端子松动', remaining_life_years: 14, created_at: now },
+        )
+      }
+
+      // 渔山站（2024-05投运，~2年役龄）— 潮湿环境电缆问题
+      if (eqSt.station_name.includes('渔山') && eqType === 'CABLE') {
+        faultEvents.push(
+          { id: uuid(), equipment_id: eq.id, event_type: 'FAULT', event_date: '2025-12-15', description: '电缆绝缘受潮导致绝缘电阻下降', remaining_life_years: 26, created_at: now },
+        )
       }
     }
     await knex('equipment_lifecycle').insert(faultEvents)

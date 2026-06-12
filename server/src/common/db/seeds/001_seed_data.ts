@@ -4,11 +4,26 @@ import { v4 as uuid } from 'uuid'
 
 export async function seed(knex: Knex): Promise<void> {
   // Clear all tables in reverse dependency order
+  await knex('project_compliance_results').del()
+  await knex('plan_adjustments').del()
+  await knex('project_versions').del()
+  await knex('lesson_learned').del()
+  await knex('project_audit').del()
   await knex('effectiveness_verifications').del()
-  await knex('operation_projects').del()
   await knex('outage_events').del()
   await knex('complaint_stats').del()
+  await knex('complaint_tickets').del()
   await knex('equipment_temperature').del()
+  await knex('battery_cycle_records').del()
+  await knex('equipment_lifecycle').del()
+  await knex('project_documents').del()
+  await knex('access_conditions').del()
+  await knex('feasibility_assessments').del()
+  await knex('projects').del()
+  await knex('equipment').del()
+  await knex('pv_output_measurements').del()
+  await knex('carbon_emissions').del()
+  await knex('alerts').del()
   await knex('solar_pv_stations').del()
   await knex('manual_intervention_log').del()
   await knex('execution_evaluations').del()
@@ -24,11 +39,6 @@ export async function seed(knex: Knex): Promise<void> {
   await knex('batch_calc_groups').del()
   await knex('calc_results').del()
   await knex('calc_tasks').del()
-  await knex('project_audit').del()
-  await knex('feasibility_assessments').del()
-  await knex('access_conditions').del()
-  await knex('project_documents').del()
-  await knex('projects').del()
   await knex('project_type_fields').del()
   await knex('project_types').del()
   await knex('access_condition_plans').del()
@@ -47,47 +57,60 @@ export async function seed(knex: Knex): Promise<void> {
   await knex('pv_model_types').del()
   await knex('pv_field_library').del()
   await knex('plans').del()
-  await knex('carbon_emissions').del()
-  await knex('alerts').del()
   await knex('voltage_measurements').del()
-  await knex('battery_cycle_records').del()
-  await knex('equipment_lifecycle').del()
-  await knex('equipment').del()
-  await knex('pv_output_measurements').del()
-  await knex('audit_logs').del()
-  await knex('users').del()
-  await knex('departments').del()
-  await knex('roles').del()
+  // users/roles/departments/audit_logs 是运行时管理数据，不清空，仅首次初始化
 
-  // Roles
-  const adminRoleId = uuid()
-  const plannerRoleId = uuid()
-  const operatorRoleId = uuid()
-  const viewerRoleId = uuid()
+  // Roles — 仅首次初始化
+  const roleCount = (await knex('roles').count('* as cnt').first()) as any
+  if (roleCount.cnt === 0) {
+    await knex('roles').insert([
+      { id: uuid(), name: 'admin', permissions: '["*"]' },
+      { id: uuid(), name: 'planner', permissions: '["read","write","calculate"]' },
+      { id: uuid(), name: 'operator', permissions: '["read","calculate"]' },
+      { id: uuid(), name: 'viewer', permissions: '["read"]' },
+    ])
+  }
 
-  await knex('roles').insert([
-    { id: adminRoleId, name: 'admin', permissions: '["*"]' },
-    { id: plannerRoleId, name: 'planner', permissions: '["read","write","calculate"]' },
-    { id: operatorRoleId, name: 'operator', permissions: '["read","calculate"]' },
-    { id: viewerRoleId, name: 'viewer', permissions: '["read"]' },
-  ])
+  // 查询实际角色 ID（首次插入或已存在）
+  const roles = await knex('roles').select('id', 'name')
+  const adminRoleId = roles.find((r: any) => r.name === 'admin')!.id
+  const plannerRoleId = roles.find((r: any) => r.name === 'planner')!.id
+  const operatorRoleId = roles.find((r: any) => r.name === 'operator')!.id
+  const viewerRoleId = roles.find((r: any) => r.name === 'viewer')!.id
 
-  // Departments
-  const deptGridId = uuid()
-  const deptPvId = uuid()
-  await knex('departments').insert([
-    { id: deptGridId, name: '电网组', parent_id: null, sort_order: 1 },
-    { id: deptPvId, name: '光伏组', parent_id: null, sort_order: 2 },
-  ])
+  // Departments — 仅首次初始化
+  const deptCount = (await knex('departments').count('* as cnt').first()) as any
+  if (deptCount.cnt === 0) {
+    await knex('departments').insert([
+      { id: uuid(), name: '电网组', parent_id: null, sort_order: 1 },
+      { id: uuid(), name: '光伏组', parent_id: null, sort_order: 2 },
+    ])
+  }
 
-  // Users
-  const passwordHash = await bcrypt.hash('password123', 10)
-  await knex('users').insert([
-    { id: uuid(), username: 'admin', password_hash: passwordHash, display_name: '系统管理员', role_id: adminRoleId, department: '电网组', department_id: deptGridId },
-    { id: uuid(), username: 'planner', password_hash: passwordHash, display_name: '规划人员', role_id: plannerRoleId, department: '光伏组', department_id: deptPvId },
-    { id: uuid(), username: 'operator', password_hash: passwordHash, display_name: '运行人员', role_id: operatorRoleId, department: '光伏组', department_id: deptPvId },
-    { id: uuid(), username: 'viewer', password_hash: passwordHash, display_name: '查看人员', role_id: viewerRoleId, department: '光伏组', department_id: deptPvId },
-  ])
+  // 查询实际部门 ID
+  const depts = await knex('departments').select('id', 'name')
+  const deptGridId = depts.find((d: any) => d.name === '电网组')!.id
+  const deptPvId = depts.find((d: any) => d.name === '光伏组')!.id
+
+  // Users — 按 username 判重，仅插入不存在的用户（已有用户保留不动）
+  const existingUsers = await knex('users').select('username')
+  const existingUsernames = new Set(existingUsers.map((u: any) => u.username))
+
+  const defaultUsers = [
+    { username: 'admin', display_name: '系统管理员', role_id: adminRoleId, department: '电网组', department_id: deptGridId },
+    { username: 'planner', display_name: '规划人员', role_id: plannerRoleId, department: '光伏组', department_id: deptPvId },
+    { username: 'operator', display_name: '运行人员', role_id: operatorRoleId, department: '光伏组', department_id: deptPvId },
+    { username: 'viewer', display_name: '查看人员', role_id: viewerRoleId, department: '光伏组', department_id: deptPvId },
+    { username: '13676637601', display_name: '管理员', role_id: adminRoleId, department: '电网组', department_id: deptGridId },
+  ]
+
+  const newUsers = defaultUsers.filter(u => !existingUsernames.has(u.username))
+  if (newUsers.length > 0) {
+    const passwordHash = await bcrypt.hash('password123', 10)
+    await knex('users').insert(
+      newUsers.map(u => ({ id: uuid(), username: u.username, password_hash: passwordHash, display_name: u.display_name, role_id: u.role_id, department: u.department, department_id: u.department_id })),
+    )
+  }
 
   // Equipment（独立储能电站设备，不关联 power_plants）
   const eqC1Id = uuid()  // plantC 变压器
@@ -97,10 +120,11 @@ export async function seed(knex: Knex): Promise<void> {
 
   await knex('equipment').insert([
     // ---- 清源储能电站 (10MW STORAGE) ----
-    { id: eqC1Id, name: 'S11-12500/35 主变压器', equipment_type: 'TRANSFORMER', model_number: 'S11-12500/35', rated_capacity_kva: 12500, rated_voltage_kv: 35, rated_current_a: 206, installation_date: '2024-01-01', design_life_years: 25, grade: 'A' },
-    { id: eqC2Id, name: '磷酸铁锂储能电池组 5000kWh', equipment_type: 'BATTERY', model_number: 'LFP-280Ah-40P', rated_capacity_kva: 5000, rated_voltage_kv: 768, rated_current_a: 651, installation_date: '2024-01-01', design_life_years: 12, grade: 'A' },
-    { id: eqC3Id, name: '磷酸铁锂储能电池组 5000kWh（II段）', equipment_type: 'BATTERY', model_number: 'LFP-280Ah-40P', rated_capacity_kva: 5000, rated_voltage_kv: 768, rated_current_a: 651, installation_date: '2024-01-01', design_life_years: 12, grade: 'B' },
-    { id: eqC4Id, name: 'PCS-500K 储能变流器', equipment_type: 'INVERTER', model_number: 'PCS-500K', rated_capacity_kva: 500, rated_voltage_kv: 0.8, rated_current_a: 361, installation_date: '2024-01-01', design_life_years: 15, grade: 'A' },
+    // failure_rate（次/年）：参照 IEEE Std 493 + IEA PVPS 光伏逆变器数据
+    { id: eqC1Id, name: 'S11-12500/35 主变压器', equipment_type: 'TRANSFORMER', model_number: 'S11-12500/35', rated_capacity_kva: 12500, rated_voltage_kv: 35, rated_current_a: 206, short_circuit_impedance_pct: 7.5, rated_thermal_withstand_current_ka: 6.3, rated_thermal_duration_s: 2, rated_peak_withstand_current_ka: 16, rated_temp_rise_c: 8, installation_date: '2024-01-01', design_life_years: 25, failure_rate: 0.006, grade: 'A' },
+    { id: eqC2Id, name: '磷酸铁锂储能电池组 5000kWh', equipment_type: 'BATTERY', model_number: 'LFP-280Ah-40P', rated_capacity_kva: 5000, rated_voltage_kv: 768, rated_current_a: 651, rated_temp_rise_c: 5, installation_date: '2024-01-01', design_life_years: 12, failure_rate: 0.005, grade: 'A' },
+    { id: eqC3Id, name: '磷酸铁锂储能电池组 5000kWh（II段）', equipment_type: 'BATTERY', model_number: 'LFP-280Ah-40P', rated_capacity_kva: 5000, rated_voltage_kv: 768, rated_current_a: 651, rated_temp_rise_c: 5, installation_date: '2024-01-01', design_life_years: 12, failure_rate: 0.008, grade: 'B' },
+    { id: eqC4Id, name: 'PCS-500K 储能变流器', equipment_type: 'INVERTER', model_number: 'PCS-500K', rated_capacity_kva: 500, rated_voltage_kv: 0.8, rated_current_a: 361, rated_temp_rise_c: 6, installation_date: '2024-01-01', design_life_years: 15, failure_rate: 0.007, grade: 'A' },
   ])
 
   // Equipment lifecycle events（仅非光伏设备）
@@ -111,6 +135,9 @@ export async function seed(knex: Knex): Promise<void> {
     { id: uuid(), equipment_id: eqC3Id, event_type: 'INSTALL', event_date: '2024-01-01', description: '2号电池组投运', remaining_life_years: 12 },
     { id: uuid(), equipment_id: eqC4Id, event_type: 'INSTALL', event_date: '2024-01-01', description: 'PCS 变流器投运', remaining_life_years: 15 },
     { id: uuid(), equipment_id: eqC2Id, event_type: 'INSPECTION', event_date: '2025-03-10', description: '电池容量测试 — SOH 97.2%', remaining_life_years: 10.5 },
+    // 故障事件（参照 IEEE 493，逆变器 ~0.1次/年、电池 ~0.03次/年）
+    { id: uuid(), equipment_id: eqC4Id, event_type: 'FAULT', event_date: '2025-08-15', description: 'IGBT模块过流损坏', remaining_life_years: 13 },
+    { id: uuid(), equipment_id: eqC3Id, event_type: 'FAULT', event_date: '2025-11-20', description: 'BMS通讯异常导致SOC跳变', remaining_life_years: 10 },
   ])
 
   // ==================== 电池循环记录（模拟24个月运行数据） ====================
@@ -216,12 +243,7 @@ export async function seed(knex: Knex): Promise<void> {
   ])
 
 
-  // Sample alerts（基于储能电站设备）
-  await knex('alerts').insert([
-    { id: uuid(), alert_level: 'WARN', source_type: 'EQUIPMENT', source_id: eqC1Id, title: '变压器温升异常', message: '清源储能#1变压器绕组温度85°C，超过预警值80°C' },
-    { id: uuid(), alert_level: 'INFO', source_type: 'EQUIPMENT', source_id: eqC2Id, title: '电池组SOH下降', message: '#1电池组健康度SOH降至93.2%，建议关注' },
-    { id: uuid(), alert_level: 'WARN', source_type: 'EQUIPMENT', source_id: eqC3Id, title: '电池组均衡度预警', message: '#2电池组电芯压差达150mV，超过100mV阈值' },
-  ])
+  // 供电质量告警由 alert-generation-scheduler 自动生成，此处不再手动插入
 
   // Resource models（非光伏类 + 通用模型）
   await knex('resource_models').insert([

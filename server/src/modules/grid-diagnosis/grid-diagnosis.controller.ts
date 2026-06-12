@@ -159,6 +159,11 @@ export class GridDiagnosisController {
     res.json({ code: 200, message: 'ok', data })
   }
 
+  getComplaintTickets = async (req: Request, res: Response) => {
+    const data = await this.service.getComplaintTickets(req.query as any)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
   // 极端场景报告导出
   exportReport = async (req: Request, res: Response) => {
     const result = await this.service.simulateExtreme(req.body)

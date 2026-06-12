@@ -90,7 +90,10 @@ export async function calculateProbabilisticPowerFlow(
   sampleCount: number,
   config: ProbabilisticPFConfig,
   onProgress?: (current: number, total: number, msg?: string) => Promise<void>,
+  /** 断点续算：已完成的采样数（会重跑以重建累加器，但不触发进度回调） */
+  skipSamples: number = 0,
 ): Promise<ProbabilisticPFOutput> {
+  const remainingSamples = sampleCount - skipSamples
   const checkpointInterval = Math.max(50, Math.floor(sampleCount / 10))
 
   // 累加器
@@ -105,39 +108,13 @@ export async function calculateProbabilisticPowerFlow(
 
   const lossSamples: number[] = []
 
-  for (let i = 0; i < sampleCount; i++) {
-    // 深拷贝输入
-    const modifiedInput: PowerFlowInput = JSON.parse(JSON.stringify(input))
-
-    // 对每个负荷施加随机波动（正态分布 N(预测值, 预测值×变异系数)）
-    for (const load of modifiedInput.loads) {
-      const sigma = config.loadVariationPct / 100
-      const factor = Math.max(0.1, sampleNormal(1, sigma))
-      load.pdMw = Math.max(0, load.pdMw * factor)
-      load.qdMvar = Math.max(0, load.qdMvar * factor)
-    }
-
-    // 光伏出力采样（Beta 分布，出力比天然约束在 [0, 1]）
-    for (const gen of modifiedInput.generators) {
-      if (gen.isPV && gen.installedCapacityMw && gen.installedCapacityMw > 0) {
-        const mu = Math.max(0.01, Math.min(0.99, gen.pgMw / gen.installedCapacityMw))
-        const nu = config.pvConcentration
-        const alpha = mu * nu
-        const beta = (1 - mu) * nu
-        const ratio = sampleBeta(Math.max(0.01, alpha), Math.max(0.01, beta))
-        gen.pgMw = ratio * gen.installedCapacityMw
-      } else if (!gen.isPV) {
-        // 等值电源：小幅正态波动（变异系数 2%），模拟上级电网注入偏差
-        const factor = Math.max(0.8, sampleNormal(1, 0.02))
-        gen.pgMw = Math.max(0, gen.pgMw * factor)
-      }
-    }
-
-    // 执行潮流计算
+  /**
+   * 执行单次采样（扰动输入 + 潮流计算 + 累加结果）
+   */
+  const runOneSample = (modifiedInput: PowerFlowInput) => {
     const scenario: PowerFlowScenario = { type: 'normal' }
     const result = calculatePowerFlow(modifiedInput, scenario)
 
-    // 累加节点结果
     for (const node of result.nodeResults) {
       if (!nodeAccum[node.busId]) {
         nodeAccum[node.busId] = {
@@ -157,7 +134,6 @@ export async function calculateProbabilisticPowerFlow(
       acc.allSamples.push(node.voltagePu)
     }
 
-    // 累加支路结果
     for (const branch of result.branchResults) {
       if (!branchAccum[branch.branchId]) {
         branchAccum[branch.branchId] = {
@@ -172,18 +148,62 @@ export async function calculateProbabilisticPowerFlow(
       acc.allSamples.push(branch.pFromMw)
     }
 
-    // 网损
     lossSamples.push(result.totalLossMw)
+  }
+
+  /**
+   * 对输入施加随机扰动
+   */
+  const perturbInput = (original: PowerFlowInput): PowerFlowInput => {
+    const modifiedInput: PowerFlowInput = JSON.parse(JSON.stringify(original))
+    for (const load of modifiedInput.loads) {
+      const sigma = config.loadVariationPct / 100
+      const factor = Math.max(0.1, sampleNormal(1, sigma))
+      load.pdMw = Math.max(0, load.pdMw * factor)
+      load.qdMvar = Math.max(0, load.qdMvar * factor)
+    }
+    for (const gen of modifiedInput.generators) {
+      if (gen.isPV && gen.installedCapacityMw && gen.installedCapacityMw > 0) {
+        const mu = Math.max(0.01, Math.min(0.99, gen.pgMw / gen.installedCapacityMw))
+        const nu = config.pvConcentration
+        const alpha = mu * nu
+        const beta = (1 - mu) * nu
+        const ratio = sampleBeta(Math.max(0.01, alpha), Math.max(0.01, beta))
+        gen.pgMw = ratio * gen.installedCapacityMw
+      } else if (!gen.isPV) {
+        const factor = Math.max(0.8, sampleNormal(1, 0.02))
+        gen.pgMw = Math.max(0, gen.pgMw * factor)
+      }
+    }
+    return modifiedInput
+  }
+
+  // ===== 第一阶段：重跑已完成的采样（重建累加器，无进度回调） =====
+  for (let i = 0; i < skipSamples; i++) {
+    const modifiedInput = perturbInput(input)
+    runOneSample(modifiedInput)
+
+    if (i % 50 === 0) {
+      await new Promise(resolve => setImmediate(resolve))
+    }
+  }
+
+  // ===== 第二阶段：剩余采样（正常累加 + 进度回调） =====
+  for (let i = 0; i < remainingSamples; i++) {
+    const modifiedInput = perturbInput(input)
+    runOneSample(modifiedInput)
+
+    const globalI = skipSamples + i
 
     // 进度回调
-    if (onProgress && (i % checkpointInterval === 0 || i === sampleCount - 1)) {
-      await onProgress(i + 1, sampleCount,
-        `蒙特卡洛采样 ${i + 1}/${sampleCount}...`,
+    if (onProgress && (globalI % checkpointInterval === 0 || i === remainingSamples - 1)) {
+      await onProgress(globalI + 1, sampleCount,
+        `蒙特卡洛采样 ${globalI + 1}/${sampleCount}...`,
       )
     }
 
     // 让事件循环有机会处理其他请求
-    if (i % 50 === 0) {
+    if (globalI % 50 === 0) {
       await new Promise(resolve => setImmediate(resolve))
     }
   }

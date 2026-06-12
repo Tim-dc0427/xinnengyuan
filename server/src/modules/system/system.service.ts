@@ -246,6 +246,19 @@ export class SystemService {
   async getUserOptions() {
     return db('users').select('id', 'username', 'display_name').orderBy('username', 'asc')
   }
+
+  // ==================== 数据范围 ====================
+  async getDataRanges() {
+    const tables = ['pv_output_measurements', 'load_measurements', 'voltage_measurements', 'equipment_temperature']
+    const result: Record<string, { minTime: string | null; maxTime: string | null; count: number }> = {}
+    for (const table of tables) {
+      const row = await db(table)
+        .select(db.raw('MIN(time) as minTime, MAX(time) as maxTime, COUNT(*) as count'))
+        .first() as any
+      result[table] = { minTime: row?.minTime || null, maxTime: row?.maxTime || null, count: row?.count || 0 }
+    }
+    return result
+  }
 }
 
 // 组装部门树形结构

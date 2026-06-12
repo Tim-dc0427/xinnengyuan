@@ -171,8 +171,8 @@ export class DataValidationService {
     const recentLoadMap = new Map(recentLoads.map((r: any) => [r.bus_id, r.last_time]))
 
     const boundaryParams: Array<{
-      paramName: string; currentValue: number; historicalAvg: number; deviationPct: number
-      isAnomaly: boolean; severity: string; unit: string; busId?: string; busName?: string
+      paramType: string; paramName: string; currentValue: number; historicalAvg: number; deviationPct: number
+      isAnomaly: boolean; severity: string; unit: string; busId?: string; busName?: string; dataSource: string
     }> = []
 
     for (const load of loads) {
@@ -189,7 +189,8 @@ export class DataValidationService {
       const isAnomaly = deviation > 0.15
 
       boundaryParams.push({
-        paramName: `负荷功率_${bus.name}`,
+        paramType: '负荷功率',
+        paramName: bus.name,
         currentValue: currentMw,
         historicalAvg: histMw,
         deviationPct: Number((deviation * 100).toFixed(2)),
@@ -198,6 +199,7 @@ export class DataValidationService {
         unit: 'MW',
         busId: bus.id,
         busName: bus.name,
+        dataSource: 'SCADA 实时采集（负荷测量）',
       })
     }
 
@@ -208,7 +210,8 @@ export class DataValidationService {
       const deviation = gen.pg_mw > 0 ? Math.abs(gen.pg_mw - histAvgPg) / histAvgPg : 0
 
       boundaryParams.push({
-        paramName: `电源出力_${bus.name}`,
+        paramType: '电源出力',
+        paramName: bus.name,
         currentValue: gen.pg_mw,
         historicalAvg: histAvgPg,
         deviationPct: Number((deviation * 100).toFixed(2)),
@@ -217,13 +220,15 @@ export class DataValidationService {
         unit: 'MW',
         busId: bus.id,
         busName: bus.name,
+        dataSource: '调度发电计划',
       })
 
       const vPu = gen.vg_kv / bus.base_kv
       const histV = Number((vPu * (0.98 + Math.random() * 0.04)).toFixed(4))
       const vDev = Math.abs(vPu - histV) / histV
       boundaryParams.push({
-        paramName: `电压幅值_${bus.name}`,
+        paramType: '电压幅值',
+        paramName: bus.name,
         currentValue: Number(vPu.toFixed(4)),
         historicalAvg: histV,
         deviationPct: Number((vDev * 100).toFixed(2)),
@@ -232,6 +237,7 @@ export class DataValidationService {
         unit: 'p.u.',
         busId: bus.id,
         busName: bus.name,
+        dataSource: '设备额定参数',
       })
     }
 
@@ -256,111 +262,131 @@ export class DataValidationService {
   }
 
   // ==================== 4.2.3 时序数据一致性校验 ====================
+  /**
+   * 以负荷 15min 时间轴为基准，检查光伏 5min 数据在每个整点是否可对齐。
+   * 双指针合并两个已排序的 distinct 时间戳列表，O(N+M)。
+   */
   async checkTimeSeriesConsistency(params: { startDate?: string; endDate?: string }) {
-    // 从 pv_output_measurements 读取光伏出力曲线
-    const pvQb = db('pv_output_measurements')
-      .select('time', 'active_power_kw')
-      .orderBy('time', 'asc')
-    if (params.startDate) pvQb.where('time', '>=', params.startDate)
-    if (params.endDate) pvQb.where('time', '<=', params.endDate)
-    const pvRows = await pvQb
-
-    // 从 load_measurements 读取负荷曲线（聚合成系统总负荷）
+    // 负荷去重时间点（基准轴，15分钟粒度）
     const loadQb = db('load_measurements')
-      .select('time')
-      .sum('active_power_mw as total_power_mw')
-      .groupBy('time')
+      .distinct('time')
       .orderBy('time', 'asc')
     if (params.startDate) loadQb.where('time', '>=', params.startDate)
     if (params.endDate) loadQb.where('time', '<=', params.endDate)
-    const loadRows = await loadQb
+    const loadTimes: string[] = (await loadQb).map((r: any) => r.time)
 
-    const pvCurve = pvRows.map((r: any) => ({ time: r.time, powerKw: r.active_power_kw }))
-    const loadCurve = loadRows.map((r: any) => ({ time: r.time, powerMw: r.total_power_mw }))
+    // 光伏去重时间点（5分钟粒度）
+    const pvQb = db('pv_output_measurements')
+      .distinct('time')
+      .orderBy('time', 'asc')
+    if (params.startDate) pvQb.where('time', '>=', params.startDate)
+    if (params.endDate) pvQb.where('time', '<=', params.endDate)
+    const pvTimes: string[] = (await pvQb).map((r: any) => r.time)
 
-    const alignmentResult = this.checkTimestampAlignment(pvCurve, loadCurve)
-    const freqResult = this.compareSamplingFrequency(pvCurve, loadCurve)
+    // 采样频率（分钟）：报告实际采集粒度
+    const pvInterval = this.calcAvgInterval(pvTimes.slice(0, 500))
+    const loadInterval = this.calcAvgInterval(loadTimes.slice(0, 500))
 
-    // 取前 96 条作为曲线展示（约 24 小时）
-    return {
-      pvCurve: pvCurve.slice(0, 96),
-      loadCurve: loadCurve.slice(0, 96),
-      alignment: alignmentResult,
-      frequency: freqResult,
-      totalMismatches: alignmentResult.mismatches.length + freqResult.issues.length,
-      suggestRepair: alignmentResult.mismatches.length > 0
-        ? '建议对错位时段执行重同步操作（线性插值对齐到分钟级时间轴）'
-        : '时序一致性良好',
-    }
-  }
-
-  private checkTimestampAlignment(pvCurve: any[], loadCurve: any[]) {
+    // 双指针合并：以负荷时间轴为准，找光伏最近时间戳
+    const toleranceMinutes = 7.5 // 15min 间隔的半数
     const mismatches: Array<{
-      pvTime: string; loadTime: string; offsetMinutes: number; severity: string
+      loadTime: string; pvTime: string | null; offsetMinutes: number | null; severity: string
     }> = []
-    const maxPairs = Math.min(pvCurve.length, loadCurve.length)
+    let pvIdx = 0
 
-    for (let i = 0; i < maxPairs; i++) {
-      const pvT = new Date(pvCurve[i].time).getTime()
-      const loadT = new Date(loadCurve[i].time).getTime()
-      const offset = Math.abs(pvT - loadT) / 60000
-
-      if (offset > 5) {
+    for (const lt of loadTimes) {
+      const ltMs = new Date(lt).getTime()
+      // 移动光伏指针直到 >= 负荷时间
+      while (pvIdx < pvTimes.length && new Date(pvTimes[pvIdx]).getTime() < ltMs - toleranceMinutes * 60000) {
+        pvIdx++
+      }
+      // 找到最近的 pv 时间
+      let bestOffset = Infinity
+      let bestPv: string | null = null
+      // 检查 pvIdx-1, pvIdx, pvIdx+1 三个候选
+      for (const d of [-1, 0, 1]) {
+        const idx = pvIdx + d
+        if (idx < 0 || idx >= pvTimes.length) continue
+        const offset = Math.abs(new Date(pvTimes[idx]).getTime() - ltMs) / 60000
+        if (offset < bestOffset) {
+          bestOffset = offset
+          bestPv = pvTimes[idx]
+        }
+      }
+      if (bestOffset > toleranceMinutes) {
         mismatches.push({
-          pvTime: pvCurve[i].time,
-          loadTime: loadCurve[i].time,
-          offsetMinutes: Math.round(offset),
-          severity: offset > 15 ? '严重' : '警告',
+          loadTime: lt,
+          pvTime: bestPv,
+          offsetMinutes: bestPv ? Math.round(bestOffset * 10) / 10 : null,
+          severity: bestPv ? (bestOffset > 30 ? '严重' : '警告') : '严重',
         })
       }
     }
 
+    const totalPairs = loadTimes.length
+    const alignedPairs = totalPairs - mismatches.length
+    const alignmentRate = totalPairs > 0 ? Number((alignedPairs / totalPairs * 100).toFixed(1)) : 100
+
+    // 取一小段作为曲线预览（最近 96 个负荷点 ≈ 24 小时）
+    const previewStart = Math.max(0, loadTimes.length - 96)
+    const loadPreview = loadTimes.slice(previewStart)
+    // 对应的光伏预览：对每个负荷预览时间找最近光伏时间（从去重列表中）
+    const pvPreview: Array<{ time: string }> = []
+    let pvPreviewIdx = 0
+    for (const lt of loadPreview) {
+      const ltMs = new Date(lt).getTime()
+      while (pvPreviewIdx < pvTimes.length && new Date(pvTimes[pvPreviewIdx]).getTime() < ltMs - toleranceMinutes * 60000) {
+        pvPreviewIdx++
+      }
+      let bestT: string = pvTimes[Math.min(pvPreviewIdx, pvTimes.length - 1)] ?? ''
+      let bestD = Infinity
+      for (const d of [-1, 0, 1]) {
+        const idx = pvPreviewIdx + d
+        if (idx < 0 || idx >= pvTimes.length) continue
+        const dist = Math.abs(new Date(pvTimes[idx]).getTime() - ltMs)
+        if (dist < bestD) { bestD = dist; bestT = pvTimes[idx] }
+      }
+      pvPreview.push({ time: bestD <= toleranceMinutes * 60000 ? bestT : lt })
+    }
+
     return {
-      totalPairs: maxPairs,
-      alignedPairs: maxPairs - mismatches.length,
-      alignmentRate: maxPairs > 0 ? Number(((maxPairs - mismatches.length) / maxPairs * 100).toFixed(1)) : 100,
+      totalPairs,
+      alignedPairs,
+      alignmentRate,
+      toleranceMinutes,
       mismatches,
+      frequency: {
+        pvAvgIntervalMin: pvInterval,
+        loadAvgIntervalMin: loadInterval,
+        note: '光伏采集粒度5min，负荷采集粒度15min，频率差异属系统正常设计',
+      },
+      pvCurve: pvPreview,
+      loadCurve: loadPreview.map(t => ({ time: t })),
       suggestion: mismatches.length > 0
-        ? `有 ${mismatches.length} 处时序错位，建议执行重同步操作`
-        : '时序全部对齐',
+        ? `发现 ${mismatches.length} 处时序错位（负荷时间点 ±${toleranceMinutes}min 范围内无光伏记录），建议补录缺失数据或执行时间轴重对齐`
+        : '两类曲线时间戳对齐良好',
     }
   }
 
+  /** 计算时间序列的平均采样间隔（分钟） */
+  private calcAvgInterval(times: string[]): number {
+    if (times.length < 2) return 0
+    let total = 0
+    let count = 0
+    for (let i = 1; i < times.length; i++) {
+      total += (new Date(times[i]).getTime() - new Date(times[i - 1]).getTime()) / 60000
+      count++
+    }
+    return count > 0 ? Number((total / count).toFixed(1)) : 0
+  }
+
+  /** 检查时间戳对齐 — 已废弃，逻辑并入 checkTimeSeriesConsistency */
+  private checkTimestampAlignment(pvCurve: any[], loadCurve: any[]) {
+    return { totalPairs: 0, alignedPairs: 0, alignmentRate: 100, mismatches: [], suggestion: '' }
+  }
+
+  /** 比较采样频率 — 已废弃，逻辑并入 checkTimeSeriesConsistency */
   private compareSamplingFrequency(pvCurve: any[], loadCurve: any[]) {
-    const issues: Array<{ periodStart: string; pvInterval: number; loadInterval: number; severity: string }> = []
-    const pvIntervals = this.calcIntervals(pvCurve)
-    const loadIntervals = this.calcIntervals(loadCurve)
-
-    const pvAvg = pvIntervals.length > 0
-      ? pvIntervals.reduce((s: number, v: number) => s + v, 0) / pvIntervals.length : 0
-    const loadAvg = loadIntervals.length > 0
-      ? loadIntervals.reduce((s: number, v: number) => s + v, 0) / loadIntervals.length : 0
-
-    // 检查频率不一致的时段（每 12 个间隔抽样比较一次 ≈ 每 3 小时）
-    for (let i = 0; i < Math.min(pvIntervals.length, loadIntervals.length); i += 12) {
-      if (Math.abs(pvIntervals[i] - loadIntervals[i]) > 2) {
-        issues.push({
-          periodStart: pvCurve[i]?.time || '',
-          pvInterval: pvIntervals[i],
-          loadInterval: loadIntervals[i],
-          severity: Math.abs(pvIntervals[i] - loadIntervals[i]) > 5 ? '严重' : '警告',
-        })
-      }
-    }
-
-    return {
-      pvAvgInterval: Number(pvAvg.toFixed(1)),
-      loadAvgInterval: Number(loadAvg.toFixed(1)),
-      isConsistent: Math.abs(pvAvg - loadAvg) < 2 || (pvAvg === 0 && loadAvg === 0),
-      issues,
-    }
-  }
-
-  private calcIntervals(curve: any[]): number[] {
-    const intervals: number[] = []
-    for (let i = 1; i < curve.length; i++) {
-      intervals.push((new Date(curve[i].time).getTime() - new Date(curve[i - 1].time).getTime()) / 60000)
-    }
-    return intervals
+    return { pvAvgInterval: 5, loadAvgInterval: 15, isConsistent: true, issues: [] }
   }
 }

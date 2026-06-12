@@ -31,6 +31,8 @@ const typeForm = ref({ name: '', code: '', description: '', sortOrder: 0 })
 const fieldDialogVisible = ref(false)
 const fieldEditIdx = ref(-1)
 const fieldForm = ref({ fieldCode: '', fieldName: '', fieldType: 'text', fieldOptions: '', isRequired: false, category: '基础信息' })
+const fieldPage = ref(1)
+const fieldPageSize = ref(20)
 
 const fieldTypeOptions = [
   { label: '文本', value: 'text' },
@@ -185,6 +187,7 @@ async function handleTypeDelete(row: PvModelType) {
 
 async function selectTypeForFields(row: PvModelType) {
   selectedModelType.value = row
+  fieldPage.value = 1
   modelTypeFields.value = await fetchModelTypeFields(row.id)
 }
 
@@ -234,10 +237,12 @@ async function doSaveFields(fields: any[]) {
     fieldOptions: f.field_options || f.fieldOptions,
     isRequired: (f.is_required === 1 || f.isRequired === true),
     sortOrder: f.sort_order ?? i,
+    category: f.category || '基础信息',
   })))
   await loadModelTypes()
-  // 刷新当前选中类型的字段列表
   modelTypeFields.value = await fetchModelTypeFields(selectedModelType.value.id)
+  const maxPage = Math.max(1, Math.ceil(modelTypeFields.value.length / fieldPageSize.value))
+  if (fieldPage.value > maxPage) fieldPage.value = maxPage
 }
 
 const librarySelected = ref<string[]>([])
@@ -277,11 +282,13 @@ async function handleBatchAddFields() {
       field_options: f.field_options || null,
       is_required: 0,
       sort_order: list.length,
+      category: f.category || '基础信息',
     } as any)
   }
   libraryDialogVisible.value = false
   try {
     await doSaveFields(list)
+    fieldPage.value = Math.ceil(modelTypeFields.value.length / fieldPageSize.value)
   } catch { ElMessage.error('添加失败') }
 }
 
@@ -314,7 +321,9 @@ async function handleFieldSave() {
     fieldOptions: fieldForm.value.fieldOptions || undefined,
     isRequired: fieldForm.value.isRequired,
     sortOrder: fieldEditIdx.value >= 0 ? list[fieldEditIdx.value].sort_order : list.length,
+    category: fieldForm.value.category,
   }
+  const wasAdd = fieldEditIdx.value < 0
   if (fieldEditIdx.value >= 0) {
     list.splice(fieldEditIdx.value, 1, { ...list[fieldEditIdx.value], ...item } as any)
   } else {
@@ -330,6 +339,7 @@ async function handleFieldSave() {
   fieldDialogVisible.value = false
   try {
     await doSaveFields(list)
+    if (wasAdd) fieldPage.value = Math.ceil(modelTypeFields.value.length / fieldPageSize.value)
   } catch { ElMessage.error('保存失败') }
 }
 
@@ -346,6 +356,7 @@ async function handleClearAllFields() {
   try {
     await ElMessageBox.confirm('确定清空该模型的所有字段？此操作不可恢复。', '确认清空', { type: 'warning' })
     await doSaveFields([])
+    fieldPage.value = 1
     ElMessage.success('已清空')
   } catch { /* cancelled */ }
 }
@@ -471,10 +482,13 @@ onMounted(async () => {
                 <el-button size="small" @click="handleClearAllFields" :disabled="modelTypeFields.length === 0">一键删除</el-button>
               </div>
             </div>
-            <el-table :data="modelTypeFields" stripe size="small">
-              <el-table-column prop="field_name" label="字段名" width="130" />
-              <el-table-column prop="field_code" label="字段编码" width="130" />
-              <el-table-column label="字段类型" width="100">
+            <el-table :data="modelTypeFields.slice((fieldPage - 1) * fieldPageSize, fieldPage * fieldPageSize)" stripe size="small" row-style="height:42px">
+              <el-table-column prop="field_name" label="字段名" width="120" />
+              <el-table-column prop="field_code" label="字段编码" width="120" />
+              <el-table-column label="字段属性" width="120">
+                <template #default="{ row }">{{ (row as any).category || '基础信息' }}</template>
+              </el-table-column>
+              <el-table-column label="字段类型" width="80">
                 <template #default="{ row }">
                   {{ fieldTypeOptions.find(o => o.value === row.field_type)?.label || row.field_type }}
                 </template>
@@ -484,11 +498,20 @@ onMounted(async () => {
               </el-table-column>
               <el-table-column label="操作" width="120">
                 <template #default="{ row, $index }">
-                  <el-button size="small" link type="primary" @click="openFieldEdit($index, row)">编辑</el-button>
-                  <el-button size="small" link @click="handleFieldDelete($index)">删除</el-button>
+                  <el-button size="small" link type="primary" @click="openFieldEdit((fieldPage - 1) * fieldPageSize + $index, row)">编辑</el-button>
+                  <el-button size="small" link @click="handleFieldDelete((fieldPage - 1) * fieldPageSize + $index)">删除</el-button>
                 </template>
               </el-table-column>
             </el-table>
+            <el-pagination
+              v-if="modelTypeFields.length > fieldPageSize"
+              style="margin-top:12px;justify-content:flex-end"
+              layout="total, prev, pager, next"
+              :total="modelTypeFields.length"
+              :page-size="fieldPageSize"
+              v-model:current-page="fieldPage"
+              small
+            />
           </div>
           <div class="inner-panel" v-else style="display:flex;align-items:center;justify-content:center;color:#909399;font-size:14px">
             选择左侧类型以查看和管理其字段

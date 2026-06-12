@@ -47,6 +47,9 @@ planningRoutes.get('/evaluate', auth(['admin', 'planner', 'operator', 'viewer'])
 planningRoutes.post('/spatial-analysis', auth(['admin', 'planner']), ctrl.runSpatialAnalysis)
 planningRoutes.get('/candidate-points', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.listCandidatePoints)
 
+// ==================== Candidate Analysis ====================
+planningRoutes.post('/candidate-analysis', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.analyzeCandidatePoint)
+
 // ==================== Absorption Plans (2.1.3) ====================
 planningRoutes.post('/absorption-plans', auth(['admin', 'planner']), ctrl.generateAbsorptionPlan)
 planningRoutes.get('/absorption-plans/:id', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getAbsorptionPlan)

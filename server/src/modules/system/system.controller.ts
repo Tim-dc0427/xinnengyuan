@@ -95,4 +95,9 @@ export class SystemController {
     const data = await this.service.getUserOptions()
     res.json({ code: 200, message: 'ok', data })
   }
+
+  getDataRanges = async (_req: Request, res: Response) => {
+    const data = await this.service.getDataRanges()
+    res.json({ code: 200, message: 'ok', data })
+  }
 }

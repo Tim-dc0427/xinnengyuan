@@ -9,10 +9,12 @@ const ctrl = new PowerFlowController()
 powerFlowRoutes.get('/indicators', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getIndicators)
 powerFlowRoutes.get('/indicators/node-stability', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getNodeStability)
 powerFlowRoutes.get('/indicators/three-phase', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getThreePhase)
+powerFlowRoutes.get('/indicators/three-phase/trend', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getThreePhaseTrend)
 
 // Thresholds
 powerFlowRoutes.get('/thresholds', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getThresholds)
 powerFlowRoutes.put('/thresholds', auth(['admin', 'planner']), ctrl.updateThresholds)
+powerFlowRoutes.delete('/thresholds/:id', auth(['admin', 'planner']), ctrl.deleteThreshold)
 
 // Data Validation
 powerFlowRoutes.post('/validation/completeness', auth(['admin', 'planner', 'operator']), ctrl.checkCompleteness)

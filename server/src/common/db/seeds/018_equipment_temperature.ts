@@ -1,18 +1,35 @@
 import { v4 as uuid } from 'uuid'
 import type { Knex } from 'knex'
 
+/**
+ * 设备温升数据生成
+ * 原则：基于设备额定温升阈值(rated_temp_rise_c)生成实际温升，
+ * 约 15% 设备为薄弱设备（温升超阈值），其余为正常设备（温升在阈值内）。
+ * 使用 equipment_id 哈希值决定薄弱与否，保证多次运行一致。
+ */
+function hashId(id: string): number {
+  let h = 0
+  for (let i = 0; i < id.length; i++) h = ((h << 5) - h) + id.charCodeAt(i) | 0
+  return Math.abs(h)
+}
+
 export async function seed(knex: Knex): Promise<void> {
   await knex('equipment_temperature').del()
 
-  // LEFT JOIN 确保所有设备都覆盖，station_id 为空的也包含
   const equipments = await knex('equipment')
     .leftJoin('solar_pv_stations', 'solar_pv_stations.id', 'equipment.station_id')
-    .select('equipment.id as equipment_id', 'equipment.equipment_type', 'equipment.station_id', 'solar_pv_stations.grid_connection_voltage_kv')
+    .select(
+      'equipment.id as equipment_id',
+      'equipment.equipment_type',
+      'equipment.station_id',
+      'equipment.rated_temp_rise_c',
+      'solar_pv_stations.grid_connection_voltage_kv',
+    )
 
+  // 基准温度（设备正常运行温度）
   const baseTemp: Record<string, number> = { TRANSFORMER: 45, INVERTER: 38, BREAKER: 32, CABLE: 28, SWITCH: 30, BATTERY: 35 }
   const records: any[] = []
 
-  // 固定时间范围，每6小时一条
   const start = new Date('2026-05-01')
   const end = new Date('2026-06-02')
   const dates: Date[] = []
@@ -21,16 +38,34 @@ export async function seed(knex: Knex): Promise<void> {
   for (const eq of equipments as any[]) {
     const base = baseTemp[eq.equipment_type] || 30
     const kv = eq.grid_connection_voltage_kv || 10
-    const nomV = kv * 1000
+    const ratedRise = eq.rated_temp_rise_c || 5
+    // 基于 equipment_id 哈希值决定是否为薄弱设备（~12%薄弱）
+    const h = hashId(eq.equipment_id)
+    const isWeak = (h % 100) < 12
 
     for (const dt of dates) {
       const hour = dt.getHours()
-      // 电压偏差：均匀随机分布，确保 surge 和 sag 都有
       const dev = (Math.random() - 0.5) * 10 // -5 ~ +5
       let status = 'normal'
-      let tempC = base + (Math.random() - 0.5) * 4
-      if (dev > 3) { status = 'surge'; tempC = base + 5 + Math.random() * 8 }
-      else if (dev < -3) { status = 'sag'; tempC = base + 3 + Math.random() * 6 }
+      let tempC = base + (Math.random() - 0.5) * 4 // 正常波动 ±2°C
+
+      if (isWeak && dev > 3) {
+        // 薄弱设备 surge：温升超额定值 105%~150%
+        status = 'surge'
+        tempC = base + ratedRise * (1.05 + Math.random() * 0.45)
+      } else if (isWeak && dev < -3) {
+        // 薄弱设备 sag：温升接近或略超额定值
+        status = 'sag'
+        tempC = base + ratedRise * (0.95 + Math.random() * 0.40)
+      } else if (!isWeak && dev > 3) {
+        // 正常设备 surge：温升在额定值 30%~90% 内
+        status = 'surge'
+        tempC = base + ratedRise * (0.30 + Math.random() * 0.60)
+      } else if (!isWeak && dev < -3) {
+        // 正常设备 sag：温升在额定值 20%~70% 内
+        status = 'sag'
+        tempC = base + ratedRise * (0.20 + Math.random() * 0.50)
+      }
 
       records.push({
         id: uuid(), equipment_id: eq.equipment_id, station_id: eq.station_id || '',
@@ -43,3 +78,4 @@ export async function seed(knex: Knex): Promise<void> {
   if (records.length > 0) await knex('equipment_temperature').insert(records)
   console.log(`  ✓ 设备温度数据已生成（${equipments.length}设备 × ${dates.length}时间点）`)
 }
+

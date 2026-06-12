@@ -47,9 +47,9 @@ export class ScenarioService {
 
     const parsed = allRows.map((r: any) => ({
       ...r,
-      tags: r.tags ? JSON.parse(r.tags) : [],
-      config: r.config ? JSON.parse(r.config) : null,
-      control_logic: r.control_logic ? JSON.parse(r.control_logic) : null,
+      tags: this.safeJsonParse(r.tags, []),
+      config: this.safeJsonParse(r.config, null),
+      control_logic: this.safeJsonParse(r.control_logic, null),
     }))
 
     // 节点筛选在 JS 层处理（config.accessPoints[].nodeName）
@@ -69,14 +69,19 @@ export class ScenarioService {
     return { total, list, page, pageSize }
   }
 
+  private safeJsonParse(raw: any, fallback: any = null) {
+    if (!raw) return fallback
+    try { return JSON.parse(raw) } catch { return fallback }
+  }
+
   async getScenario(id: string) {
     const row = await db('interactive_scenarios').where('id', id).first()
     if (!row) return null
     return {
       ...row,
-      tags: row.tags ? JSON.parse(row.tags) : [],
-      config: row.config ? JSON.parse(row.config) : null,
-      control_logic: row.control_logic ? JSON.parse(row.control_logic) : null,
+      tags: this.safeJsonParse(row.tags, []),
+      config: this.safeJsonParse(row.config, null),
+      control_logic: this.safeJsonParse(row.control_logic, null),
     }
   }
 

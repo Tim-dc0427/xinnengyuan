@@ -467,12 +467,8 @@ export interface VoltageFluctuation {
   stationId: string
   stationName: string
   nominalVoltageKv: number
-  windowMinutes: number
   timeSeries: Array<VoltageFluctuationPoint>
   alerts: Array<VoltageFluctuationAlert>
-  maxFluctuationPct: number
-  avgFluctuationPct: number
-  thresholdViolations: number
   dataRange: { firstTime: string; lastTime: string }
 }
 
@@ -526,7 +522,10 @@ export interface VoltageQualification {
 
 // ==================== Alert ====================
 export type AlertLevel = 'INFO' | 'WARN' | 'CRITICAL' | 'EMERGENCY'
-export type AlertSourceType = 'VOLTAGE' | 'EQUIPMENT' | 'POWER_FLOW' | 'PV_OUTPUT'
+export type AlertSourceType = 'VOLTAGE_FLUCTUATION' | 'FREQUENCY_DEVIATION' | 'POWER_FACTOR' | 'POWER_SUPPLY_RELIABILITY'
+
+/** 供电质量预警涉及的告警类型 */
+export const POWER_QUALITY_ALERT_TYPES: readonly AlertSourceType[] = ['VOLTAGE_FLUCTUATION', 'POWER_SUPPLY_RELIABILITY'] as const
 
 export interface Alert {
   id: string
@@ -555,7 +554,6 @@ export interface VoltageFluctuationPoint {
   voltageKv: number
   activePowerKw: number
   loadKw: number
-  fluctuationPct: number
 }
 
 export interface VoltageFluctuationAlert {
@@ -580,7 +578,7 @@ export interface QualificationLedgerItem {
 }
 
 export interface QualificationTrendItem {
-  month: string
+  hour: string
   [zone: string]: number | string
 }
 
@@ -618,9 +616,26 @@ export interface ComplaintStatsItem {
 
 export interface HotspotItem {
   zone: string
+  longitude: number
+  latitude: number
   complaints: number
   avgFluctuation: number
+  fluctuationCount: number
   risk: string
+}
+
+export interface ComplaintTicketItem {
+  id: string
+  ticketNo: string
+  stationName: string
+  zone: string
+  industry: string
+  issueDesc: string
+  isVoltageRelated: boolean
+  voltageIssueType: string
+  lossEstimateWan: number
+  status: string
+  reportedAt: string
 }
 
 export interface EventAnalysisResult {

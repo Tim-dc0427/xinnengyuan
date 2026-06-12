@@ -2,11 +2,12 @@
 import { ref, computed, onMounted } from 'vue'
 import ChartContainer from '@/components/common/ChartContainer.vue'
 import { fetchCarbonStats, fetchCarbonDynamic, fetchStations } from '@/api/grid-diagnosis'
+import { fetchDataRanges } from '@/api/system'
 import type { StationOption } from '@new-energy/shared'
 
 const stations = ref<StationOption[]>([])
 const groupBy = ref<'station' | 'zone'>('station')
-const dateRange = ref<[string, string]>(['2026-03-01', '2026-05-31'])
+const dateRange = ref<[string, string]>(['2026-06-01', '2026-07-31'])
 const loading = ref(false)
 const carbonData = ref<any[]>([])
 
@@ -14,7 +15,7 @@ const carbonData = ref<any[]>([])
 const activeTab = ref('dynamic')
 const dynamicStation = ref('')
 const dynamicGranularity = ref<'hour' | 'day'>('hour')
-const dynamicDate = ref('2026-05-15')
+const dynamicDate = ref('2026-06-15')
 const dynamicData = ref<any>(null)
 
 
@@ -140,6 +141,16 @@ onMounted(async () => {
   if (stations.value.length > 0) {
     dynamicStation.value = stations.value[0].id
   }
+  try {
+    const ranges = await fetchDataRanges()
+    const pv = ranges.pv_output_measurements
+    if (pv?.minTime && pv?.maxTime) {
+      const today = new Date().toISOString().slice(0, 10)
+      const endDate = today < pv.maxTime.slice(0, 10) ? today : pv.maxTime.slice(0, 10)
+      dateRange.value = [pv.minTime.slice(0, 10), endDate]
+      dynamicDate.value = endDate
+    }
+  } catch { /* 兜底 */ }
   await loadStats()
   if (dynamicStation.value) await loadDynamic()
 })

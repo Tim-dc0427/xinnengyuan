@@ -124,7 +124,12 @@ function riskLabel(level: string) {
         <el-table-column label="专项评估" min-width="200">
           <template #default="{ row }">
             <template v-if="row.equipmentType === 'TRANSFORMER'">
-              短路电流{{ row.assessment?.shortCircuitCurrentKa }}kA / 穿越{{ row.assessment?.throughCurrentKa }}kA / 容量裕度{{ row.assessment?.capacityMarginPct }}%
+              短路{{ row.assessment?.shortCircuitCurrentKa }}kA / 穿越{{ row.assessment?.throughCurrentKa }}kA
+              <br/>
+              <span>热稳定：</span>
+              <span :style="{ color: row.assessment?.thermalStability?.passed ? '#67c23a' : '#f56c6c', fontWeight:600 }">{{ row.assessment?.thermalStability?.passed ? '通过' : '不通过' }}</span>
+              <span style="margin-left:8px">动稳定：</span>
+              <span :style="{ color: row.assessment?.dynamicStability?.passed ? '#67c23a' : '#f56c6c', fontWeight:600 }">{{ row.assessment?.dynamicStability?.passed ? '通过' : '不通过' }}</span>
             </template>
             <template v-else-if="row.equipmentType === 'BREAKER'">
               额定分断{{ row.assessment?.ratedBreakingKa }}kA / 实际短路{{ row.assessment?.actualShortCircuitKa }}kA
@@ -135,8 +140,14 @@ function riskLabel(level: string) {
               <el-tag v-if="row.assessment?.isOverload" type="danger" size="small">载流量超标</el-tag>
             </template>
             <template v-else-if="row.equipmentType === 'SWITCH'">
-              额定电流{{ row.assessment?.ratedThroughCurrentA }}A / 穿越{{ row.assessment?.actualThroughCurrentA?.toFixed(0) }}A / 裕度{{ row.assessment?.currentMarginPct }}%
-              <el-tag v-if="row.assessment?.isInsufficient" type="danger" size="small">承载力不足</el-tag>
+              短路{{ row.assessment?.shortCircuitCurrentKa }}kA
+              <br/>
+              <span>载流：</span><span :style="{ color: row.assessment?.longTermCurrent?.passed ? '#67c23a' : '#f56c6c', fontWeight:600 }">{{ row.assessment?.longTermCurrent?.passed ? '通过' : '不通过' }}</span>
+              <span style="margin-left:4px">热稳定：</span><span :style="{ color: row.assessment?.thermalStability?.passed ? '#67c23a' : '#f56c6c', fontWeight:600 }">{{ row.assessment?.thermalStability?.passed ? '通过' : '不通过' }}</span>
+              <span style="margin-left:4px">动稳定：</span><span :style="{ color: row.assessment?.dynamicStability?.passed ? '#67c23a' : '#f56c6c', fontWeight:600 }">{{ row.assessment?.dynamicStability?.passed ? '通过' : '不通过' }}</span>
+              <span style="margin-left:4px">开断：</span><span :style="{ color: row.assessment?.breakingCapacity?.passed ? '#67c23a' : '#f56c6c', fontWeight:600 }">{{ row.assessment?.breakingCapacity?.passed ? '通过' : '不通过' }}</span>
+              <br/>
+              <span style="font-size:12px;color:#409eff;font-weight:600">{{ row.assessment?.overallVerdict }}</span>
             </template>
             <template v-else>-</template>
           </template>

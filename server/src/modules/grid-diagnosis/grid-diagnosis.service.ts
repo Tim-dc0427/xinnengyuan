@@ -1222,6 +1222,11 @@ export class GridDiagnosisService {
       'equipment.rated_capacity_kva as ratedCapacityKva',
       'equipment.rated_voltage_kv as ratedVoltageKv',
       'equipment.rated_current_a as ratedCurrentA',
+      'equipment.short_circuit_impedance_pct as shortCircuitImpedancePct',
+      'equipment.rated_thermal_withstand_current_ka as ratedThermalWithstandCurrentKa',
+      'equipment.rated_thermal_duration_s as ratedThermalDurationS',
+      'equipment.rated_peak_withstand_current_ka as ratedPeakWithstandCurrentKa',
+      'equipment.rated_breaking_current_ka as ratedBreakingCurrentKa',
       'equipment.installation_date as installationDate',
       'equipment.design_life_years as designLifeYears',
       'equipment.grade',
@@ -1250,13 +1255,25 @@ export class GridDiagnosisService {
 
     const pf = 0.95 // 功率因数，与种子数据线电流计算保持一致
 
+    // 汇总各电站同类型设备总额定容量（多设备并联时用于分摊）
+    const stationTypeTotalKva: Record<string, number> = {}
+    for (const r of rows as any[]) {
+      const sid = r.stationId as string
+      const etype = r.equipmentType as string
+      if (['TRANSFORMER', 'INVERTER', 'BATTERY'].includes(etype)) {
+        const key = `${sid}:${etype}`
+        stationTypeTotalKva[key] = (stationTypeTotalKva[key] || 0) + (r.ratedCapacityKva || 0)
+      }
+    }
+
     return rows.map((r: any) => {
       const ratedVoltageKv = r.ratedVoltageKv || r.gridVoltageKv || 10
       const ratedCapacityKva = r.ratedCapacityKva || 0
       const ratedCurrentA = r.ratedCurrentA || (ratedVoltageKv > 0 ? (ratedCapacityKva * 1000) / (Math.sqrt(3) * ratedVoltageKv) : 0)
 
-      // 估算短路电流（简化计算：额定电流 / 阻抗标幺值，默认阻抗5%）
-      const impedancePu = 0.05
+      // 短路阻抗百分比（优先设备实际值，默认5%）
+      const ukPct = r.shortCircuitImpedancePct || 5
+      const impedancePu = ukPct / 100
       const shortCircuitCurrentA = ratedCurrentA / impedancePu
 
       // 穿越电流（取短路电流的60%作为穿越电流估算值）
@@ -1269,13 +1286,15 @@ export class GridDiagnosisService {
       if (peakKw > 0) {
         // 有实际运行数据：用峰值功率折算实际电流/视在功率
         if (['BREAKER', 'CABLE', 'SWITCH'].includes(r.equipmentType)) {
-          // 断路器/电缆/开关设备：实际运行电流 / 额定电流
+          // 断路器/电缆/开关设备（站级单设备）：实际运行电流 / 额定电流
           const actualCurrentA = ratedVoltageKv > 0 ? peakKw / (Math.sqrt(3) * ratedVoltageKv * pf) : 0
           loadRate = ratedCurrentA > 0 ? actualCurrentA / ratedCurrentA : 0
         } else {
-          // 变压器/逆变器/储能：实际视在功率 / 额定容量
+          // 变压器/逆变器/储能：多设备并联时按同类型总额定容量分摊
           const peakKva = peakKw / pf
-          loadRate = ratedCapacityKva > 0 ? peakKva / ratedCapacityKva : 0
+          const typeKey = `${stationId}:${r.equipmentType}`
+          const totalTypeKva = stationTypeTotalKva[typeKey] || ratedCapacityKva
+          loadRate = totalTypeKva > 0 ? peakKva / totalTypeKva : 0
         }
       } else {
         // 无运行数据时回退用装机容量估算
@@ -1286,7 +1305,9 @@ export class GridDiagnosisService {
           loadRate = ratedCurrentA > 0 ? fallbackCurrentA / ratedCurrentA : 0
         } else {
           const fallbackKva = fallbackKw / pf
-          loadRate = ratedCapacityKva > 0 ? fallbackKva / ratedCapacityKva : 0
+          const typeKey = `${stationId}:${r.equipmentType}`
+          const totalTypeKva = stationTypeTotalKva[typeKey] || ratedCapacityKva
+          loadRate = totalTypeKva > 0 ? fallbackKva / totalTypeKva : 0
         }
       }
 
@@ -1302,10 +1323,54 @@ export class GridDiagnosisService {
       const assessment: any = {}
       switch (r.equipmentType) {
         case 'TRANSFORMER': {
-          assessment.shortCircuitCurrentKa = +(shortCircuitCurrentA / 1000).toFixed(2)
+          const iKKa = +(shortCircuitCurrentA / 1000).toFixed(2)
+          assessment.shortCircuitCurrentKa = iKKa
+          assessment.shortCircuitImpedancePct = ukPct
           assessment.throughCurrentKa = +(throughCurrentA / 1000).toFixed(2)
-          assessment.thermalLimitKva = +(ratedCapacityKva * 1.3).toFixed(0)
           assessment.capacityMarginPct = +((1 - loadRate) * 100).toFixed(1)
+
+          // ===== 热稳定校验 =====
+          // 短路热效应 Q_sc = I_k² × t_eq (kA²·s)
+          // t_eq = 后备保护动作时间(0.5s) + 断路器全分闸时间(0.1s) = 0.6s（中高压典型值）
+          const tEqS = 0.6
+          const qScKa2s = iKKa ** 2 * tEqS
+
+          // 设备热稳定耐受能力 Q_rated = I_th² × t_th
+          const ithKa = r.ratedThermalWithstandCurrentKa || iKKa
+          const tthS = r.ratedThermalDurationS || 2
+          const qRatedKa2s = ithKa ** 2 * tthS
+
+          const thermalStabilityRatio = qRatedKa2s > 0 ? +(qScKa2s / qRatedKa2s).toFixed(3) : 1
+          assessment.thermalStability = {
+            shortCircuitCurrentKa: iKKa,
+            equivalentTimeS: tEqS,
+            thermalEffectKa2s: +qScKa2s.toFixed(2),
+            ratedThermalWithstandCurrentKa: +ithKa.toFixed(1),
+            ratedThermalDurationS: tthS,
+            ratedThermalWithstandKa2s: +qRatedKa2s.toFixed(0),
+            ratio: thermalStabilityRatio,
+            passed: thermalStabilityRatio < 1,
+          }
+
+          // ===== 动稳定校验 =====
+          // 短路冲击电流 i_peak = √2 × K_impulse × I_k
+          // K_impulse = 1 + e^(-π×R/X)，高压系统取 1.8
+          const kImpulse = 1.8
+          const iPeakKa = +(Math.sqrt(2) * kImpulse * iKKa).toFixed(2)
+
+          // 设备峰值耐受电流（无参数时按 2.55 × I_th 估算）
+          const iPeakRatedKa = r.ratedPeakWithstandCurrentKa || (ithKa * 2.55)
+
+          const dynamicStabilityRatio = iPeakRatedKa > 0 ? +(iPeakKa / iPeakRatedKa).toFixed(3) : 1
+          assessment.dynamicStability = {
+            shortCircuitCurrentKa: iKKa,
+            peakShortCircuitCurrentKa: iPeakKa,
+            impulseCoefficient: kImpulse,
+            ratedPeakWithstandCurrentKa: +iPeakRatedKa.toFixed(1),
+            ratio: dynamicStabilityRatio,
+            passed: dynamicStabilityRatio < 1,
+          }
+
           break
         }
         case 'BREAKER': {
@@ -1325,14 +1390,112 @@ export class GridDiagnosisService {
           break
         }
         case 'SWITCH': {
-          assessment.ratedThroughCurrentA = ratedCurrentA
-          assessment.actualThroughCurrentA = throughCurrentA
-          assessment.currentMarginPct = ratedCurrentA > 0 ? +((1 - throughCurrentA / ratedCurrentA) * 100).toFixed(1) : 0
-          assessment.isInsufficient = throughCurrentA > ratedCurrentA
+          const iKKa = +(shortCircuitCurrentA / 1000).toFixed(2)
+          assessment.shortCircuitCurrentKa = iKKa
+
+          // ===== 一、长期载流能力 =====
+          // 实际运行电流 vs 额定电流
+          const actualLoadA = ratedVoltageKv > 0 && peakKw > 0
+            ? peakKw / (Math.sqrt(3) * ratedVoltageKv * pf)
+            : (ratedCurrentA * loadRate)
+          const longTermRatio = ratedCurrentA > 0 ? +(actualLoadA / ratedCurrentA).toFixed(3) : 1
+          assessment.longTermCurrent = {
+            ratedCurrentA: +ratedCurrentA.toFixed(1),
+            actualLoadA: +actualLoadA.toFixed(1),
+            ratio: longTermRatio,
+            passed: longTermRatio < 1,
+          }
+
+          // ===== 二、短路热稳定承载力 =====
+          const tEqS = 0.6
+          const qScKa2s = iKKa ** 2 * tEqS
+          const ithKa = r.ratedThermalWithstandCurrentKa || iKKa
+          const tthS = r.ratedThermalDurationS || 4
+          const qRatedKa2s = ithKa ** 2 * tthS
+          const thermalRatio = qRatedKa2s > 0 ? +(qScKa2s / qRatedKa2s).toFixed(3) : 1
+          assessment.thermalStability = {
+            shortCircuitCurrentKa: iKKa,
+            equivalentTimeS: tEqS,
+            thermalEffectKa2s: +qScKa2s.toFixed(2),
+            ratedThermalWithstandCurrentKa: +ithKa.toFixed(1),
+            ratedThermalDurationS: tthS,
+            ratedThermalWithstandKa2s: +qRatedKa2s.toFixed(0),
+            ratio: thermalRatio,
+            passed: thermalRatio < 1,
+          }
+
+          // ===== 三、短路动稳定承载力 =====
+          const kImpulse = 1.8
+          const iPeakKa = +(Math.sqrt(2) * kImpulse * iKKa).toFixed(2)
+          const iPeakRatedKa = r.ratedPeakWithstandCurrentKa || (ithKa * 2.55)
+          const dynamicRatio = iPeakRatedKa > 0 ? +(iPeakKa / iPeakRatedKa).toFixed(3) : 1
+          assessment.dynamicStability = {
+            shortCircuitCurrentKa: iKKa,
+            peakShortCircuitCurrentKa: iPeakKa,
+            impulseCoefficient: kImpulse,
+            ratedPeakWithstandCurrentKa: +iPeakRatedKa.toFixed(1),
+            ratio: dynamicRatio,
+            passed: dynamicRatio < 1,
+          }
+
+          // ===== 四、开断能力 =====
+          const ratedBreakingKa = r.ratedBreakingCurrentKa || 25
+          const breakingRatio = ratedBreakingKa > 0 ? +(iKKa / ratedBreakingKa).toFixed(3) : 1
+          assessment.breakingCapacity = {
+            shortCircuitCurrentKa: iKKa,
+            ratedBreakingCurrentKa: ratedBreakingKa,
+            ratio: breakingRatio,
+            passed: breakingRatio < 1,
+          }
+
+          // ===== 综合判定 =====
+          // 优先级：开断能力（一票否决）> 动稳定（一票否决）> 热稳定（有条件通过）> 长期载流（降容可接受）
+          const ltPassed = longTermRatio < 1
+          const thPassed = thermalRatio < 1
+          const dyPassed = dynamicRatio < 1
+          const brPassed = breakingRatio < 1
+
+          if (!brPassed) {
+            assessment.overallVerdict = '不满足 — 开断能力不足，无法安全分断短路电流，必须更换'
+          } else if (!dyPassed) {
+            assessment.overallVerdict = '不满足 — 动稳定校验不通过，短路电动力超出设备结构耐受，必须更换'
+          } else if (!thPassed) {
+            assessment.overallVerdict = '有条件满足 — 热稳定校验不通过，需确保后备保护在 0.3s 内切除故障，建议尽快更换'
+          } else if (!ltPassed) {
+            assessment.overallVerdict = '有条件满足 — 长期载流能力不足，可降容运行，建议择机更换'
+          } else {
+            assessment.overallVerdict = '满足 — 四维校验全部通过，开关设备承载能力满足使用条件'
+          }
+
           break
         }
         default:
           break
+      }
+
+      // 变压器：热稳定/动稳定校验不通过时提升风险等级
+      if (r.equipmentType === 'TRANSFORMER') {
+        const thermalFailed = assessment.thermalStability && !assessment.thermalStability.passed
+        const dynamicFailed = assessment.dynamicStability && !assessment.dynamicStability.passed
+        if (thermalFailed && dynamicFailed) {
+          riskLevel = 'critical'
+        } else if (thermalFailed || dynamicFailed) {
+          if (riskLevel === 'normal') riskLevel = 'warning'
+        }
+      }
+
+      // 开关设备：四维校验任一不通过时提升风险等级
+      if (r.equipmentType === 'SWITCH') {
+        const ltFailed = assessment.longTermCurrent && !assessment.longTermCurrent.passed
+        const thFailed = assessment.thermalStability && !assessment.thermalStability.passed
+        const dyFailed = assessment.dynamicStability && !assessment.dynamicStability.passed
+        const brFailed = assessment.breakingCapacity && !assessment.breakingCapacity.passed
+        const failedCount = [ltFailed, thFailed, dyFailed, brFailed].filter(Boolean).length
+        if (failedCount >= 3) {
+          riskLevel = 'critical'
+        } else if (failedCount >= 1) {
+          if (riskLevel === 'normal') riskLevel = 'warning'
+        }
       }
 
       return {
@@ -1361,24 +1524,19 @@ export class GridDiagnosisService {
     })
   }
 
+  /** 设备可靠性评估 — 使用设备固有故障率（IEEE 493 行业标准参数） */
   async assessReliability(equipmentId: string) {
     const equipment = await db('equipment').where('id', equipmentId).first()
     if (!equipment) throw new Error('Equipment not found')
 
-    const failures = await db('equipment_lifecycle')
-      .where('equipment_id', equipmentId)
-      .where('event_type', 'FAULT')
-      .count('* as count')
-      .first()
-
-    const failureCount = Number(failures?.count || 0)
-    const operatingDays = Math.max(1, (Date.now() - new Date(equipment.installation_date).getTime()) / 86400000)
-    const failureRate = failureCount / operatingDays
-    const reliability = Math.exp(-failureRate * 365)
+    // 年故障率 λ（次/年），来自设备固有参数；无数据时默认 0.02 次/年（保守值）
+    const failureRate = equipment.failure_rate ?? 0.02
+    // 可靠度 R = e^(-λ)，即在一年内不发生故障的概率
+    const reliability = Math.exp(-failureRate)
 
     let grade: string
-    if (reliability >= 0.999) grade = 'A'
-    else if (reliability >= 0.99) grade = 'B'
+    if (reliability >= 0.99) grade = 'A'
+    else if (reliability >= 0.97) grade = 'B'
     else grade = 'C'
 
     return { equipmentId, reliability, failureRate, grade }
@@ -1716,7 +1874,6 @@ export class GridDiagnosisService {
       .first()
     if (!station) throw new Error('电站不存在')
     const nominalVoltageKv = station.grid_connection_voltage_kv || 10
-    const nominalVoltageV = nominalVoltageKv * 1000
 
     // 从 pv_output_measurements 获取电压数据
     const data = await db('pv_output_measurements')
@@ -1732,94 +1889,78 @@ export class GridDiagnosisService {
       .select('time', 'active_power_mw')
       .orderBy('time', 'asc')
 
-    // 构建负荷查找：为每条光伏记录找最接近时刻的负荷值
-    function findLoadKw(pvTime: string): number {
-      if (loadData.length === 0) return 0
-      const pvMs = new Date(pvTime).getTime()
-      let closest = loadData[0]
-      let minDiff = Math.abs(new Date(closest.time).getTime() - pvMs)
-      for (let k = 1; k < loadData.length; k++) {
-        const diff = Math.abs(new Date(loadData[k].time).getTime() - pvMs)
-        if (diff < minDiff) { minDiff = diff; closest = loadData[k] }
+    // 双指针 O(n) 负荷匹配
+    let loadPtr = 0
+    const timeSeries: Array<{ time: string; voltageKv: number; activePowerKw: number; loadKw: number }> = []
+
+    for (const d of data) {
+      const pvMs = new Date(d.time).getTime()
+      while (
+        loadPtr + 1 < loadData.length &&
+        Math.abs(new Date(loadData[loadPtr + 1].time).getTime() - pvMs) <=
+        Math.abs(new Date(loadData[loadPtr].time).getTime() - pvMs)
+      ) {
+        loadPtr++
       }
-      return Math.round(closest.active_power_mw * 1000) // MW → kW
+      const loadKw = loadData.length > 0
+        ? Math.round(loadData[loadPtr].active_power_mw * 1000)
+        : 0
+      const voltageKv = +(d.voltage_v / 1000).toFixed(2)
+      timeSeries.push({ time: d.time, voltageKv, activePowerKw: d.active_power_kw, loadKw })
     }
 
-    // 15分钟滑动窗口波动率计算
-    const timeSeries: Array<{ time: string; voltageKv: number; activePowerKw: number; loadKw: number; fluctuationPct: number }> = []
-    const alertList: Array<{ time: string; level: string; title: string; fluctuationPct: number; activePowerKw: number; loadKw: number }> = []
-    const alertRecords: any[] = []
+    // 告警扫描：滑动窗口遍历全天，找波动率>5%的窗口
+    const alerts: Array<{ time: string; level: string; title: string; fluctuationPct: number; activePowerKw: number; loadKw: number }> = []
+    if (timeSeries.length >= 2) {
+      // 估算5分钟窗口内点数（数据可能5分钟或1小时间隔）
+      const firstGap = new Date(timeSeries[1].time).getTime() - new Date(timeSeries[0].time).getTime()
+      const windowPoints = Math.max(2, Math.round(windowMin * 60000 / firstGap))
+      const step = Math.max(1, Math.round(windowPoints / 3)) // 步长为窗口的1/3，避免遗漏
 
-    for (let i = 0; i < data.length; i++) {
-      const d = data[i]
-      const pointTime = new Date(d.time).getTime()
-      const windowStartTime = pointTime - windowMin * 60 * 1000
-
-      // 收集窗口内的电压值
-      const windowVoltages: number[] = []
-      for (let j = i; j >= 0; j--) {
-        const t = new Date(data[j].time).getTime()
-        if (t >= windowStartTime) { windowVoltages.push(data[j].voltage_v) }
-        else break
-      }
-
-      // 窗口内至少2条记录才计算波动率，否则为0
-      let fluctuationPct = 0
-      if (windowVoltages.length >= 2) {
-        const vMax = Math.max(...windowVoltages)
-        const vMin = Math.min(...windowVoltages)
-        fluctuationPct = +(((vMax - vMin) / nominalVoltageV) * 100).toFixed(2)
-      }
-
-      const voltageKv = +(d.voltage_v / 1000).toFixed(2)
-      const activePowerKw = d.active_power_kw
-      const loadKw = findLoadKw(d.time)
-
-      timeSeries.push({ time: d.time, voltageKv, activePowerKw, loadKw, fluctuationPct })
-
-      if (fluctuationPct > 5) {
-        alertList.push({ time: d.time, level: fluctuationPct > 7 ? 'CRITICAL' : 'WARN', title: `电压波动${fluctuationPct}%`, fluctuationPct, activePowerKw, loadKw })
-        // 写入告警表（去重：同电站同时刻不重复）
-        const existing = await db('alerts')
-          .where({ source_type: 'VOLTAGE_FLUCTUATION', source_id: query.pointId, triggered_at: d.time })
-          .first()
-        if (!existing) {
-          alertRecords.push({
-            id: uuidv4(),
-            alert_level: fluctuationPct > 7 ? 'CRITICAL' : 'WARN',
-            source_type: 'VOLTAGE_FLUCTUATION',
-            source_id: query.pointId,
-            title: `电压波动${fluctuationPct}%`,
-            message: `并网点${station.station_name}在${d.time}电压波动率达${fluctuationPct}%，超过5%阈值。光伏出力${activePowerKw}kW，负荷${loadKw}kW`,
-            triggered_at: d.time,
-            metadata: JSON.stringify({ fluctuationPct, activePowerKw, loadKw, nominalVoltageKv }),
+      for (let i = 0; i + windowPoints <= timeSeries.length; i += step) {
+        const slice = timeSeries.slice(i, i + windowPoints)
+        const vals = slice.map(d => d.voltageKv)
+        const maxV = Math.max(...vals)
+        const minV = Math.min(...vals)
+        const pct = +(((maxV - minV) / nominalVoltageKv) * 100).toFixed(2)
+        if (pct > 5) {
+          const mid = slice[Math.floor(slice.length / 2)]
+          alerts.push({
+            time: slice[0].time,
+            level: pct > 7 ? 'CRITICAL' : 'WARN',
+            title: `电压波动${pct}%（${slice[0].time.slice(11, 16)} ~ ${slice[slice.length - 1].time.slice(11, 16)}）`,
+            fluctuationPct: pct,
+            activePowerKw: mid.activePowerKw,
+            loadKw: mid.loadKw,
           })
         }
       }
-    }
-
-    // 批量写入告警
-    if (alertRecords.length > 0) {
-      await db('alerts').insert(alertRecords)
+      // 去重：合并相邻重叠的告警窗口，保留波动率最大的
+      const merged: typeof alerts = []
+      for (const a of alerts) {
+        const last = merged[merged.length - 1]
+        if (last && new Date(a.time).getTime() - new Date(last.time).getTime() < windowMin * 60000) {
+          if (a.fluctuationPct > last.fluctuationPct) merged[merged.length - 1] = a
+        } else {
+          merged.push(a)
+        }
+      }
+      alerts.length = 0
+      alerts.push(...merged)
     }
 
     // 查询该电站数据的实际起止时间
     const rangeResult = await db('pv_output_measurements')
       .where('station_id', query.pointId)
-      .select(db.raw("MIN(time) as first_time, MAX(time) as last_time"))
+      .select(db.raw('MIN(time) as first_time, MAX(time) as last_time'))
       .first()
 
-    const deviations = timeSeries.map(d => d.fluctuationPct)
     return {
       stationId: query.pointId,
       stationName: station.station_name,
       nominalVoltageKv,
-      windowMinutes: windowMin,
       timeSeries,
-      alerts: alertList,
-      maxFluctuationPct: deviations.length ? +Math.max(...deviations).toFixed(2) : 0,
-      avgFluctuationPct: deviations.length ? +(deviations.reduce((a, b) => a + b, 0) / deviations.length).toFixed(2) : 0,
-      thresholdViolations: alertList.length,
+      alerts,
       dataRange: {
         firstTime: (rangeResult as any)?.first_time || query.startDate,
         lastTime: (rangeResult as any)?.last_time || query.endDate,
@@ -1872,9 +2013,15 @@ export class GridDiagnosisService {
     }
 
     const vkIdx = kv >= 220 ? 2 : kv >= 110 ? 1 : 0
-    function R(name: string): number {
+    // 网架侧故障率：受接线方式、线路类型、老化三重影响
+    function RGrid(name: string): number {
       const p = bp[name]; if (!p) return 0
       return +(p.rate[vkIdx] * ageFactor * connFactor * tapFactor).toFixed(4)
+    }
+    // 光伏侧故障率：仅受老化影响，与电网拓扑无关
+    function RPV(name: string): number {
+      const p = bp[name]; if (!p) return 0
+      return +(p.rate[vkIdx] * ageFactor).toFixed(4)
     }
     function M(name: string): number { return bp[name]?.mttr || 1 }
 
@@ -1883,7 +2030,7 @@ export class GridDiagnosisService {
     const treeDef: Array<{ id: string; name: string; parent: string | null; failureRate?: number; mttr?: number }> = [
       { id: 'root', name: rootName, parent: null },
     ]
-    if (kv >= 220) treeDef.push({ id: 'tx', name: '主变跳闸', parent: 'root', failureRate: R('主变差动保护动作') + R('主变瓦斯保护动作'), mttr: 42 })
+    if (kv >= 220) treeDef.push({ id: 'tx', name: '主变跳闸', parent: 'root', failureRate: RGrid('主变差动保护动作') + RGrid('主变瓦斯保护动作'), mttr: 42 })
     const gridParent = kv >= 220 ? 'tx' : 'root'
 
     // L2: 中间节点
@@ -1908,31 +2055,31 @@ export class GridDiagnosisService {
       )
     }
 
-    // L4: 叶子节点
+    // L4: 叶子节点（光伏侧用 RPV，网架侧用 RGrid）
     treeDef.push(
-      { id: 'l_igbt', name: 'IGBT模块过流损坏', parent: 's_inv', failureRate: R('IGBT模块过流损坏'), mttr: M('IGBT模块过流损坏') },
-      { id: 'l_dcg', name: '直流侧接地故障', parent: 's_inv', failureRate: R('直流侧接地故障'), mttr: M('直流侧接地故障') },
-      { id: 'l_acv', name: '交流侧过压保护', parent: 's_inv', failureRate: R('交流侧过压保护'), mttr: M('交流侧过压保护') },
-      { id: 'l_comm', name: '逆变器通讯中断', parent: 's_inv', failureRate: R('逆变器通讯中断'), mttr: M('逆变器通讯中断') },
-      { id: 'l_mis', name: '保护装置误动', parent: 's_prot', failureRate: R('保护装置误动'), mttr: M('保护装置误动') },
-      { id: 'l_ref', name: '保护装置拒动', parent: 's_prot', failureRate: R('保护装置拒动'), mttr: M('保护装置拒动') },
-      { id: 'l_ctpt', name: 'CT/PT断线', parent: 's_prot', failureRate: R('CT/PT断线'), mttr: M('CT/PT断线') },
-      { id: 'l_isl', name: '孤岛保护误动作', parent: 's_ctrl', failureRate: R('孤岛保护误动作'), mttr: M('孤岛保护误动作') },
-      { id: 'l_vf', name: '电压/频率越限解列', parent: 's_ctrl', failureRate: R('频率/电压越限解列'), mttr: M('频率/电压越限解列') },
-      { id: 'l_ohsc', name: '架空线短路', parent: 's_oh', failureRate: R('架空线短路'), mttr: M('架空线短路') },
-      { id: 'l_ohbr', name: '架空线断线', parent: 's_oh', failureRate: R('架空线断线'), mttr: M('架空线断线') },
-      { id: 'l_flash', name: '绝缘子污闪', parent: 's_oh', failureRate: R('绝缘子污闪'), mttr: M('绝缘子污闪') },
-      { id: 'l_joint', name: '电缆接头过热', parent: 's_cable', failureRate: R('电缆接头过热'), mttr: M('电缆接头过热') },
-      { id: 'l_dam', name: '外力破坏', parent: 's_cable', failureRate: R('外力破坏'), mttr: M('外力破坏') },
+      { id: 'l_igbt', name: 'IGBT模块过流损坏', parent: 's_inv', failureRate: RPV('IGBT模块过流损坏'), mttr: M('IGBT模块过流损坏') },
+      { id: 'l_dcg', name: '直流侧接地故障', parent: 's_inv', failureRate: RPV('直流侧接地故障'), mttr: M('直流侧接地故障') },
+      { id: 'l_acv', name: '交流侧过压保护', parent: 's_inv', failureRate: RPV('交流侧过压保护'), mttr: M('交流侧过压保护') },
+      { id: 'l_comm', name: '逆变器通讯中断', parent: 's_inv', failureRate: RPV('逆变器通讯中断'), mttr: M('逆变器通讯中断') },
+      { id: 'l_mis', name: '保护装置误动', parent: 's_prot', failureRate: RGrid('保护装置误动'), mttr: M('保护装置误动') },
+      { id: 'l_ref', name: '保护装置拒动', parent: 's_prot', failureRate: RGrid('保护装置拒动'), mttr: M('保护装置拒动') },
+      { id: 'l_ctpt', name: 'CT/PT断线', parent: 's_prot', failureRate: RGrid('CT/PT断线'), mttr: M('CT/PT断线') },
+      { id: 'l_isl', name: '孤岛保护误动作', parent: 's_ctrl', failureRate: RPV('孤岛保护误动作'), mttr: M('孤岛保护误动作') },
+      { id: 'l_vf', name: '电压/频率越限解列', parent: 's_ctrl', failureRate: RPV('频率/电压越限解列'), mttr: M('频率/电压越限解列') },
+      { id: 'l_ohsc', name: '架空线短路', parent: 's_oh', failureRate: RGrid('架空线短路'), mttr: M('架空线短路') },
+      { id: 'l_ohbr', name: '架空线断线', parent: 's_oh', failureRate: RGrid('架空线断线'), mttr: M('架空线断线') },
+      { id: 'l_flash', name: '绝缘子污闪', parent: 's_oh', failureRate: RGrid('绝缘子污闪'), mttr: M('绝缘子污闪') },
+      { id: 'l_joint', name: '电缆接头过热', parent: 's_cable', failureRate: RGrid('电缆接头过热'), mttr: M('电缆接头过热') },
+      { id: 'l_dam', name: '外力破坏', parent: 's_cable', failureRate: RGrid('外力破坏'), mttr: M('外力破坏') },
     )
     if (kv >= 35) {
       treeDef.push(
-        { id: 'l_wdg', name: '绕组匝间短路', parent: 's_body', failureRate: R('绕组匝间短路'), mttr: M('绕组匝间短路') },
-        { id: 'l_ins', name: '绝缘老化击穿', parent: 's_body', failureRate: R('绝缘老化击穿'), mttr: M('绝缘老化击穿') },
-        { id: 'l_core', name: '铁芯多点接地', parent: 's_body', failureRate: R('铁芯多点接地'), mttr: M('铁芯多点接地') },
-        { id: 'l_bsh', name: '套管闪络', parent: 's_acc', failureRate: R('套管闪络'), mttr: M('套管闪络') },
-        { id: 'l_cool', name: '冷却系统故障', parent: 's_acc', failureRate: R('冷却系统故障'), mttr: M('冷却系统故障') },
-        { id: 'l_oltc', name: '有载分接开关故障', parent: 's_acc', failureRate: R('有载分接开关故障'), mttr: M('有载分接开关故障') },
+        { id: 'l_wdg', name: '绕组匝间短路', parent: 's_body', failureRate: RGrid('绕组匝间短路'), mttr: M('绕组匝间短路') },
+        { id: 'l_ins', name: '绝缘老化击穿', parent: 's_body', failureRate: RGrid('绝缘老化击穿'), mttr: M('绝缘老化击穿') },
+        { id: 'l_core', name: '铁芯多点接地', parent: 's_body', failureRate: RGrid('铁芯多点接地'), mttr: M('铁芯多点接地') },
+        { id: 'l_bsh', name: '套管闪络', parent: 's_acc', failureRate: RGrid('套管闪络'), mttr: M('套管闪络') },
+        { id: 'l_cool', name: '冷却系统故障', parent: 's_acc', failureRate: RGrid('冷却系统故障'), mttr: M('冷却系统故障') },
+        { id: 'l_oltc', name: '有载分接开关故障', parent: 's_acc', failureRate: RGrid('有载分接开关故障'), mttr: M('有载分接开关故障') },
       )
     }
 
@@ -1940,42 +2087,63 @@ export class GridDiagnosisService {
     const leaves = treeDef.filter(n => n.failureRate != null && n.failureRate > 0)
     const totalSAIFI = +leaves.reduce((s, n) => s + (n.failureRate || 0), 0).toFixed(4)
     const totalWeightedMTTR = leaves.reduce((s, n) => s + (n.failureRate || 0) * (n.mttr || 0), 0)
-    const totalSAIDI = +((totalWeightedMTTR / (totalSAIFI || 1)) * 60).toFixed(1)
-    const theoreticalReliability = +(1 - totalWeightedMTTR / 8760).toFixed(4)
+    const totalSAIDI = +totalWeightedMTTR.toFixed(2)  // SAIDI = Σ(λᵢ×rᵢ) 小时/年
+    const theoreticalReliability = +(1 - totalWeightedMTTR / 8760).toFixed(8)
 
-    // 贡献值分解（按 L2 中间节点分组）
-    function leafSum(pid: string) {
+    // 贡献值分解：光伏设备 vs 网架结构
+    // L3 叶子直接归属：s_inv / s_ctrl → 光伏设备；s_prot / s_oh / s_cable / s_body / s_acc / tx → 网架结构
+    function leafSumL3(l3Id: string) {
+      return +leaves.filter(n => n.parent === l3Id).reduce((s, n) => s + (n.failureRate || 0), 0).toFixed(4)
+    }
+    const pvInverterSAIFI = leafSumL3('s_inv')
+    const pvControlSAIFI = leafSumL3('s_ctrl')
+    const pvSAIFI = +(pvInverterSAIFI + pvControlSAIFI).toFixed(4)
+    const gridSAIFI = +(totalSAIFI - pvSAIFI).toFixed(4)
+
+    // 明细行：按 L2 节点逐项展开
+    function leafSumL2(pid: string) {
       return +leaves.filter(n => {
-        // 递归向上查找：叶子属于哪个 L2 中间节点
-        const node = treeDef.find(t => t.id === n.id)
-        if (!node) return false
-        // 对叶子节点往上层查找
-        const p3 = treeDef.find(t => t.id === node.parent)
-        if (!p3) return false
-        // L3节点的parent就是L2节点
-        if (p3.parent === pid) return true
-        return false
+        const p3 = treeDef.find(t => t.id === n.parent)
+        return p3 ? p3.parent === pid : false
       }).reduce((s, n) => s + (n.failureRate || 0), 0).toFixed(4)
     }
-    const contributions = [
-      { group: '并网点跳闸', saifi: leafSum('n_poc'), saidiPct: +((leafSum('n_poc') / (totalSAIFI || 1)) * 100).toFixed(1) },
-      { group: '线路故障', saifi: leafSum('n_line'), saidiPct: +((leafSum('n_line') / (totalSAIFI || 1)) * 100).toFixed(1) },
-    ]
-    if (kv >= 35) contributions.push({ group: '变压器故障', saifi: leafSum('n_xfmr'), saidiPct: +((leafSum('n_xfmr') / (totalSAIFI || 1)) * 100).toFixed(1) })
-    if (kv >= 220) contributions.push({ group: '主变跳闸', saifi: leafSum('tx'), saidiPct: +((leafSum('tx') / (totalSAIFI || 1)) * 100).toFixed(1) })
+    const lineSAIFI = leafSumL2('n_line')
+    const xfmrSAIFI = leafSumL2('n_xfmr')
+    const txSAIFI = leafSumL2('tx')
+    // 并网点跳闸下属保护类
+    const protSAIFI = leafSumL3('s_prot')
 
-    // 实际停电数据
+    const contributions: Array<{ group: string; saifi: number; saidiPct: number }> = [
+      { group: '光伏设备', saifi: pvSAIFI, saidiPct: -1 },
+      { group: '  逆变器故障', saifi: pvInverterSAIFI, saidiPct: +((pvInverterSAIFI / (totalSAIFI || 1)) * 100).toFixed(1) },
+      { group: '  控制保护', saifi: pvControlSAIFI, saidiPct: +((pvControlSAIFI / (totalSAIFI || 1)) * 100).toFixed(1) },
+      { group: '网架结构', saifi: gridSAIFI, saidiPct: -1 },
+      { group: '  线路故障', saifi: lineSAIFI, saidiPct: +((lineSAIFI / (totalSAIFI || 1)) * 100).toFixed(1) },
+      { group: '  保护装置', saifi: protSAIFI, saidiPct: +((protSAIFI / (totalSAIFI || 1)) * 100).toFixed(1) },
+    ]
+    if (kv >= 35) contributions.push({ group: '  变压器故障', saifi: xfmrSAIFI, saidiPct: +((xfmrSAIFI / (totalSAIFI || 1)) * 100).toFixed(1) })
+    if (kv >= 220) contributions.push({ group: '  主变跳闸', saifi: txSAIFI, saidiPct: +((txSAIFI / (totalSAIFI || 1)) * 100).toFixed(1) })
+
+    // 实际停电数据 — 兼容新旧列
+    const hasSecondsCol = db('outage_events').columnInfo ? (await db.raw('PRAGMA table_info(outage_events)')).some((r: any) => r.name === 'duration_seconds') : false
+    const durCol = hasSecondsCol ? 'duration_seconds' : 'duration_minutes'
     const outages = await db('outage_events')
       .where('station_id', query.stationId)
       .whereBetween('start_time', [query.startDate, query.endDate])
-      .select('start_time', 'duration_minutes', 'cause')
+      .select('start_time', durCol, 'cause')
+
+    function outageSeconds(o: any): number {
+      if (hasSecondsCol) return o.duration_seconds || 0
+      return (o.duration_minutes || 0) * 60
+    }
 
     const monthCount = Math.max(1, (new Date(query.endDate).getFullYear() - new Date(query.startDate).getFullYear()) * 12 + new Date(query.endDate).getMonth() - new Date(query.startDate).getMonth() + 1)
+    const totalOutageSeconds = outages.reduce((s, o) => s + outageSeconds(o), 0)
     const actualOutageCount = outages.length
     const actualSAIFI = +(actualOutageCount / monthCount * 12).toFixed(2)
-    const actualSAIDI = outages.reduce((s, o) => s + (o.duration_minutes || 0), 0)
+    const actualSAIDI = +((totalOutageSeconds / 3600 / monthCount) * 12).toFixed(2) // 年化：小时/户·年
 
-    // 逐月对比
+    // 逐月对比（全部年化，与理论年度值可比）
     const monthlyComparison: Array<{ month: string; theoretical: number; actual: number | null; actualSAIDI: number | null }> = []
     const start = new Date(query.startDate)
     const end = new Date(query.endDate)
@@ -1983,12 +2151,12 @@ export class GridDiagnosisService {
       const mStr = `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, '0')}`
       const mOutages = outages.filter((o: any) => o.start_time.startsWith(mStr))
       const mSAIFI = mOutages.length * 12
-      const mSAIDIMinutes = mOutages.reduce((s: number, o: any) => s + (o.duration_minutes || 0), 0)
+      const mSAIDISeconds = mOutages.reduce((s: number, o: any) => s + outageSeconds(o), 0)
       monthlyComparison.push({
         month: mStr,
         theoretical: totalSAIFI,
-        actual: mOutages.length > 0 ? +mSAIFI.toFixed(2) : null,
-        actualSAIDI: mOutages.length > 0 ? mSAIDIMinutes : null,
+        actual: +mSAIFI.toFixed(2),
+        actualSAIDI: +((mSAIDISeconds / 3600) * 12).toFixed(2), // 年化：小时/户·年
       })
     }
 
@@ -2025,14 +2193,12 @@ export class GridDiagnosisService {
         'pv_output_measurements.temperature_c',
         'solar_pv_stations.grid_connection_voltage_kv',
         'solar_pv_stations.bus_id',
-        'solar_pv_stations.station_name',
         'grid_buses.zone',
         'grid_buses.voltage_level',
       )
       .orderBy('pv_output_measurements.time', 'asc')
 
     // 电压合格标准
-    const stdMap: Record<string, number> = { '10KV': 7, '35KV': 5, '110KV': 3, '220KV': 3 }
     function getThreshold(kv: number): number {
       if (kv >= 220) return 3; if (kv >= 110) return 3; if (kv >= 35) return 5; return 7
     }
@@ -2042,36 +2208,35 @@ export class GridDiagnosisService {
       .whereBetween('time', [query.startDate, query.endDate])
       .select('bus_id', 'time', 'active_power_mw')
       .orderBy('time', 'asc')
-    // 按 bus_id 分组
-    const loadByBus = new Map<string, Array<{ time: string; mw: number }>>()
+    // 预建负荷索引：busId → hourKey → { kw, status }，O(1) 查找
+    const loadIndex = new Map<string, Map<string, { kw: number; status: string }>>()
     for (const lr of loadRows as any[]) {
-      if (!loadByBus.has(lr.bus_id)) loadByBus.set(lr.bus_id, [])
-      loadByBus.get(lr.bus_id)!.push({ time: lr.time, mw: lr.active_power_mw })
+      if (!lr.bus_id) continue
+      if (!loadIndex.has(lr.bus_id)) loadIndex.set(lr.bus_id, new Map())
+      const hourKey = lr.time.slice(0, 13) // "2026-03-01T08"
+      loadIndex.get(lr.bus_id)!.set(hourKey, {
+        kw: Math.round((lr.active_power_mw || 0) * 1000),
+        status: '',
+      })
     }
-    // 为给定时间和母线找最近负荷值
-    function findLoad(busId: string, timeStr: string): { kw: number; status: string } {
-      const list = loadByBus.get(busId)
-      if (!list || list.length === 0) return { kw: 0, status: '' }
-      const t = new Date(timeStr).getTime()
-      let closest = list[0], minDiff = Infinity
-      for (const l of list) {
-        const d = Math.abs(new Date(l.time).getTime() - t)
-        if (d < minDiff) { minDiff = d; closest = l }
+    // 回填各母线的负荷高峰/低谷状态
+    for (const [, hourMap] of loadIndex) {
+      const allKw = Array.from(hourMap.values()).map(v => v.kw)
+      const peak = Math.max(...allKw, 1)
+      for (const [, v] of hourMap) {
+        const ratio = v.kw / peak
+        if (ratio > 0.8) v.status = '负荷高峰期'
+        else if (ratio < 0.3) v.status = '负荷低谷期'
       }
-      const kw = Math.round(closest.mw * 1000)
-      // 判断负荷状态：>80%峰值为高峰，<30%峰值为低谷
-      const allMw = list.map(l => l.mw)
-      const peak = Math.max(...allMw, 1)
-      const ratio = closest.mw / peak
-      let status = ''
-      if (ratio > 0.8) status = '负荷高峰期'
-      else if (ratio < 0.3) status = '负荷低谷期'
-      return { kw, status }
+    }
+    function findLoad(busId: string, timeStr: string): { kw: number; status: string } {
+      const hourKey = timeStr.slice(0, 13)
+      return loadIndex.get(busId)?.get(hourKey) ?? { kw: 0, status: '' }
     }
 
-    // 按 zone + voltageLevel 分组统计
-    const ledgerMap = new Map<string, { zone: string; voltageLevel: string; total: number; qualified: number }>()
-    const trendMap = new Map<string, Map<string, { total: number; qualified: number }>>() // month -> key -> stats
+    // 按 zone + voltageLevel + hour 分组统计（24小时时段跨日期汇总）
+    const hourlyLedgerMap = new Map<string, { zone: string; voltageLevel: string; total: number; qualified: number }>() // key = zone|vl|hour
+    const trendMap = new Map<string, Map<string, { total: number; qualified: number }>>() // hour -> key -> stats
     const anomalyPoints: Array<{ time: string; zone: string; rate: number; weather: string; pvStatus: string; loadStatus: string }> = []
 
     for (const r of rows as any[]) {
@@ -2082,17 +2247,19 @@ export class GridDiagnosisService {
       const zone = r.zone || '未知'
       const vl = r.voltage_level || (kv >= 220 ? '220kV' : kv >= 110 ? '110kV' : '10kV')
       const key = `${zone}|${vl}`
-      const month = r.time.slice(0, 7)
+      // 从时间字段提取小时（格式如 "2026-03-01T08:00" 或 "2026-03-01T08:00:00"）
+      const hour = String((parseInt(r.time.slice(11, 13), 10) || 0)).padStart(2, '0') + ':00'
+      const hourlyKey = `${zone}|${vl}|${hour}`
 
-      // 台账统计
-      if (!ledgerMap.has(key)) ledgerMap.set(key, { zone, voltageLevel: vl, total: 0, qualified: 0 })
-      const entry = ledgerMap.get(key)!
+      // 台账统计（按小时）
+      if (!hourlyLedgerMap.has(hourlyKey)) hourlyLedgerMap.set(hourlyKey, { zone, voltageLevel: vl, total: 0, qualified: 0 })
+      const entry = hourlyLedgerMap.get(hourlyKey)!
       entry.total++
       if (isQualified) entry.qualified++
 
-      // 趋势统计（按月）
-      if (!trendMap.has(month)) trendMap.set(month, new Map())
-      const mMap = trendMap.get(month)!
+      // 趋势统计（按小时，跨日期汇总）
+      if (!trendMap.has(hour)) trendMap.set(hour, new Map())
+      const mMap = trendMap.get(hour)!
       if (!mMap.has(key)) mMap.set(key, { total: 0, qualified: 0 })
       const mEntry = mMap.get(key)!
       mEntry.total++
@@ -2137,43 +2304,50 @@ export class GridDiagnosisService {
     anomalyPoints.sort((a, b) => b.rate - a.rate)
     const topAnomalies = anomalyPoints.slice(0, 20)
 
-    // 组装台账（汇总 + 按月）
-    const summaryLedger = Array.from(ledgerMap.values()).map(e => ({
-      zone: e.zone,
-      voltageLevel: e.voltageLevel,
-      totalHours: e.total,
-      qualifiedHours: e.qualified,
-      rate: +((e.qualified / (e.total || 1)) * 100).toFixed(2),
-      violations: e.total - e.qualified,
-      period: '汇总',
-    })).sort((a, b) => a.zone.localeCompare(b.zone) || a.voltageLevel.localeCompare(b.voltageLevel))
-
-    // 按月台账
-    const months = Array.from(trendMap.keys()).sort()
-    const allKeys = Array.from(ledgerMap.keys()).sort()
-    const monthlyLedger: any[] = []
-    const trendData: any[] = []
-    for (const m of months) {
-      const mMap = trendMap.get(m)!
-      const item: any = { month: m }
+    // 组装按小时台账（24行，每行对应一个时段）
+    const allKeys = Array.from(new Set(Array.from(hourlyLedgerMap.values()).map(e => `${e.zone}|${e.voltageLevel}`))).sort()
+    const hourSlots: string[] = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0') + ':00')
+    const hourlyLedger: any[] = []
+    for (const hour of hourSlots) {
       for (const key of allKeys) {
         const [zone, vl] = key.split('|')
-        const s = mMap.get(key)
-        const r = s ? +((s.qualified / (s.total || 1)) * 100).toFixed(1) : null
-        item[key] = r
+        const hourlyKey = `${zone}|${vl}|${hour}`
+        const s = hourlyLedgerMap.get(hourlyKey)
         if (s) {
-          monthlyLedger.push({
-            zone, voltageLevel: vl, period: m,
+          hourlyLedger.push({
+            zone, voltageLevel: vl, period: hour,
             totalHours: s.total, qualifiedHours: s.qualified,
-            rate: r, violations: s.total - s.qualified,
+            rate: +((s.qualified / (s.total || 1)) * 100).toFixed(2),
+            violations: s.total - s.qualified,
           })
+        } else {
+          hourlyLedger.push({
+            zone, voltageLevel: vl, period: hour,
+            totalHours: 0, qualifiedHours: 0,
+            rate: 0, violations: 0,
+          })
+        }
+      }
+    }
+
+    // 组装趋势数据（按小时，跨日期汇总）
+    const hours_ = Array.from(trendMap.keys()).sort()
+    const trendData: any[] = []
+    for (const h of hourSlots) {
+      const item: any = { hour: h }
+      const hMap = trendMap.get(h)
+      for (const key of allKeys) {
+        if (hMap) {
+          const s = hMap.get(key)
+          item[key] = s ? +((s.qualified / (s.total || 1)) * 100).toFixed(1) : null
+        } else {
+          item[key] = null
         }
       }
       trendData.push(item)
     }
-    monthlyLedger.sort((a, b) => a.period.localeCompare(b.period) || a.zone.localeCompare(b.zone) || a.voltageLevel.localeCompare(b.voltageLevel))
 
-    return { summaryLedger, monthlyLedger, trendData, trendKeys: allKeys, anomalyPoints: topAnomalies }
+    return { hourlyLedger, trendData, trendKeys: allKeys, anomalyPoints: topAnomalies }
   }
 
   async getEquipmentImpact(query: { startDate: string; endDate: string }) {
@@ -2182,10 +2356,9 @@ export class GridDiagnosisService {
       .select(
         'equipment.id', 'equipment.name', 'equipment.equipment_type', 'equipment.rated_voltage_kv',
         'equipment.grade', 'equipment.design_life_years', 'equipment.installation_date',
-        'equipment.station_id',
+        'equipment.station_id', 'equipment.rated_temp_rise_c',
         'solar_pv_stations.station_name',
       )
-      .limit(50)
     const result = []
     for (const eq of equipments as any[]) {
       const faults = await db('equipment_lifecycle')
@@ -2213,11 +2386,10 @@ export class GridDiagnosisService {
       const normalTemp = (normalRow as any)?.avg_temp || 0
       const surgeTemp = (surgeRow as any)?.avg_temp || 0
       const sagTemp = (sagRow as any)?.avg_temp || 0
-      // 统一薄弱判定：温升超理论值 2 倍
-      const theoryRiseMap: Record<string, number> = { TRANSFORMER: 8, INVERTER: 6, BREAKER: 4, CABLE: 3, SWITCH: 4, BATTERY: 5 }
-      const theory = theoryRiseMap[eq.equipment_type] || 5
+      // 统一薄弱判定：温升超额定温升阈值即薄弱
+      const ratedRise = eq.rated_temp_rise_c || 5
       const thisRise = surgeTemp + sagTemp > 0 ? (surgeTemp + sagTemp - normalTemp * 2) / 2 : 0
-      const weakFlag = thisRise > theory * 2.0
+      const weakFlag = thisRise > ratedRise
       const installYear = new Date(eq.installation_date || '2020-01-01').getFullYear()
       const runYears = new Date().getFullYear() - installYear
       result.push({
@@ -2235,14 +2407,14 @@ export class GridDiagnosisService {
         risk: weakFlag ? '薄弱' : faultCnt > 0 ? '关注' : '正常',
       })
     }
-    return result.sort((a) => a.risk === '薄弱' ? -1 : 1).slice(0, 12)
+    return result.sort((a) => a.risk === '薄弱' ? -1 : 1)
   }
 
   async getEquipmentEvents(query: { equipmentId: string }) {
-    const eq = await db('equipment').where('id', query.equipmentId).select('id', 'name', 'equipment_type').first()
+    const eq = await db('equipment').where('id', query.equipmentId).select('id', 'name', 'equipment_type', 'rated_temp_rise_c').first()
     if (!eq) throw new Error('设备不存在')
     const hasData = await db('equipment_temperature').where('equipment_id', query.equipmentId).first()
-    if (!hasData) return { events: [], typeAvgRise: 0, thisAvgRise: 0, isWeak: false, noData: true }
+    if (!hasData) return { events: [], typeAvgRise: 0, isWeak: false, noData: true }
     const normalRow = await db('equipment_temperature')
       .where({ equipment_id: query.equipmentId, voltage_status: 'normal' }).avg('temp_c as avg_temp').first()
     const normalT = (normalRow as any)?.avg_temp || 0
@@ -2257,29 +2429,11 @@ export class GridDiagnosisService {
       tempRise: +((r.temp_c || 0) - normalT).toFixed(1),
       deviationPct: r.voltage_deviation_pct,
     }))
-    // 同类设备平均温升
+    // 理论判定线：设备额定温升阈值，超过即薄弱
+    const ratedRise = eq.rated_temp_rise_c || 5
     const thisAvgRise = eqEvents.length > 0 ? +(eqEvents.reduce((s, e) => s + e.tempRise, 0) / eqEvents.length).toFixed(1) : 0
-    const typeCount = (await db('equipment').where('equipment_type', eq.equipment_type).whereNot('id', query.equipmentId).count('* as cnt').first() as any)?.cnt || 0
-    // 设备理论温升（设计值）
-    const theoryRiseMap: Record<string, number> = { TRANSFORMER: 8, INVERTER: 6, BREAKER: 4, CABLE: 3, SWITCH: 4, BATTERY: 5 }
-    const theory = theoryRiseMap[eq.equipment_type] || 5
-    // 用同类正常设备（温升不超理论值）的平均值做基准，该设备超 1.3 倍即薄弱
-    let normalPeerTotal = 0, normalPeerCount = 0
-    if (typeCount > 0) {
-      // 重新算同类设备的 thisAvgRise，找不超理论值的
-      const allPeers = await db('equipment').where('equipment_type', eq.equipment_type).select('id')
-      for (const peer of allPeers as any[]) {
-        const pn = await db('equipment_temperature').where({ equipment_id: peer.id, voltage_status: 'normal' }).avg('temp_c as avg_temp').first()
-        const ps = await db('equipment_temperature').where({ equipment_id: peer.id, voltage_status: 'surge' }).avg('temp_c as avg_temp').first()
-        const pg = await db('equipment_temperature').where({ equipment_id: peer.id, voltage_status: 'sag' }).avg('temp_c as avg_temp').first()
-        const pnT = (pn as any)?.avg_temp || 0; const psT = (ps as any)?.avg_temp || 0; const pgT = (pg as any)?.avg_temp || 0
-        const pRise = (psT + pgT - pnT * 2) / 2
-        if (pRise <= theory) { normalPeerTotal += pRise; normalPeerCount++ }
-      }
-    }
-    const peerBaseline = normalPeerCount > 0 ? +(normalPeerTotal / normalPeerCount).toFixed(1) : theory
-    const isWeak = typeCount > 0 ? thisAvgRise > peerBaseline * 2.0 : false
-    return { events: eqEvents, typeAvgRise: peerBaseline, thisAvgRise, theoryRise: theory, isWeak, noPeer: typeCount === 0 }
+    const isWeak = thisAvgRise > ratedRise
+    return { events: eqEvents, typeAvgRise: ratedRise, isWeak }
   }
 
   async getComplaintStats(query: { startDate: string; endDate: string }) {
@@ -2297,7 +2451,7 @@ export class GridDiagnosisService {
   }
 
   async getHotspotDistribution(query: { startDate: string; endDate: string }) {
-    // 按 zone 聚合电压波动率 + 告警数
+    // 按 zone 聚合电压波动率 + 波动次数（电压偏差>5%的记录数）+ 投诉数
     const zoneData = await db('pv_output_measurements')
       .join('solar_pv_stations', 'solar_pv_stations.id', 'pv_output_measurements.station_id')
       .join('grid_buses', 'grid_buses.id', 'solar_pv_stations.bus_id')
@@ -2308,6 +2462,9 @@ export class GridDiagnosisService {
         db.raw('MAX(voltage_v) as max_voltage'),
         db.raw('MIN(voltage_v) as min_voltage'),
         'grid_buses.voltage_level',
+        db.raw('AVG(solar_pv_stations.longitude) as lng'),
+        db.raw('AVG(solar_pv_stations.latitude) as lat'),
+        db.raw("SUM(CASE WHEN ABS(ABS(voltage_v) - CAST(grid_buses.voltage_level AS REAL) * 1000) / (CAST(grid_buses.voltage_level AS REAL) * 1000) > 0.05 THEN 1 ELSE 0 END) as fluctuation_count"),
       )
       .groupBy('grid_buses.zone')
     const result = []
@@ -2317,13 +2474,6 @@ export class GridDiagnosisService {
       const maxDev = Math.abs((zd.max_voltage - nominalV) / nominalV * 100)
       const minDev = Math.abs((zd.min_voltage - nominalV) / nominalV * 100)
       const avgFluctuation = +Math.max(maxDev, minDev).toFixed(1)
-      const alertCnt = await db('alerts')
-        .join('solar_pv_stations', 'solar_pv_stations.id', 'alerts.source_id')
-        .join('grid_buses', 'grid_buses.id', 'solar_pv_stations.bus_id')
-        .where('grid_buses.zone', zd.zone)
-        .where('alerts.source_type', 'VOLTAGE_FLUCTUATION')
-        .whereBetween('alerts.triggered_at', [query.startDate, query.endDate])
-        .count('* as cnt').first()
       // 投诉数据：通过 station_id→zone 关联 complaint_stats
       const compRow = await db('complaint_stats')
         .join('solar_pv_stations', 'solar_pv_stations.id', 'complaint_stats.station_id')
@@ -2339,12 +2489,50 @@ export class GridDiagnosisService {
       const cnt = (stationCnt as any)?.cnt || 1
       result.push({
         zone: zd.zone,
+        longitude: +((zd.lng as number) || 0).toFixed(4),
+        latitude: +((zd.lat as number) || 0).toFixed(4),
         complaints: Math.round(totalComplaints / cnt),
         avgFluctuation,
+        fluctuationCount: Number(zd.fluctuation_count || 0),
         risk: avgFluctuation > 5 ? '高' : avgFluctuation > 2 ? '中' : '低',
       })
     }
     return result
+  }
+
+  async getComplaintTickets(query: { isVoltageRelated?: string; industry?: string; zone?: string }) {
+    let q = db('complaint_tickets')
+      .join('solar_pv_stations', 'solar_pv_stations.id', 'complaint_tickets.station_id')
+      .join('grid_buses', 'grid_buses.id', 'solar_pv_stations.bus_id')
+      .select(
+        'complaint_tickets.*',
+        'solar_pv_stations.station_name',
+        'grid_buses.zone',
+      )
+      .orderBy('complaint_tickets.reported_at', 'desc')
+    if (query.isVoltageRelated !== undefined && query.isVoltageRelated !== '') {
+      q = q.where('complaint_tickets.is_voltage_related', Number(query.isVoltageRelated))
+    }
+    if (query.industry) {
+      q = q.where('complaint_tickets.industry', query.industry)
+    }
+    if (query.zone) {
+      q = q.where('grid_buses.zone', query.zone)
+    }
+    const rows = await q
+    return (rows as any[]).map(r => ({
+      id: r.id,
+      ticketNo: r.ticket_no,
+      stationName: r.station_name,
+      zone: r.zone,
+      industry: r.industry,
+      issueDesc: r.issue_desc,
+      isVoltageRelated: !!r.is_voltage_related,
+      voltageIssueType: r.voltage_issue_type || '',
+      lossEstimateWan: r.loss_estimate_wan,
+      status: r.status,
+      reportedAt: r.reported_at?.slice(0, 10) || '',
+    }))
   }
 
   async traceEventDetail(eventId: string) {

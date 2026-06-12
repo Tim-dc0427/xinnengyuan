@@ -6,6 +6,47 @@ import { calculateReversePowerFlow } from './reverse-power-flow-calculator.js'
 import { calculateProbabilisticPowerFlow } from './probabilistic-calculator.js'
 import { calculateThreePhasePowerFlow } from './three-phase-calculator.js'
 
+// ==================== 对称分量法辅助（VUF/CUF 实时计算） ====================
+
+/** 复数运算 */
+class Cpx {
+  constructor(public re: number, public im: number = 0) {}
+  add(b: Cpx): Cpx { return new Cpx(this.re + b.re, this.im + b.im) }
+  mul(b: Cpx): Cpx { return new Cpx(this.re * b.re - this.im * b.im, this.re * b.im + this.im * b.re) }
+  div(b: Cpx): Cpx { const d = b.re * b.re + b.im * b.im; return new Cpx((this.re * b.re + this.im * b.im) / d, (this.im * b.re - this.re * b.im) / d) }
+  abs(): number { return Math.sqrt(this.re * this.re + this.im * this.im) }
+  static polar(mag: number, angle: number): Cpx { return new Cpx(mag * Math.cos(angle), mag * Math.sin(angle)) }
+}
+
+/** 对称分量法：电压不平衡度 VUF = |V₂|/|V₁|×100% */
+function computeVUFPhasor(va: number, vb: number, vc: number, aA: number, aB: number, aC: number): number {
+  const vA = Cpx.polar(va, aA)
+  const vB = Cpx.polar(vb, aB)
+  const vC = Cpx.polar(vc, aC)
+  const a = Cpx.polar(1, 2 * Math.PI / 3)
+  const a2 = Cpx.polar(1, 4 * Math.PI / 3)
+  const v1 = vA.add(a.mul(vB)).add(a2.mul(vC)).div(new Cpx(3, 0))
+  const v2 = vA.add(a2.mul(vB)).add(a.mul(vC)).div(new Cpx(3, 0))
+  const v1m = v1.abs()
+  if (v1m < 1e-10) return 0
+  return (v2.abs() / v1m) * 100
+}
+
+/** 对称分量法：电流不平衡度 CUF = |I₂|/|I₁|×100% */
+function computeCUFFromPower(ia: number, ib: number, ic: number, aA: number, aB: number, aC: number): number {
+  // 电流相量（幅值 + 相位角）
+  const iA = Cpx.polar(ia, aA)
+  const iB = Cpx.polar(ib, aB)
+  const iC = Cpx.polar(ic, aC)
+  const a = Cpx.polar(1, 2 * Math.PI / 3)
+  const a2 = Cpx.polar(1, 4 * Math.PI / 3)
+  const i1 = iA.add(a.mul(iB)).add(a2.mul(iC)).div(new Cpx(3, 0))
+  const i2 = iA.add(a2.mul(iB)).add(a.mul(iC)).div(new Cpx(3, 0))
+  const i1m = i1.abs()
+  if (i1m < 1e-10) return 0
+  return (i2.abs() / i1m) * 100
+}
+
 export class PowerFlowService {
   // 公共方法：根据筛选条件获取匹配的 bus ID 列表
   private async getMatchedBusIds(voltageLevel?: string, region?: string): Promise<string[]> {
@@ -24,22 +65,45 @@ export class PowerFlowService {
 
   // ==================== Indicators ====================
   async getIndicators(query: any) {
+    // 预加载物理角色映射（所有路径共用）
+    const busRows = await db('grid_buses').select('id', 'physical_role', 'name')
+    const roleMap = new Map(busRows.map((b: any) => [b.id, b.physical_role || 'SUBSTATION']))
+
+    // 辅助：给节点附加物理角色、潮流方向和实际电压
+    const enrichNode = (n: any) => ({
+      ...n,
+      physicalRole: roleMap.get(n.busId) || 'SUBSTATION',
+      flowDirection: n.reversePower ? 'reverse' : 'forward',
+      actualVoltageKv: Number(((n.voltagePu || 1) * (n.baseKv || 10)).toFixed(2)),
+      netPmW: Number(((n.pgMw || 0) - (n.pdMw || 0)).toFixed(1)),
+      netQmvar: Number(((n.qgMvar || 0) - (n.qdMvar || 0)).toFixed(1)),
+    })
+    // 辅助：网损分类型汇总
+    const lossBreakdown = (branches: any[]) => {
+      let lineLoss = 0; let transLoss = 0
+      for (const br of (branches || [])) {
+        if (br.branchType === 'TRANSFORMER') transLoss += (br.lossMw || 0)
+        else lineLoss += (br.lossMw || 0)
+      }
+      return { lineLossKw: Math.round(lineLoss * 1000), transformerLossKw: Math.round(transLoss * 1000) }
+    }
     // 无筛选参数时始终实时计算全量数据，避免读取其他模块残留的单区域缓存
     const hasFilter = !!(query.voltageLevel || query.region)
 
     if (!hasFilter) {
       const pf = await this.runPowerFlow()
-      const nodes = pf.nodeResults.map((n: any) => ({
-        ...n, threePhaseImbalance: n.threePhaseImbalance ?? 0,
-      }))
+      const nodes = pf.nodeResults.map((n: any) => enrichNode({ ...n, threePhaseImbalance: n.threePhaseImbalance ?? 0 }))
+      const branches = pf.branchResults || []
+      const loss = lossBreakdown(branches)
       const total = nodes.length || 1
       const qualified = nodes.filter((n: any) => Math.abs(n.voltagePu - 1) <= 0.05).length
       return {
         total_loss_kw: pf.totalLossMw * 1000,
+        ...loss,
         three_phase_imbalance_pct: nodes.reduce((max: number, n: any) => Math.max(max, n.threePhaseImbalance || 0), 0),
         reverse_power_detected: nodes.filter((n: any) => n.reversePower).length,
         node_results: nodes,
-        branch_results: pf.branchResults,
+        branch_results: branches,
         summary: {
           totalNodes: total,
           qualifiedNodes: qualified,
@@ -64,17 +128,18 @@ export class PowerFlowService {
 
     if (!record) {
       const pf = await this.runPowerFlow(query.voltageLevel, query.region)
-      const nodes = pf.nodeResults.map((n: any) => ({
-        ...n, threePhaseImbalance: n.threePhaseImbalance ?? 0,
-      }))
+      const nodes = pf.nodeResults.map((n: any) => enrichNode({ ...n, threePhaseImbalance: n.threePhaseImbalance ?? 0 }))
+      const branches = pf.branchResults || []
+      const loss = lossBreakdown(branches)
       const total = nodes.length || 1
       const qualified = nodes.filter((n: any) => Math.abs(n.voltagePu - 1) <= 0.05).length
       return {
         total_loss_kw: pf.totalLossMw * 1000,
+        ...loss,
         three_phase_imbalance_pct: nodes.reduce((max: number, n: any) => Math.max(max, n.threePhaseImbalance || 0), 0),
         reverse_power_detected: nodes.filter((n: any) => n.reversePower).length,
         node_results: nodes,
-        branch_results: pf.branchResults,
+        branch_results: branches,
         summary: {
           totalNodes: total,
           qualifiedNodes: qualified,
@@ -99,23 +164,35 @@ export class PowerFlowService {
       : (record.node_results || [])
     const filteredNodes = busSet.size > 0 ? this.filterNodesByBus(allNodes, busSet) : allNodes
 
-    const totalNodes = filteredNodes.length || 1
-    const qualifiedNodes = filteredNodes.filter((n: any) => Math.abs(n.voltagePu - 1) <= 0.05).length
+    // 解包 branch_results，按 matchedBusIds 过滤（fromBus/toBus 任一在集合内）
+    const allBranches = typeof record.branch_results === 'string'
+      ? JSON.parse(record.branch_results)
+      : (record.branch_results || [])
+    const filteredBranches = busSet.size > 0
+      ? (allBranches || []).filter((br: any) => busSet.has(br.fromBus) || busSet.has(br.toBus))
+      : (allBranches || [])
 
-    // 按过滤后的节点比例折算网损
-    const ratio = allNodes.length > 0 ? filteredNodes.length / allNodes.length : 1
+    const enrichedNodes = filteredNodes.map((n: any) => enrichNode(n))
+    const loss = lossBreakdown(filteredBranches)
+    const totalNodes = enrichedNodes.length || 1
+    const qualifiedNodes = enrichedNodes.filter((n: any) => Math.abs(n.voltagePu - 1) <= 0.05).length
+
+    const actualBranchLoss = filteredBranches.reduce((s: number, br: any) => s + (br.lossMw || 0), 0)
+    const totalLossKw = actualBranchLoss * 1000 || (record.total_loss_kw || 50)
+
     return {
-      total_loss_kw: (record.total_loss_kw || 50) * ratio,
-      three_phase_imbalance_pct: filteredNodes.reduce((max: number, n: any) => Math.max(max, n.threePhaseImbalance || 0), 0),
-      reverse_power_detected: filteredNodes.filter((n: any) => n.reversePower).length,
-      node_results: filteredNodes,
-      branch_results: [],
+      total_loss_kw: totalLossKw,
+      ...loss,
+      three_phase_imbalance_pct: enrichedNodes.reduce((max: number, n: any) => Math.max(max, n.threePhaseImbalance || 0), 0),
+      reverse_power_detected: enrichedNodes.filter((n: any) => n.reversePower).length,
+      node_results: enrichedNodes,
+      branch_results: filteredBranches,
       summary: {
         totalNodes,
         qualifiedNodes,
         voltageQualifiedRate: (qualifiedNodes / totalNodes * 100).toFixed(1),
-        maxVoltageDeviation: Math.max(...filteredNodes.map((n: any) => Math.abs(n.voltagePu - 1)), 0),
-        totalLossKw: (record.total_loss_kw || 50) * ratio,
+        maxVoltageDeviation: Math.max(...enrichedNodes.map((n: any) => Math.abs(n.voltagePu - 1)), 0),
+        totalLossKw,
       },
     }
   }
@@ -157,6 +234,7 @@ export class PowerFlowService {
           qmaxMvar: g.qmax_mvar, qminMvar: g.qmin_mvar,
           isPV: pvCap !== undefined,
           installedCapacityMw: pvCap || 0,
+          pgAMw: g.pg_a_mw, pgBMw: g.pg_b_mw, pgCMw: g.pg_c_mw,
         }
       }),
       loads: loadRows.map((l: any) => ({
@@ -183,13 +261,55 @@ export class PowerFlowService {
     return result
   }
 
-  async getNodeStability(query: any) {
-    // 无筛选参数时始终实时计算全量数据，避免读取其他模块残留的单区域缓存
-    const hasFilter = !!(query.voltageLevel || query.region)
+  /** 为节点列表批量查询关联设备信息 */
+  private async enrichWithDevices(nodes: any[]): Promise<any[]> {
+    const busIds = [...new Set(nodes.map((n: any) => n.busId).filter(Boolean))]
+    if (!busIds.length) return nodes
 
-    if (!hasFilter) {
-      const pf = await this.runPowerFlow()
-      return pf.nodeResults.map((n: any) => ({
+    // 批量查询关联设备 + 物理角色
+    const [gens, loads, pvStations, busRows] = await Promise.all([
+      db('grid_generators').whereIn('bus_id', busIds).select('bus_id', 'id', 'pg_mw', 'remark'),
+      db('grid_loads').whereIn('bus_id', busIds).select('bus_id', 'id', 'pd_mw', 'qd_mvar', 'remark'),
+      db('solar_pv_stations').whereIn('bus_id', busIds).where('status', 'active').select('bus_id', 'station_name'),
+      db('grid_buses').whereIn('id', busIds).select('id', 'physical_role'),
+    ])
+
+    // 物理角色映射
+    const roleMap = new Map<string, string>()
+    for (const b of busRows) { roleMap.set(b.id, b.physical_role || 'SUBSTATION') }
+
+    // 按 bus_id 分组
+    const genMap = new Map<string, any[]>()
+    for (const g of gens) {
+      if (!genMap.has(g.bus_id)) genMap.set(g.bus_id, [])
+      genMap.get(g.bus_id)!.push(g)
+    }
+    const loadMap = new Map<string, any[]>()
+    for (const l of loads) {
+      if (!loadMap.has(l.bus_id)) loadMap.set(l.bus_id, [])
+      loadMap.get(l.bus_id)!.push(l)
+    }
+    const pvMap = new Map<string, string[]>()
+    for (const p of pvStations) {
+      if (!pvMap.has(p.bus_id)) pvMap.set(p.bus_id, [])
+      pvMap.get(p.bus_id)!.push(p.station_name)
+    }
+
+    return nodes.map((n: any) => {
+      const devices: string[] = []
+      const busGens = genMap.get(n.busId) || []
+      for (const g of busGens) {
+        devices.push(`发电机:${g.remark || g.id}(${g.pg_mw}MW)`)
+      }
+      const busLoads = loadMap.get(n.busId) || []
+      for (const l of busLoads) {
+        devices.push(`负荷:${l.remark || l.id}(${l.pd_mw}MW)`)
+      }
+      const busPvs = pvMap.get(n.busId) || []
+      for (const pv of busPvs) {
+        devices.push(`光伏:${pv}`)
+      }
+      return {
         nodeId: n.nodeId,
         busId: n.busId,
         name: n.name,
@@ -197,9 +317,26 @@ export class PowerFlowService {
         voltageLevel: n.voltageLevel,
         voltagePu: n.voltagePu,
         angleDeg: n.angleDeg,
-        stabilityMargin: n.stabilityMargin,
-        isWeakNode: n.isWeakNode,
-      }))
+        stabilityMargin: n.stabilityMargin ?? (n.voltagePu != null ? Number((1 - Math.abs(n.voltagePu - 1)).toFixed(4)) : 0),
+        isWeakNode: n.isWeakNode ?? (n.voltagePu != null ? Math.abs(n.voltagePu - 1) > 0.05 : false),
+        pgMw: n.pgMw ?? 0,
+        qgMvar: n.qgMvar ?? 0,
+        pdMw: n.pdMw ?? 0,
+        qdMvar: n.qdMvar ?? 0,
+        busType: n.busType ?? '',
+        physicalRole: roleMap.get(n.busId) || 'SUBSTATION',
+        connectedDevices: devices,
+      }
+    })
+  }
+
+  async getNodeStability(query: any) {
+    // 无筛选参数时始终实时计算全量数据，避免读取其他模块残留的单区域缓存
+    const hasFilter = !!(query.voltageLevel || query.region)
+
+    if (!hasFilter) {
+      const pf = await this.runPowerFlow()
+      return this.enrichWithDevices(pf.nodeResults)
     }
 
     // 有筛选参数时优先使用缓存
@@ -209,43 +346,24 @@ export class PowerFlowService {
 
     if (!record?.node_results) {
       const pf = await this.runPowerFlow(query.voltageLevel, query.region)
-      return pf.nodeResults.map((n: any) => ({
-        nodeId: n.nodeId,
-        busId: n.busId,
-        name: n.name,
-        zone: n.zone,
-        voltageLevel: n.voltageLevel,
-        voltagePu: n.voltagePu,
-        angleDeg: n.angleDeg,
-        stabilityMargin: n.stabilityMargin,
-        isWeakNode: n.isWeakNode,
-      }))
+      return this.enrichWithDevices(pf.nodeResults)
     }
 
     const allNodes = typeof record.node_results === 'string'
       ? JSON.parse(record.node_results)
       : record.node_results
     const filtered = busSet.size > 0 ? this.filterNodesByBus(allNodes, busSet) : allNodes
-    return filtered.map((n: any) => ({
-      nodeId: n.nodeId,
-      busId: n.busId,
-      name: n.name,
-      zone: n.zone,
-      voltageLevel: n.voltageLevel,
-      voltagePu: n.voltagePu,
-      angleDeg: n.angleDeg,
-      stabilityMargin: n.stabilityMargin ?? 1 - Math.abs(n.voltagePu - 1),
-      isWeakNode: n.isWeakNode ?? Math.abs(n.voltagePu - 1) > 0.05,
-    }))
+    return this.enrichWithDevices(filtered)
   }
 
   async getThreePhase(query: any) {
     // 光伏关联节点：从 solar_pv_stations 获取实际并网的母线
     const pvRows = await db('solar_pv_stations')
       .where('status', 'active')
-      .select('bus_id', 'station_name')
+      .select('bus_id', 'station_name', 'installed_capacity_mw')
     const pvBusIds = new Set(pvRows.map((r: any) => r.bus_id))
     const pvGenMap = new Map(pvRows.map((r: any) => [r.bus_id, r.station_name]))
+    const pvCapMap = new Map(pvRows.map((r: any) => [r.bus_id, r.installed_capacity_mw]))
 
     // 无筛选参数时始终实时计算全量数据，避免读取其他模块残留的单区域缓存
     const hasFilter = !!(query.voltageLevel || query.region)
@@ -276,12 +394,68 @@ export class PowerFlowService {
       }
     }
 
+    // 批量查询物理节点角色 + 分相负荷/发电数据（用于 VUF/CUF 计算）
+    const busIds = [...new Set(nodeResults.map((n: any) => n.busId).filter(Boolean))]
+    const [busRows, genPhaseRows, loadPhaseRows] = await Promise.all([
+      busIds.length > 0 ? db('grid_buses').whereIn('id', busIds).select('id', 'physical_role') : Promise.resolve([]),
+      busIds.length > 0 ? db('grid_generators').whereIn('bus_id', busIds).select('bus_id', 'pg_a_mw', 'pg_b_mw', 'pg_c_mw', 'qmax_mvar', 'qmin_mvar') : Promise.resolve([]),
+      busIds.length > 0 ? db('grid_loads').whereIn('bus_id', busIds).select('bus_id', 'pd_a_mw', 'pd_b_mw', 'pd_c_mw', 'qd_a_mvar', 'qd_b_mvar', 'qd_c_mvar', 'remark') : Promise.resolve([]),
+    ])
+    const roleMap = new Map(busRows.map((b: any) => [b.id, b.physical_role || 'SUBSTATION']))
+    const genPhaseMap = new Map(genPhaseRows.map((g: any) => [g.bus_id, g]))
+    const loadPhaseMap = new Map(loadPhaseRows.map((l: any) => [l.bus_id, l]))
+
     return nodeResults.map((n: any) => {
       const vPu = n.voltagePu ?? 1.0
       const baseKv = n.baseKv ?? 10
       const actualKv = vPu * baseKv
       const imbl = n.threePhaseImbalance ?? 0
       const imbalanceFactor = imbl / 100
+
+      // 三相电压幅值
+      const va = Number((actualKv * (1 + imbalanceFactor * 0.3)).toFixed(4))
+      const vb = Number((actualKv * (1 + imbalanceFactor * 0.1)).toFixed(4))
+      const vc = Number((actualKv * (1 - imbalanceFactor * 0.2)).toFixed(4))
+
+      // 三相电压相角：120° 基准 + 确定性微小偏移（模拟实际电网相位偏差）
+      const busId = n.busId || n.nodeId || ''
+      const seed = busId.split('').reduce((s: number, c: string) => s + c.charCodeAt(0), 0)
+      const devA = ((seed % 31) - 15) * 0.001  // ±0.015 rad ≈ ±0.86°
+      const devB = ((seed % 23) - 11) * 0.001  // ±0.011 rad ≈ ±0.63°
+      const devC = ((seed % 37) - 18) * 0.001  // ±0.018 rad ≈ ±1.03°
+      const angleA = devA
+      const angleB = -2 * Math.PI / 3 + devB
+      const angleC = 2 * Math.PI / 3 + devC
+
+      // 对称分量法计算 VUF = |V₂| / |V₁| × 100%
+      const vuf = computeVUFPhasor(va, vb, vc, angleA, angleB, angleC)
+
+      // 分相电流计算（基于分相有功/无功功率）
+      const genP = genPhaseMap.get(n.busId)
+      const loadP = loadPhaseMap.get(n.busId)
+      const pgA = genP?.pg_a_mw ?? 0; const pgB = genP?.pg_b_mw ?? 0; const pgC = genP?.pg_c_mw ?? 0
+      const pdA = loadP?.pd_a_mw ?? 0; const pdB = loadP?.pd_b_mw ?? 0; const pdC = loadP?.pd_c_mw ?? 0
+      // 无功按比例分配
+      const pgTotal = (pgA + pgB + pgC) || 1
+      const pdTotal = (pdA + pdB + pdC) || 1
+      const qgTotal = genP ? (genP.qmax_mvar ?? 0) * 0.6 : 0
+      const qdTotal = loadP ? ((loadP.qd_a_mvar ?? 0) + (loadP.qd_b_mvar ?? 0) + (loadP.qd_c_mvar ?? 0)) : 0
+      const qgA = pgA / pgTotal * qgTotal; const qgB = pgB / pgTotal * qgTotal; const qgC = pgC / pgTotal * qgTotal
+      const qdA = loadP?.qd_a_mvar ?? 0; const qdB = loadP?.qd_b_mvar ?? 0; const qdC = loadP?.qd_c_mvar ?? 0
+      // 净注入功率 = 发电 - 负荷
+      const pNetA = pgA - pdA; const pNetB = pgB - pdB; const pNetC = pgC - pdC
+      const qNetA = qgA - qdA; const qNetB = qgB - qdB; const qNetC = qgC - qdC
+      // 电流幅值 = |S| / V (kV→V 换算)
+      const ia = Math.sqrt(pNetA * pNetA + qNetA * qNetA) * 1000 / (va * 1000) * 1000
+      const ib = Math.sqrt(pNetB * pNetB + qNetB * qNetB) * 1000 / (vb * 1000) * 1000
+      const ic = Math.sqrt(pNetC * pNetC + qNetC * qNetC) * 1000 / (vc * 1000) * 1000
+
+      // 对称分量法计算 CUF = |I₂| / |I₁| × 100%（电流相角用近似值：功率因数角 + 电压相角）
+      const pfAngleA = Math.atan2(qNetA, pNetA || 1e-6)
+      const pfAngleB = Math.atan2(qNetB, pNetB || 1e-6)
+      const pfAngleC = Math.atan2(qNetC, pNetC || 1e-6)
+      const cuf = computeCUFFromPower(ia, ib, ic, angleA + pfAngleA, angleB + pfAngleB, angleC + pfAngleC)
+
       return {
         id: n.busId || n.nodeId,
         nodeId: n.nodeId,
@@ -289,28 +463,167 @@ export class PowerFlowService {
         zone: n.zone,
         voltageLevel: n.voltageLevel,
         baseKv,
+        physicalRole: roleMap.get(n.busId) || 'SUBSTATION',
         imbalancePct: imbl,
-        phaseA: Number((actualKv * (1 + imbalanceFactor * 0.3)).toFixed(4)),
-        phaseB: Number((actualKv * (1 + imbalanceFactor * 0.1)).toFixed(4)),
-        phaseC: Number((actualKv * (1 - imbalanceFactor * 0.2)).toFixed(4)),
+        phaseA: va,
+        phaseB: vb,
+        phaseC: vc,
+        angleA: Number((angleA * 180 / Math.PI).toFixed(2)),
+        angleB: Number((angleB * 180 / Math.PI).toFixed(2)),
+        angleC: Number((angleC * 180 / Math.PI).toFixed(2)),
+        vuf: Number(vuf.toFixed(2)),
+        phaseACurrent: Number(ia.toFixed(2)),
+        phaseBCurrent: Number(ib.toFixed(2)),
+        phaseCCurrent: Number(ic.toFixed(2)),
+        cuf: Number(cuf.toFixed(2)),
         pvRelated: pvBusIds.has(n.busId || n.nodeId),
         plantName: pvGenMap.get(n.busId || n.nodeId) || '',
+        installedCapacity: pvCapMap.get(n.busId || n.nodeId) ?? null,
+        transformerArea: n.zone || '',
+        loadType: loadPhaseMap.get(n.busId)?.remark || '',
       }
     })
   }
 
+  // ==================== 三相不平衡趋势查询 ====================
+  async getThreePhaseTrend(query: any) {
+    const { startDate, endDate, busIds } = query
+    if (!startDate || !endDate) {
+      throw new Error('缺少 startDate / endDate 参数')
+    }
+
+    let q = db('three_phase_snapshots')
+      .where('recorded_at', '>=', startDate)
+      .where('recorded_at', '<=', endDate + ' 23:59:59')
+
+    if (busIds) {
+      const ids = typeof busIds === 'string' ? busIds.split(',') : busIds
+      if (ids.length > 0) q = q.whereIn('bus_id', ids)
+    }
+
+    const rows = await q.orderBy('recorded_at', 'asc').orderBy('imbalance_pct', 'desc')
+
+    // 批量查询节点名称
+    const busIdSet = [...new Set(rows.map((r: any) => r.bus_id))]
+    const busNames = busIdSet.length > 0
+      ? await db('grid_buses').whereIn('id', busIdSet).select('id', 'name')
+      : []
+    const nameMap = new Map(busNames.map((b: any) => [b.id, b.name]))
+
+    // 按节点分组，返回 { busId -> { info, series: [{time, ...}] } }
+    const nodeMap = new Map<string, { info: any; series: any[] }>()
+    for (const r of rows) {
+      const row = r as any
+      if (!nodeMap.has(row.bus_id)) {
+        nodeMap.set(row.bus_id, {
+          info: {
+            busId: row.bus_id,
+            name: nameMap.get(row.bus_id) || row.bus_id,
+            zone: row.zone,
+            voltageLevel: row.voltage_level,
+            physicalRole: row.physical_role,
+            pvRelated: row.pv_related === 1,
+            plantName: row.plant_name || '',
+          },
+          series: [],
+        })
+      }
+      nodeMap.get(row.bus_id)!.series.push({
+        time: row.recorded_at,
+        imbalancePct: row.imbalance_pct,
+        vuf: row.vuf,
+        cuf: row.cuf,
+        phaseA: row.phase_a_kv,
+        phaseB: row.phase_b_kv,
+        phaseC: row.phase_c_kv,
+        phaseACurrent: row.phase_a_current,
+        phaseBCurrent: row.phase_b_current,
+        phaseCCurrent: row.phase_c_current,
+      })
+    }
+
+    return {
+      dates: [...new Set(rows.map((r: any) => r.recorded_at))].sort(),
+      nodes: Array.from(nodeMap.values()),
+    }
+  }
+
   // ==================== Thresholds ====================
-  async getThresholds() {
-    return [
-      { indicatorName: 'voltage_deviation', warningThreshold: 3, criticalThreshold: 5, unit: '%', isCustom: false, applicableVoltageLevel: null, applicableRegion: null },
-      { indicatorName: 'three_phase_imbalance', warningThreshold: 1, criticalThreshold: 2, unit: '%', isCustom: false, applicableVoltageLevel: null, applicableRegion: null },
-      { indicatorName: 'equipment_load_rate', warningThreshold: 80, criticalThreshold: 95, unit: '%', isCustom: false, applicableVoltageLevel: null, applicableRegion: null },
-      { indicatorName: 'frequency_deviation', warningThreshold: 0.2, criticalThreshold: 0.5, unit: 'Hz', isCustom: false, applicableVoltageLevel: null, applicableRegion: null },
-    ]
+  async getThresholds(query?: { voltageLevel?: string; region?: string }) {
+    let q = db('indicator_thresholds').select('*').orderBy('indicator_name').orderBy('voltage_level').orderBy('region')
+    if (query?.voltageLevel) q = q.where('voltage_level', query.voltageLevel)
+    if (query?.region) q = q.where('region', query.region)
+    const rows = await q
+    return rows.map((r: any) => ({
+      id: r.id,
+      indicatorName: r.indicator_name,
+      indicatorLabel: r.indicator_label,
+      warningThreshold: r.warning_threshold,
+      criticalThreshold: r.critical_threshold,
+      unit: r.unit,
+      voltageLevel: r.voltage_level,
+      region: r.region,
+      enabled: r.enabled === 1,
+      isCustom: r.is_custom === 1,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }))
   }
 
   async updateThresholds(data: any[]) {
-    return data
+    const now = new Date().toISOString().replace('T', ' ').slice(0, 19)
+    for (const item of data) {
+      if (item.id) {
+        // 更新已有记录
+        const updateData: any = {
+          warning_threshold: item.warningThreshold,
+          critical_threshold: item.criticalThreshold,
+          updated_at: now,
+        }
+        if (item.enabled !== undefined) updateData.enabled = item.enabled ? 1 : 0
+        await db('indicator_thresholds').where('id', item.id).update(updateData)
+      } else {
+        // 新增记录：按唯一键 upsert
+        const existing = await db('indicator_thresholds')
+          .where('indicator_name', item.indicatorName)
+          .where('voltage_level', item.voltageLevel ?? null)
+          .where('region', item.region ?? null)
+          .first()
+        if (existing) {
+          const updateData: any = {
+            warning_threshold: item.warningThreshold,
+            critical_threshold: item.criticalThreshold,
+            updated_at: now,
+          }
+          if (item.enabled !== undefined) updateData.enabled = item.enabled ? 1 : 0
+          await db('indicator_thresholds').where('id', existing.id).update(updateData)
+        } else {
+          await db('indicator_thresholds').insert({
+            id: uuid(),
+            indicator_name: item.indicatorName,
+            indicator_label: item.indicatorLabel,
+            warning_threshold: item.warningThreshold,
+            critical_threshold: item.criticalThreshold,
+            unit: item.unit,
+            voltage_level: item.voltageLevel ?? null,
+            region: item.region ?? null,
+            enabled: item.enabled !== false ? 1 : 0,
+            is_custom: 1,
+            created_at: now,
+            updated_at: now,
+          })
+        }
+      }
+    }
+    return this.getThresholds()
+  }
+
+  async deleteThreshold(id: string) {
+    const row = await db('indicator_thresholds').where('id', id).first()
+    if (!row) throw new Error('阈值记录不存在')
+    if (row.is_custom !== 1) throw new Error('默认阈值不可删除')
+    await db('indicator_thresholds').where('id', id).del()
+    return { id, deleted: true }
   }
 
   // ==================== Data Validation ====================
@@ -948,7 +1261,11 @@ export class PowerFlowService {
     }
 
     if (anomalyItems.length > 0) {
-      await db('batch_anomaly_items').insert(anomalyItems)
+      // 分批插入，避免 SQLite compound SELECT 限制（SQLITE_MAX_COMPOUND_SELECT 默认 500）
+      const CHUNK = 100
+      for (let i = 0; i < anomalyItems.length; i += CHUNK) {
+        await db('batch_anomaly_items').insert(anomalyItems.slice(i, i + CHUNK))
+      }
     }
 
     // 承载能力排名：从支路负载率排序
@@ -2320,9 +2637,10 @@ export class PowerFlowService {
           pvConcentration: params.pvConcentration ?? 20,
         },
           async (current, total, msg) => {
-            // 检查是否暂停
+            // 检查是否暂停：先更新进度到真实位置，再保存断点等待恢复
             if (control.paused) {
-              // 保存 checkpoint
+              const pct = 5 + Math.round((current / total) * 80)
+              await this.updateProgress(taskId, pct, `蒙特卡洛采样 ${current}/${total}（已暂停）`)
               await this.saveCheckpoint(taskId, current, {
                 completedSamples: current,
                 totalSamples: total,
@@ -2400,7 +2718,6 @@ export class PowerFlowService {
       created_at: new Date().toISOString(),
       parameters: JSON.stringify(params), created_by: userId,
       scene_type: meta.sceneType, data_source: meta.dataSource,
-      created_at: new Date().toISOString(),
     })
 
     const control = { paused: false, aborted: false }
@@ -2598,7 +2915,11 @@ export class PowerFlowService {
 
   async getProgress(taskId: string) {
     const task = await db('calc_tasks').where('id', taskId).first()
-    if (!task) throw new Error('Task not found')
+    if (!task) {
+      const err: any = new Error('任务不存在')
+      err.statusCode = 404
+      throw err
+    }
 
     const startedAt = task.started_at ? new Date(task.started_at).getTime() : null
     const elapsedSec = startedAt ? Math.round((Date.now() - startedAt) / 1000) : 0
@@ -2665,8 +2986,15 @@ export class PowerFlowService {
       ? JSON.parse(task.parameters) : task.parameters
     params._resumeFromCheckpoint = checkpoint.id
 
+    // 从断点数据计算正确的进度百分比
+    const cpData = JSON.parse(checkpoint.checkpoint_data || '{}')
+    const totalSamples = cpData.totalSamples || 0
+    const progressPct = totalSamples > 0
+      ? Math.round((checkpoint.iteration / totalSamples) * 100)
+      : checkpoint.iteration
+
     await db('calc_tasks').where('id', taskId).update({
-      status: 'running', progress_pct: checkpoint.iteration,
+      status: 'running', progress_pct: progressPct,
     })
 
     // 根据 task_type 重新派发
@@ -2793,6 +3121,7 @@ export class PowerFlowService {
         'spv.model_id',
         'gb.name as bus_name',
         'spv.installed_capacity_mw',
+        'spv.grid_connection_voltage_kv',
         'm.active_power_kw',
         'm.time as measurement_time',
         'm.expected_weather',
@@ -2940,34 +3269,129 @@ export class PowerFlowService {
   private redispatchTask(taskId: string, taskType: string, params: any) {
     // 根据 task_type 重新分发任务（断点续算用）
     switch (taskType) {
-      case 'PROBABILISTIC':
-        // 简化的重新派发：重新执行概率计算
+      case 'PROBABILISTIC': {
+        // 读取断点数据
+        const control = this.taskControls.get(taskId) || { paused: false, aborted: false }
+        if (!this.taskControls.has(taskId)) {
+          this.taskControls.set(taskId, control)
+        }
+
         setImmediate(async () => {
           try {
-            const input = await this.buildPowerFlowInput()
+            // 读取断点获取已完成的采样数
+            const checkpoint = await db('calc_checkpoints')
+              .where('task_id', taskId)
+              .orderBy('iteration', 'desc')
+              .first()
+            const cpData = checkpoint ? JSON.parse(checkpoint.checkpoint_data || '{}') : {}
+            const skipSamples = cpData.completedSamples || 0
+            const sampleCount = Math.min(Math.max(params.sampleCount || 200, 100), 2000)
+
+            // 从断点位置恢复进度
+            const resumePct = skipSamples > 0 ? Math.round((skipSamples / sampleCount) * 5) : 3
+            await this.updateProgress(taskId, resumePct, skipSamples > 0
+              ? `从断点恢复，重跑前 ${skipSamples} 个采样以重建累加器...`
+              : '加载拓扑数据...')
+
+            let input = await this.buildPowerFlowInput()
+
+            // 馈线裁剪
+            if (params.feederIds && params.feederIds.length > 0) {
+              const feederBusRows = await db('feeder_buses')
+                .whereIn('feeder_id', params.feederIds)
+                .select('bus_id')
+              const feederBusIds = [...new Set(feederBusRows.map((fb: any) => fb.bus_id))]
+              input = this.trimTopology(input, feederBusIds)
+            }
+
             await this.applySolarScenarioWithMeasurements(input, {
               weatherScenario: params.weatherScenario || 'actual',
               pvBusIds: params.pvBusIds || [],
             })
-            const sampleCount = Math.min(Math.max(params.sampleCount || 200, 100), 2000)
+
+            await this.updateProgress(taskId, 5, '拓扑数据加载完成，启动蒙特卡洛模拟...')
+
             const result = await calculateProbabilisticPowerFlow(
               input, sampleCount, {
-              loadVariationPct: params.loadVariationPct ?? 10,
-              pvConcentration: params.pvConcentration ?? 20,
-              generatorFOR: params.generatorFOR ?? 0,
-            },
+                loadVariationPct: params.loadVariationPct ?? 10,
+                pvConcentration: params.pvConcentration ?? 20,
+              },
+              async (current, total, msg) => {
+                if (control.paused) {
+                  const pct = 5 + Math.round((current / total) * 80)
+                  await this.updateProgress(taskId, pct, `蒙特卡洛采样 ${current}/${total}（已暂停）`)
+                  await this.saveCheckpoint(taskId, current, {
+                    completedSamples: current,
+                    totalSamples: total,
+                    loadVariationPct: params.loadVariationPct ?? 10,
+                    pvConcentration: params.pvConcentration ?? 20,
+                  })
+                  await new Promise<void>(resolve => {
+                    const check = setInterval(() => {
+                      if (!control.paused || control.aborted) {
+                        clearInterval(check)
+                        resolve()
+                      }
+                    }, 500)
+                  })
+                }
+                if (control.aborted) {
+                  throw new Error('Task aborted')
+                }
+                const pct = 5 + Math.round((current / total) * 80)
+                await this.updateProgress(taskId, pct, msg || `蒙特卡洛采样 ${current}/${total}...`)
+              },
+              skipSamples,  // 断点续算：重跑已完成采样以重建累加器
             )
-            await this.saveCalcResult(taskId, result, params)
+
+            await this.updateProgress(taskId, 90, '蒙特卡洛模拟完成，后处理统计结果...')
+            await new Promise(resolve => setImmediate(resolve))
+
+            // 保存结果（与 submitProbabilisticPF 一致）
+            const lossSamples = result.lossSamples || []
+            const expectedLossMw = lossSamples.length > 0
+              ? lossSamples.reduce((s: number, v: number) => s + v, 0) / lossSamples.length : 0
+
+            const summary = {
+              totalLossKw: expectedLossMw * 1000,
+              maxVoltageDeviation: Math.max(...result.nodeResults.map((n: any) => Math.max(Math.abs(1 - n.expectedKv / n.baseKv), 0)), 0),
+              maxLoadRate: Math.max(...result.branchResults.map((b: any) => b.expectedLoadingPct || 0), 0),
+              reversePowerBranches: 0,
+              violatedConstraintCount: result.voltageViolationNodes.length + result.overloadBranches.length,
+              converged: true,
+              sampleCount,
+            }
+
+            await db('calc_results').insert({
+              task_id: taskId, version: 1, is_latest: true,
+              node_results: JSON.stringify(result.nodeResults),
+              branch_results: JSON.stringify(result.branchResults),
+              summary: JSON.stringify(summary),
+              reverse_power_detected: 0,
+              three_phase_imbalance_pct: 0,
+              total_loss_kw: summary.totalLossKw,
+            })
+
+            await this.updateProgress(taskId, 100, '概率潮流计算完成')
             await db('calc_tasks').where('id', taskId).update({
               status: 'completed', progress_pct: 100, completed_at: new Date().toISOString(),
             })
           } catch (err: any) {
-            await db('calc_tasks').where('id', taskId).update({
-              status: 'failed', error_message: err.message,
-            })
+            if (err.message === 'Task aborted') {
+              await db('calc_tasks').where('id', taskId).update({
+                status: 'failed', error_message: '任务已取消',
+              })
+            } else {
+              await db('calc_tasks').where('id', taskId).update({
+                status: 'failed', error_message: err.message,
+              })
+            }
+          } finally {
+            this.taskControls.delete(taskId)
           }
         })
         break
+      }
       default:
         // 其他类型简化处理
         setImmediate(async () => {

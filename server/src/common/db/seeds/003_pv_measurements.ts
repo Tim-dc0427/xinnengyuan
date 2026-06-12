@@ -114,7 +114,19 @@ export async function seed(knex: Knex): Promise<void> {
             id: uuid(), time: timeStr, plant_id: s.plant_id || '', station_id: s.id,
             active_power_kw: powerKw,
             reactive_power_kvar: Math.round(powerKw * (0.06 + seededRandom(stationDayOffset * 41 + h) * 0.06)),
-            voltage_v: Number((gridKv * 1000 * (0.98 + seededRandom(stationDayOffset * 53 + h) * 0.04)).toFixed(1)),
+            voltage_v: Number((() => {
+              // 类正态分布电压：sum-of-3-uniforms 近似正态，按电压等级差异化范围
+              // 10kV 国标允许±7%，110kV/220kV 国标允许±3%
+              // normalHalf 略大于阈值，让尾部自然超出合规范围（约5-10%点越限）
+              const threshold = gridKv >= 110 ? 0.03 : 0.07
+              const normalHalf = threshold * 1.2
+              let r = 0
+              for (let k = 0; k < 3; k++) r += seededRandom(stationDayOffset * 53 + h * 7 + k)
+              r = (r / 3 - 0.5) * 2 // 中心化到[-1, 1]，类正态
+              const factor = 1.0 + r * normalHalf
+              // 留自然尾部超出阈值，不硬钳位
+              return (gridKv * 1000 * factor).toFixed(1)
+            })()),
             current_a: Math.round((powerKw / gridKv) * (0.9 + seededRandom(stationDayOffset * 59 + h) * 0.2)),
             frequency_hz: +(50 + seededRandom(stationDayOffset * 61 + h) * 0.08 - 0.04).toFixed(3),
             power_factor: +(0.94 + seededRandom(stationDayOffset * 71 + h) * 0.05).toFixed(3),
@@ -262,6 +274,56 @@ export async function seed(knex: Knex): Promise<void> {
   }
   console.log('  ✓ 告警样本：4 个电站 × 真实电压波动事件（15分钟窗口内波动 >5%）')
 
+  // ==================== 告警记录入库：电压波动 + 实际可靠性率 ====================
+  // 按实际业务频率：电压波动告警每月1~2条，可靠性率告警每季度1条
+  const allStations = await knex('solar_pv_stations').select('id', 'station_name', 'grid_connection_voltage_kv', 'installed_capacity_mw').limit(8)
+  const alertNow = '2026-06-10T10:00:00.000Z'
+  const vuAlertRecords: any[] = []
+  // 仅取波动最严重的一条入库（超过7%严重越限）
+  if (alertEvents.length > 0) {
+    const evt = alertEvents[0]
+    const meta = {
+      fluctuationPct: 7.15,
+      activePowerKw: evt.records[1].powerKw,
+      loadKw: Math.round(evt.records[1].powerKw * 0.78),
+    }
+    vuAlertRecords.push({
+      id: uuid(),
+      alert_level: 'CRITICAL',
+      source_type: 'VOLTAGE_FLUCTUATION',
+      source_id: evt.station.id,
+      title: `${evt.station.station_name} 电压波动率 ${meta.fluctuationPct}%`,
+      message: `并网点电压15分钟内波动 ${meta.fluctuationPct}%，超过7%严重越限阈值。光伏出力 ${meta.activePowerKw}kW，负荷 ${meta.loadKw}kW`,
+      triggered_at: evt.records[0].time,
+      metadata: JSON.stringify(meta),
+    })
+  }
+  // 仅1条可靠性率告警（实际可靠率99.960%，低于三级阈值99.950%）
+  const relAlertRecords: any[] = []
+  if (allStations.length >= 5) {
+    const st = allStations[4]
+    const meta = {
+      reliabilityPct: 99.948,
+      saifi: 3.85,
+      saidi: 4.56,
+      theoreticalReliability: 99.999,
+      deviationPct: 51,
+    }
+    relAlertRecords.push({
+      id: uuid(),
+      alert_level: 'CRITICAL',
+      source_type: 'POWER_SUPPLY_RELIABILITY',
+      source_id: st.id,
+      title: `${st.station_name} 实际可靠率 ${meta.reliabilityPct}%（低于三级阈值）`,
+      message: `SAIFI ${meta.saifi}次/户·年，SAIDI ${meta.saidi}h/户·年，实际可靠率低于99.950%三级严重阈值`,
+      triggered_at: alertNow,
+      metadata: JSON.stringify(meta),
+    })
+  }
+  if (vuAlertRecords.length) await knex('alerts').insert(vuAlertRecords)
+  if (relAlertRecords.length) await knex('alerts').insert(relAlertRecords)
+  console.log(`  ✓ 告警入库：${vuAlertRecords.length} 条电压波动 + ${relAlertRecords.length} 条实际可靠性率`)
+
   // ==================== 电压越限样本：差异化注入，不同区域越限程度不同 ====================
   const violationStations = await knex('solar_pv_stations')
     .join('grid_buses', 'grid_buses.id', 'solar_pv_stations.bus_id')
@@ -279,9 +341,18 @@ export async function seed(knex: Knex): Promise<void> {
     const cfg = zoneViolationConfig[vs.zone] || { days: ['2026-06-01'], hours: ['14'] }
     const kv = vs.grid_connection_voltage_kv || 10
     const nominalV = kv * 1000
-    const violationRatio = kv >= 110 ? 1.04 : 1.08
     for (const day of cfg.days) {
       for (const h of cfg.hours) {
+        // 每次越限独立随机偏差，不再固定 4%/8%
+        // 低压(10kV)：越限 7%~13%，高压(≥110kV)：越限 3%~7%
+        const seed1 = vs.id.charCodeAt(0) + vs.id.charCodeAt(2) + parseInt(day.slice(-2)) * 31 + parseInt(h) * 7
+        const seed2 = vs.id.charCodeAt(1) + vs.id.charCodeAt(3) + parseInt(day.slice(-2)) * 17 + parseInt(h) * 13
+        const deviation = kv >= 110
+          ? 0.03 + seededRandom(seed1) * 0.04
+          : 0.07 + seededRandom(seed2) * 0.06
+        // 随机选择偏高或偏低（~70%偏高）
+        const direction = seededRandom(vs.id.charCodeAt(4) + parseInt(h) * 41 + parseInt(day.slice(-2)) * 53) < 0.7 ? 1 : -1
+        const violationRatio = 1.0 + direction * deviation
         await knex('pv_output_measurements')
           .where({ station_id: vs.id }).where('time', 'like', `${day}T${h}:%`)
           .update({ voltage_v: +(nominalV * violationRatio).toFixed(1) })

@@ -7,8 +7,10 @@ import {
   generateAbsorptionPlan, fetchAbsorptionPlan, updateAbsorptionPlan,
   fetchCandidatePoints, fetchPlanVariants, createPlanVariant, deletePlanVariant,
   roiAnalysis,
+  analyzeCandidatePoint,
 } from '@/api/planning'
-import type { AbsorptionPlanDetail, CandidatePoint, StorageConfig, ReactiveCompConfig, LineModificationPlan, SchemeVariant } from '@new-energy/shared'
+import type { CandidateAnalysisResult } from '@/api/planning'
+import type { AbsorptionPlanDetail, StorageConfig, ReactiveCompConfig, LineModificationPlan, SchemeVariant } from '@new-energy/shared'
 import ChartContainer from '@/components/common/ChartContainer.vue'
 
 const route = useRoute()
@@ -16,10 +18,13 @@ const planningStore = usePlanningStore()
 const { candidates } = storeToRefs(planningStore)
 const loading = ref(false)
 const plan = ref<AbsorptionPlanDetail | null>(null)
-const activeTab = ref<'generation' | 'detail' | 'compare'>('generation')
 const selectedCandidate = ref('')
+const analysisResult = ref<CandidateAnalysisResult | null>(null)
+const analyzing = ref(false)
+const planName = ref('光伏接入消纳方案')
+const bottomActiveTab = ref<'detail' | 'compare'>('detail')
 
-// Form data (generation tab) — 选中候选接入点后自动填入推荐参数
+// Form data — 分析完成后自动填入推荐参数
 const ratedCapacityKw = ref(0)
 
 const storageConfig = ref<StorageConfig>({
@@ -35,7 +40,8 @@ const lineMod = ref<LineModificationPlan>({
   currentCapacityKva: 0, targetCapacityKva: 0, voltageLevel: '10kV',
 })
 
-// Editing state (detail tab — separated from plan.value for instant computed feedback)
+// Detail editing state
+const detailEditing = ref(false)
 const editingStorage = ref<StorageConfig>({ requiredCapacityKwh: 0, requiredPowerKw: 0, storageType: 'lithium', durationHours: 2, estimatedCost: 0, layoutPlan: '' })
 const editingReactive = ref<ReactiveCompConfig>({ compType: 'SVG', requiredCapacityKvar: 0, targetPowerFactor: 0.95, estimatedCost: 0 })
 const editingLineMod = ref<LineModificationPlan>({ modificationType: 'upgrade_conductor', currentSpec: 'LGJ-240', targetSpec: 'LGJ-400', lineLengthKm: 0, estimatedCost: 0, description: '', currentCapacityKva: 0, targetCapacityKva: 0, voltageLevel: '10kV' })
@@ -45,8 +51,6 @@ const variants = ref<SchemeVariant[]>([])
 const selectedVariantId = ref('')
 const showSaveVariantDialog = ref(false)
 const newVariantName = ref('')
-
-const detailEditing = ref(false)
 
 const compTypeOptions = [
   { value: 'SVG', label: 'SVG静止无功发生器' },
@@ -67,11 +71,16 @@ const modTypeOptions = [
   { value: 'other', label: '其他' },
 ]
 const voltageLevelOptions = ['10kV', '35kV', '110kV', '220kV']
+const layoutPlanOptions = [
+  { value: 'centralized_substation', label: '集中式布置于升压站附近' },
+  { value: 'distributed_array', label: '分散式按方阵就近布置' },
+  { value: 'substation_side', label: '升压站侧集中布置' },
+  { value: 'modular_container', label: '模块化集装箱式布置' },
+]
 
 function storageCost(powerKw: number) { return Math.round(powerKw * 1500 / 10000) }
 function reactiveCost(kvar: number) { return Math.round(kvar * 200 / 10000) }
 function lineCost(km: number) { return Math.round(km * 100) }
-/** 变压器造价粗略估算：目标容量(kVA) × 单价(元/kVA) / 10000 → 万元 */
 function transformerCost(kva: number) { return Math.round(kva * 200 / 10000) }
 
 function lineModCost(m: { modificationType: string; lineLengthKm: number; targetCapacityKva?: number }) {
@@ -79,7 +88,6 @@ function lineModCost(m: { modificationType: string; lineLengthKm: number; target
   return lineCost(m.lineLengthKm)
 }
 
-// Generation tab computed
 const totalInvestment = computed(() => {
   return storageCost(storageConfig.value.requiredPowerKw) + reactiveCost(reactiveConfig.value.requiredCapacityKvar) + lineModCost(lineMod.value)
 })
@@ -142,13 +150,8 @@ const computedUnitCost = computed(() => {
   return Math.round(computedTotalInvestment.value * 10000 / base)
 })
 
-// ===== Chart analysis data for detail tab =====
+// ===== Chart analysis data =====
 const chartMaxVal = 50000
-
-const filteredTimeLabels = computed(() => {
-  if (!plan.value?.pvOutputProfile) return []
-  return plan.value.pvOutputProfile.filter((_pt: any, idx: number) => idx % 4 === 0).map((pt: any) => pt.time)
-})
 
 const storageChartData = computed(() => {
   const pv = plan.value?.pvOutputProfile || []
@@ -162,7 +165,6 @@ const storageChartData = computed(() => {
     }
   })
 })
-
 
 const reactiveAnalysisData = computed(() => {
   const load = plan.value?.loadProfile || []
@@ -183,19 +185,12 @@ const reactiveAnalysisData = computed(() => {
 
 const lineAnalysisData = computed(() => {
   const load = plan.value?.loadProfile || []
-  // 假设线路额定容量（MVA），按负载率估算
   const ratedMva = 50
   return load.map((pt: any) => {
     const loadMva = pt.loadKw / 1000 * 1.05
     const loadRatePct = Math.min(150, loadMva / ratedMva * 100)
     return { time: pt.time, loadMva, loadRatePct }
   })
-})
-
-const lineCurrentCapacityMva = computed(() => {
-  const spec = editingLineMod.value.currentSpec || 'LGJ-240'
-  const map: Record<string, number> = { 'LGJ-120': 30, 'LGJ-185': 42, 'LGJ-240': 50, 'LGJ-300': 58, 'LGJ-400': 68, 'LGJ-630': 85 }
-  return map[spec] || 50
 })
 
 // ECharts line chart options
@@ -267,12 +262,11 @@ const bestValues = computed(() => {
   }
 })
 
-// Comparison analysis report
 const comparisonReport = computed(() => {
   if (variants.value.length === 0) return null
   const bv = bestValues.value
-  const metrics: { label: string; winner: string }[] = []
   const details: { name: string; score: number; breakdown: { label: string; value: number; weight: number; weighted: number }[]; isWinner: boolean }[] = []
+  const recommendations: { priority: string; choose: string; reason: string }[] = []
 
   variants.value.forEach(v => {
     const irr = v.computedIndicators.irrPct ?? 0
@@ -280,7 +274,6 @@ const comparisonReport = computed(() => {
     const invest = v.computedIndicators.totalInvestmentTenThousand
     const improve = v.computedIndicators.absorptionImprovementPct
     const payback = v.computedIndicators.paybackPeriodYears === Infinity ? 50 : v.computedIndicators.paybackPeriodYears
-
     const bd = [
       { label: 'IRR', value: irr, weight: 0.3, weighted: +(irr * 0.3).toFixed(2) },
       { label: '年收益(万元)', value: benefit, weight: 0.25, weighted: +(benefit * 0.25).toFixed(2) },
@@ -294,50 +287,29 @@ const comparisonReport = computed(() => {
 
   const maxScore = Math.max(...details.map(d => d.score))
   details.forEach(d => { d.isWinner = d.score === maxScore })
-  const winners = details.filter(d => d.isWinner)
 
   variants.value.forEach(v => {
-    if (v.computedIndicators.totalInvestmentTenThousand === bv.minInvestment) metrics.push({ label: '最低总投资', winner: v.name })
-    if (v.computedIndicators.annualBenefitTenThousand === bv.maxAnnualBenefit) metrics.push({ label: '最高年收益', winner: v.name })
-    if (v.computedIndicators.absorptionCapacityKw === bv.absorptionCapacity) metrics.push({ label: '最大消纳能力', winner: v.name })
-    if (v.computedIndicators.absorptionImprovementPct === bv.maxImprovement) metrics.push({ label: '最高消纳提升', winner: v.name })
-    if (v.computedIndicators.paybackPeriodYears === bv.minPayback) metrics.push({ label: '最短回收期', winner: v.name })
-    if (v.computedIndicators.irrPct !== null && v.computedIndicators.irrPct === bv.maxIrr) metrics.push({ label: '最高IRR', winner: v.name })
-    if (v.computedIndicators.npv !== null && v.computedIndicators.npv === bv.maxNpv) metrics.push({ label: '最大NPV', winner: v.name })
+    if (v.computedIndicators.totalInvestmentTenThousand === bv.minInvestment) recommendations.push({ priority: '最低总投资', choose: v.name, reason: `总投资${v.computedIndicators.totalInvestmentTenThousand.toFixed(0)}万元` })
+    if (v.computedIndicators.annualBenefitTenThousand === bv.maxAnnualBenefit) recommendations.push({ priority: '最高年收益', choose: v.name, reason: `年收益${v.computedIndicators.annualBenefitTenThousand.toFixed(0)}万元` })
+    if (v.computedIndicators.absorptionCapacityKw === bv.absorptionCapacity) recommendations.push({ priority: '最大消纳能力', choose: v.name, reason: `消纳${(v.computedIndicators.absorptionCapacityKw / 1000).toFixed(1)}MW` })
+    if (v.computedIndicators.absorptionImprovementPct === bv.maxImprovement) recommendations.push({ priority: '最高消纳提升', choose: v.name, reason: `提升${v.computedIndicators.absorptionImprovementPct.toFixed(1)}%` })
+    if (v.computedIndicators.paybackPeriodYears === bv.minPayback) recommendations.push({ priority: '最短回收期', choose: v.name, reason: `${v.computedIndicators.paybackPeriodYears.toFixed(1)}年` })
   })
-
-  // ===== Build structured narrative =====
-  // Rule 1: 先总体排名，列出所有方案得分
-  // Rule 2: 逐方案分析优劣势
-  // Rule 3: 单项指标优胜
-  // Rule 4: 场景推荐
-  // Rule 5: 最终结论
 
   const sorted = [...details].sort((a, b) => b.score - a.score)
   const narrativeParts: string[] = []
-  const recommendations: { priority: string; choose: string; reason: string }[] = []
 
-  // --- Part 1: 总体排名 ---
   if (sorted.length >= 1) {
     const rankStr = sorted.map((d, i) => `第${i + 1}名"${d.name}"（${d.score}分）`).join('，')
     narrativeParts.push(`综合评分排名：${rankStr}。`)
   }
 
-  // --- Part 2: Winner vs runner-up comparison ---
   if (sorted.length >= 2) {
     const w = sorted[0]
     const r = sorted[1]
     const diff = (w.score - r.score).toFixed(2)
-    // Find which metrics the winner beat the runner-up on
-    const advantages = w.breakdown.map((b, i) => {
-      const rVal = r.breakdown[i].weighted
-      return { label: b.label, gap: +(b.weighted - rVal).toFixed(2) }
-    }).filter(x => x.gap > 0).sort((a, b) => b.gap - a.gap)
-    const disadvantages = w.breakdown.map((b, i) => {
-      const rVal = r.breakdown[i].weighted
-      return { label: b.label, gap: +(b.weighted - rVal).toFixed(2) }
-    }).filter(x => x.gap < 0).sort((a, b) => a.gap - b.gap)
-
+    const advantages = w.breakdown.map((b, i) => ({ label: b.label, gap: +(b.weighted - r.breakdown[i].weighted).toFixed(2) })).filter(x => x.gap > 0).sort((a, b) => b.gap - a.gap)
+    const disadvantages = w.breakdown.map((b, i) => ({ label: b.label, gap: +(b.weighted - r.breakdown[i].weighted).toFixed(2) })).filter(x => x.gap < 0).sort((a, b) => a.gap - b.gap)
     let compareStr = `推荐方案"${w.name}"总分${w.score}，领先次优方案"${r.name}"（${r.score}分）${diff}分。`
     if (advantages.length > 0) {
       const topAdv = advantages.slice(0, 2).map(a => `${a.label}（领先${Math.abs(a.gap).toFixed(2)}分）`).join('、')
@@ -350,8 +322,7 @@ const comparisonReport = computed(() => {
     narrativeParts.push(compareStr)
   }
 
-  // --- Part 3: 各方案优劣势分析 ---
-  sorted.forEach((d, i) => {
+  sorted.forEach(d => {
     const pos = d.breakdown.filter(x => x.weight > 0).sort((a, b) => b.weighted - a.weighted)
     const neg = d.breakdown.filter(x => x.weight < 0).sort((a, b) => a.weighted - b.weighted)
     const best = pos[0]
@@ -364,33 +335,6 @@ const comparisonReport = computed(() => {
     narrativeParts.push(s)
   })
 
-  // --- Part 4: 场景化推荐 ---
-  // Which variant is best for each scenario
-  if (bv.maxIrr > -Infinity) {
-    const bestIrr = variants.value.find(v => v.computedIndicators.irrPct === bv.maxIrr)
-    if (bestIrr && bestIrr.computedIndicators.irrPct !== null) {
-      recommendations.push({ priority: '追求最高投资回报率', choose: bestIrr.name, reason: `IRR达${bestIrr.computedIndicators.irrPct.toFixed(1)}%` })
-    }
-  }
-  if (bv.minInvestment > 0) {
-    const bestInvest = variants.value.find(v => v.computedIndicators.totalInvestmentTenThousand === bv.minInvestment)
-    if (bestInvest) {
-      recommendations.push({ priority: '控制初始投资规模', choose: bestInvest.name, reason: `总投资仅${bestInvest.computedIndicators.totalInvestmentTenThousand.toFixed(0)}万元` })
-    }
-  }
-  if (bv.minPayback < Infinity) {
-    const bestPayback = variants.value.find(v => v.computedIndicators.paybackPeriodYears === bv.minPayback)
-    if (bestPayback) {
-      recommendations.push({ priority: '最快回收投资', choose: bestPayback.name, reason: `回收期仅${bestPayback.computedIndicators.paybackPeriodYears.toFixed(1)}年` })
-    }
-  }
-  if (bv.absorptionCapacity > 0) {
-    const bestAbs = variants.value.find(v => v.computedIndicators.absorptionCapacityKw === bv.absorptionCapacity)
-    if (bestAbs) {
-      recommendations.push({ priority: '最大化消纳能力', choose: bestAbs.name, reason: `消纳能力达${(bestAbs.computedIndicators.absorptionCapacityKw / 1000).toFixed(1)}MW` })
-    }
-  }
-
   if (recommendations.length > 0) {
     narrativeParts.push('场景化建议：')
     recommendations.forEach(r => {
@@ -398,13 +342,12 @@ const comparisonReport = computed(() => {
     })
   }
 
-  // --- Part 5: 最终结论 ---
   if (sorted.length > 0) {
     const w = sorted[0]
     narrativeParts.push(`综上，在多方案综合比选后，"${w.name}"综合评分最高（${w.score}分），各项指标均衡且核心优势突出，推荐作为本项目的优选消纳方案。`)
   }
 
-  return { details, metrics, narrative: narrativeParts, recommendations }
+  return { details, metrics: recommendations, narrative: narrativeParts, recommendations }
 })
 
 function formatCell(key: string, v: SchemeVariant) {
@@ -427,22 +370,25 @@ function formatCell(key: string, v: SchemeVariant) {
 }
 
 // ===== Methods =====
-function fillFromCandidate(candidate: CandidatePoint) {
-  const capacityKw = candidate.recommendedCapacityKw
-  ratedCapacityKw.value = capacityKw
-  const storagePower = Math.round(capacityKw * 0.15 / 100) * 100
-  const storageEnergy = storagePower * 2
-  const reactiveKvar = Math.round(capacityKw * 0.25 / 100) * 100
-  const lineKm = candidate.transmissionLineLengthKm
-
-  storageConfig.value = { requiredCapacityKwh: storageEnergy, requiredPowerKw: storagePower, storageType: 'lithium', durationHours: 2, estimatedCost: 0, layoutPlan: '' }
-  reactiveConfig.value = { compType: 'SVG', requiredCapacityKvar: reactiveKvar, targetPowerFactor: 0.95, estimatedCost: 0 }
-  lineMod.value = { modificationType: 'upgrade_conductor', currentSpec: 'LGJ-240', targetSpec: 'LGJ-400', lineLengthKm: lineKm, estimatedCost: 0, description: '', currentCapacityKva: 0, targetCapacityKva: 0, voltageLevel: '10kV' }
+async function runAnalysis(candidateId: string) {
+  if (!candidateId) { analysisResult.value = null; return }
+  analyzing.value = true
+  analysisResult.value = null
+  try {
+    const result = await analyzeCandidatePoint(candidateId)
+    analysisResult.value = result
+    // 分析完成后自动填入推荐参数
+    ratedCapacityKw.value = result.recommended.ratedCapacityKw
+    storageConfig.value = { ...result.recommended.storage }
+    reactiveConfig.value = { ...result.recommended.reactive }
+    lineMod.value = { ...result.recommended.line }
+  } catch { /* ignore */ }
+  finally { analyzing.value = false }
 }
 
 watch(selectedCandidate, (val) => {
-  const c = candidates.value.find(x => x.id === val)
-  if (c) fillFromCandidate(c)
+  if (val) runAnalysis(val)
+  else analysisResult.value = null
 })
 
 async function loadCandidates() {
@@ -457,19 +403,21 @@ async function loadCandidates() {
 async function generatePlan() {
   loading.value = true
   try {
+    const analysis = analysisResult.value
     const result = await generateAbsorptionPlan({
       candidatePointId: selectedCandidate.value || 'cp-1',
-      planName: '光伏接入消纳方案',
+      planName: planName.value,
       storageConfig: storageConfig.value,
       reactiveCompConfig: reactiveConfig.value,
       lineModification: lineMod.value,
       investmentCost: totalInvestment.value,
       annualBenefit: Math.round(totalInvestment.value * 0.35),
       candidatePointData: selectedCandidateData.value,
+      pvOutputProfile: analysis?.pvOutputProfile || [],
+      loadProfile: analysis?.loadProfile || [],
     })
     plan.value = result
     initEditingFromPlan(result)
-    activeTab.value = 'detail'
     loadVariants()
   } finally {
     loading.value = false
@@ -482,20 +430,12 @@ function initEditingFromPlan(p: AbsorptionPlanDetail) {
   editingLineMod.value = { ...p.lineModification }
 }
 
-function updateParameter(param: string, value: number) {
-  if (!plan.value) return
-  const updated = { ...plan.value, parameters: { ...plan.value.parameters, [param]: value } }
-  updateAbsorptionPlan(plan.value.id, updated).then(r => { plan.value = r })
-}
-
 // Variant management
 async function saveCurrentAsVariant(name: string) {
   if (!plan.value || !name.trim()) return
 
-  // 计算经济指标用于方案对比
   let irrPct: number | null = null
   let npv: number | null = null
-  let annualCashflow: any[] = []
   try {
     const roi = await roiAnalysis({
       capacityKw: computedAbsorptionKw.value || 50000,
@@ -503,8 +443,7 @@ async function saveCurrentAsVariant(name: string) {
     })
     irrPct = roi.financialIndicators.irrPct
     npv = roi.financialIndicators.npv
-    annualCashflow = roi.yearlyCashflow ?? []
-  } catch { /* 不影响保存 */ }
+  } catch { /* ignore */ }
 
   const variant: SchemeVariant = {
     id: `variant-${Date.now()}`,
@@ -519,14 +458,13 @@ async function saveCurrentAsVariant(name: string) {
       absorptionCapacityKw: computedAbsorptionKw.value,
       absorptionImprovementPct: absorptionImprovementPct.value,
       paybackPeriodYears: computedPaybackPeriod.value === Infinity ? 0 : computedPaybackPeriod.value,
-      irrPct,
-      npv,
+      irrPct, npv,
       storageCostBreakdown: {
         equipmentCost: Math.round(storageCost(editingStorage.value.requiredPowerKw) * 0.6),
         constructionCost: Math.round(storageCost(editingStorage.value.requiredPowerKw) * 0.25),
         otherCost: Math.round(storageCost(editingStorage.value.requiredPowerKw) * 0.15),
       },
-      annualCashflow,
+      annualCashflow: [],
     },
     createdAt: new Date().toISOString(),
   }
@@ -535,14 +473,13 @@ async function saveCurrentAsVariant(name: string) {
   showSaveVariantDialog.value = false
   newVariantName.value = ''
 
-  // Sync to backend
   createPlanVariant(plan.value.id, {
     variantName: variant.name,
     storageConfig: variant.storageConfig,
     reactiveCompConfig: variant.reactiveCompConfig,
     lineModification: variant.lineModification,
     computedIndicators: variant.computedIndicators,
-  }).catch(() => { /* frontend already saved */ })
+  }).catch(() => {})
 }
 
 function switchToVariant(variantId: string) {
@@ -552,7 +489,6 @@ function switchToVariant(variantId: string) {
   editingReactive.value = { ...v.reactiveCompConfig }
   editingLineMod.value = { ...v.lineModification }
   selectedVariantId.value = variantId
-  activeTab.value = 'detail'
 }
 
 function resetToBasePlan() {
@@ -589,123 +525,157 @@ onMounted(() => {
 
 <template>
   <div>
+    <!-- ===== 页面标题 ===== -->
     <div class="chart-panel-title">消纳方案智能编制</div>
-    <div class="sub-tabs" style="margin-bottom:12px">
-      <span :class="['sub-tab', { active: activeTab === 'generation' }]" @click="activeTab = 'generation'">方案编制</span>
-      <span :class="['sub-tab', { active: activeTab === 'detail' }]" @click="activeTab = 'detail'">方案详情</span>
-      <span :class="['sub-tab', { active: activeTab === 'compare' }]" @click="activeTab = 'compare'">方案对比</span>
-    </div>
 
-    <!-- ===== Generation Tab ===== -->
-    <div v-if="activeTab === 'generation'" class="chart-panel">
-      <div class="chart-panel-title">消纳方案参数配置</div>
+    <!-- ===== 步骤1：选择候选接入点 ===== -->
+    <div class="chart-panel">
+      <div class="chart-panel-title">选择候选接入点</div>
       <el-form label-width="140px" size="small">
-        <el-form-item label="关联候选接入点">
-          <el-select v-model="selectedCandidate" style="width:300px">
-            <el-option v-for="c in candidates" :key="c.id" :label="c.locationDesc" :value="c.id" />
+        <el-form-item label="候选接入点">
+          <el-select v-model="selectedCandidate" style="width:380px" :loading="analyzing" placeholder="请选择候选接入点">
+            <el-option v-for="c in candidates" :key="c.id" :label="`${c.locationDesc}（${c.comprehensiveScore}分）`" :value="c.id" />
           </el-select>
+          <span v-if="analyzing" style="margin-left:12px;font-size:12px;color:#909399">正在分析接入点数据...</span>
         </el-form-item>
       </el-form>
-
-      <el-form label-width="140px" size="small">
-        <el-form-item label="光伏额定容量">
-          <el-input v-model.number="ratedCapacityKw" type="number" style="width:200px"><template #append>kW</template></el-input>
-        </el-form-item>
-      </el-form>
-
-      <el-divider content-position="left">储能配置</el-divider>
-      <el-form label-width="140px" size="small">
-        <el-row :gutter="20">
-          <el-col :span="8">
-            <el-form-item label="额定容量"><el-input v-model.number="storageConfig.requiredCapacityKwh" type="number"><template #append>kWh</template></el-input></el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="额定功率"><el-input v-model.number="storageConfig.requiredPowerKw" type="number"><template #append>kW</template></el-input></el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="持续时长"><el-input v-model.number="storageConfig.durationHours" type="number"><template #append>h</template></el-input></el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="储能类型"><el-select v-model="storageConfig.storageType" style="width:100%">
-              <el-option v-for="o in storageTypeOptions" :key="o.value" :label="o.label" :value="o.value" />
-            </el-select></el-form-item>
-          </el-col>
-        </el-row>
-      </el-form>
-
-      <el-divider content-position="left">无功补偿</el-divider>
-      <el-form label-width="140px" size="small">
-        <el-row :gutter="20">
-          <el-col :span="8">
-            <el-form-item label="补偿类型"><el-select v-model="reactiveConfig.compType" style="width:100%">
-              <el-option v-for="o in compTypeOptions" :key="o.value" :label="o.label" :value="o.value" />
-            </el-select></el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="补偿容量"><el-input v-model.number="reactiveConfig.requiredCapacityKvar" type="number"><template #append>kvar</template></el-input></el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="目标功率因数">
-              <el-input v-model.number="reactiveConfig.targetPowerFactor" type="number" :step="0.01" :min="0.9" :max="1.0">
-                <template #append>{{ powerFactorValid ? '✓' : '需要0.95-1.0' }}</template>
-              </el-input>
-            </el-form-item>
-          </el-col>
-        </el-row>
-      </el-form>
-
-      <el-divider content-position="left">线路改造方案</el-divider>
-      <el-form label-width="140px" size="small">
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="改造类型"><el-select v-model="lineMod.modificationType" style="width:100%">
-              <el-option v-for="o in modTypeOptions" :key="o.value" :label="o.label" :value="o.value" />
-            </el-select></el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item v-if="lineMod.modificationType === 'upgrade_transformer'" label="电压等级">
-              <el-select v-model="lineMod.voltageLevel" style="width:100%">
-                <el-option v-for="v in voltageLevelOptions" :key="v" :label="v" :value="v" />
-              </el-select>
-            </el-form-item>
-            <el-form-item v-else-if="lineMod.modificationType !== 'other'" label="线路长度">
-              <el-input v-model.number="lineMod.lineLengthKm" type="number"><template #append>km</template></el-input>
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-row v-if="lineMod.modificationType === 'upgrade_conductor'" :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="当前规格"><el-input v-model="lineMod.currentSpec" /></el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="目标规格"><el-input v-model="lineMod.targetSpec" /></el-form-item>
-          </el-col>
-        </el-row>
-        <el-row v-if="lineMod.modificationType === 'new_tie_line'" :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="目标规格"><el-input v-model="lineMod.targetSpec" /></el-form-item>
-          </el-col>
-        </el-row>
-        <el-row v-if="lineMod.modificationType === 'upgrade_transformer'" :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="当前容量"><el-input v-model.number="lineMod.currentCapacityKva" type="number"><template #append>kVA</template></el-input></el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="目标容量"><el-input v-model.number="lineMod.targetCapacityKva" type="number"><template #append>kVA</template></el-input></el-form-item>
-          </el-col>
-        </el-row>
-      </el-form>
-
-      <el-divider />
-      <el-button type="primary" @click="generatePlan" :loading="loading">生成消纳方案</el-button>
     </div>
 
-    <!-- ===== Detail Tab ===== -->
-    <div v-if="activeTab === 'detail' && plan" class="chart-panel">
+    <!-- ===== 步骤2：接入点综合分析（选点后自动展示） ===== -->
+    <div v-if="analysisResult && !analyzing" class="chart-panel">
+      <div class="chart-panel-title">接入点综合分析 — {{ analysisResult.siteInfo.name }}</div>
+
+      <!-- 基础信息 -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;font-size:12px">
+        <div><span style="color:#909399">年均辐照</span><span style="margin-left:8px;font-weight:600">{{ analysisResult.siteInfo.annualIrradiance }} kWh/m²</span></div>
+        <div><span style="color:#909399">等效小时</span><span style="margin-left:8px;font-weight:600">{{ analysisResult.siteInfo.equivHours }} h</span></div>
+        <div><span style="color:#909399">可接入容量</span><span style="margin-left:8px;font-weight:600">{{ analysisResult.siteInfo.availableCapacityMw }} MW</span></div>
+        <div><span style="color:#909399">距变电站</span><span style="margin-left:8px;font-weight:600">{{ analysisResult.siteInfo.distanceToSubstationKm }} km</span></div>
+      </div>
+
+      <!-- 光伏出力与本地负荷对比曲线 -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:12px">
+        <div>
+          <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#606266">光伏出力与本地负荷对比</div>
+          <ChartContainer :option="{
+            tooltip: { trigger: 'axis' },
+            legend: { data: ['光伏出力', '本地负荷'], bottom: 0, textStyle: { fontSize: 10, color: '#606266' }, itemWidth: 12, itemHeight: 8 },
+            grid: { left: '10%', right: '5%', top: '12%', bottom: '18%' },
+            xAxis: { type: 'category', data: analysisResult.pvOutputProfile.map(d => d.time), axisLabel: { interval: 3, fontSize: 9, color: '#909399' } },
+            yAxis: { type: 'value', name: 'kW', nameTextStyle: { fontSize: 9, color: '#909399' }, axisLabel: { fontSize: 9, color: '#909399' }, splitLine: { lineStyle: { color: '#eee' } } },
+            series: [
+              { name: '光伏出力', type: 'line', data: analysisResult.pvOutputProfile.map(d => d.outputKw), symbol: 'circle', symbolSize: 3, lineStyle: { color: '#267F7B', width: 1.5 }, itemStyle: { color: '#267F7B' } },
+              { name: '本地负荷', type: 'line', data: analysisResult.loadProfile.map(d => d.loadKw), symbol: 'circle', symbolSize: 3, lineStyle: { color: '#67C23A', width: 1.5 }, itemStyle: { color: '#67C23A' } },
+            ],
+          }" height="150px" />
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#606266">净负荷与倒送分析</div>
+          <ChartContainer :option="{
+            tooltip: { trigger: 'axis' },
+            legend: { data: ['净负荷'], bottom: 0, textStyle: { fontSize: 10, color: '#606266' }, itemWidth: 12, itemHeight: 8 },
+            grid: { left: '10%', right: '5%', top: '12%', bottom: '18%' },
+            xAxis: { type: 'category', data: analysisResult.netLoadProfile.map(d => d.time), axisLabel: { interval: 3, fontSize: 9, color: '#909399' } },
+            yAxis: { type: 'value', name: 'kW', nameTextStyle: { fontSize: 9, color: '#909399' }, axisLabel: { fontSize: 9, color: '#909399' }, splitLine: { lineStyle: { color: '#eee' } } },
+            series: [{
+              name: '净负荷', type: 'line', data: analysisResult.netLoadProfile.map(d => d.netKw), symbol: 'circle', symbolSize: 3,
+              lineStyle: { color: '#E6A23C', width: 1.5 }, itemStyle: { color: '#E6A23C' },
+              areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(230,162,60,0.15)' }, { offset: 1, color: 'rgba(230,162,60,0)' }] } },
+              markLine: { silent: true, symbol: 'none', lineStyle: { color: '#F56C6C', type: 'dashed', width: 1 }, data: [{ yAxis: 0, label: { formatter: '倒送线', fontSize: 9 } }] },
+            }],
+          }" height="150px" />
+        </div>
+      </div>
+
+      <!-- 倒送风险 & 电压波动 -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:12px">
+        <div>
+          <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#606266">倒送风险评估</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+            <div><span style="color:#909399">风险等级</span><span :style="{ marginLeft: '8px', fontWeight: 600, color: analysisResult.backfeedAnalysis.risk === 'high' ? '#F56C6C' : analysisResult.backfeedAnalysis.risk === 'medium' ? '#E6A23C' : '#67C23A' }">{{ analysisResult.backfeedAnalysis.risk === 'high' ? '高' : analysisResult.backfeedAnalysis.risk === 'medium' ? '中' : '低' }}</span></div>
+            <div><span style="color:#909399">最大倒送</span><span style="margin-left:8px;font-weight:600">{{ analysisResult.backfeedAnalysis.maxBackfeedKw.toLocaleString() }} kW</span></div>
+            <div><span style="color:#909399">倒送时段/天</span><span style="margin-left:8px;font-weight:600">{{ analysisResult.backfeedAnalysis.backfeedHoursCount }} h</span></div>
+            <div><span style="color:#909399">倒送时段</span><span style="margin-left:8px;font-weight:600;font-size:11px">{{ analysisResult.backfeedAnalysis.backfeedHours.join(', ') }}</span></div>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#606266">电压波动历史（近30天）</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+            <div><span style="color:#909399">最大偏差</span><span :style="{ marginLeft: '8px', fontWeight: 600, color: analysisResult.voltageAnalysis.maxDeviationPct > 5 ? '#F56C6C' : '#E6A23C' }">{{ analysisResult.voltageAnalysis.maxDeviationPct }}%</span></div>
+            <div><span style="color:#909399">平均偏差</span><span style="margin-left:8px;font-weight:600">{{ analysisResult.voltageAnalysis.avgDeviationPct }}%</span></div>
+            <div><span style="color:#909399">越限次数</span><span style="margin-left:8px;font-weight:600">{{ analysisResult.voltageAnalysis.violationCount }} 次</span></div>
+            <div><span style="color:#909399">越限率</span><span style="margin-left:8px;font-weight:600">{{ analysisResult.voltageAnalysis.violationRatePct }}%</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 送出线路参数分析 -->
+      <div style="margin-bottom:12px">
+        <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:#606266">送出线路参数分析</div>
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;font-size:12px">
+          <div><span style="color:#909399">输送距离</span><span style="margin-left:8px;font-weight:600">{{ analysisResult.lineAnalysis.lineLengthKm }} km</span></div>
+          <div><span style="color:#909399">当前规格</span><span style="margin-left:8px;font-weight:600">{{ analysisResult.lineAnalysis.currentSpec }}</span></div>
+          <div><span style="color:#909399">线路阻抗</span><span style="margin-left:8px;font-weight:600">{{ analysisResult.lineAnalysis.currentImpedanceOhm }} Ω (R+jX)</span></div>
+          <div><span style="color:#909399">额定容量</span><span style="margin-left:8px;font-weight:600">{{ analysisResult.lineAnalysis.currentRatedMva }} MVA</span></div>
+          <div><span style="color:#909399">施工难度</span><span style="margin-left:8px;font-weight:600">{{ analysisResult.lineAnalysis.constructionDifficulty }}</span></div>
+          <div><span style="color:#909399">实际峰值</span><span style="margin-left:8px;font-weight:600">{{ analysisResult.lineAnalysis.actualPeakMva }} MVA</span></div>
+          <div><span style="color:#909399">负载率</span><span :style="{ marginLeft: '8px', fontWeight: 600, color: analysisResult.lineAnalysis.isOverloaded ? '#F56C6C' : '#606266' }">{{ analysisResult.lineAnalysis.loadRatePct }}%</span></div>
+          <div><span style="color:#909399">线路压降</span><span style="margin-left:8px;font-weight:600">{{ analysisResult.lineAnalysis.voltageDropPct }}%</span></div>
+          <div><span style="color:#909399">推荐升级</span><span style="margin-left:8px;font-weight:600;color:#267F7B">{{ analysisResult.lineAnalysis.currentSpec }} → {{ analysisResult.lineAnalysis.recommendedSpec }}</span></div>
+          <div><span style="color:#909399">升级后额定</span><span style="margin-left:8px;font-weight:600">{{ analysisResult.lineAnalysis.targetRatedMva }} MVA</span></div>
+        </div>
+      </div>
+
+      <!-- 推荐参数 -->
+      <div>
+        <div style="font-size:12px;font-weight:600;margin-bottom:6px;color:#606266">推荐参数</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;font-size:12px">
+          <div style="padding:6px 8px;background:#f9fafb;border:1px solid #ebeef5;border-radius:4px">
+            <div style="color:#909399">储能配置</div>
+            <div style="font-weight:600">{{ analysisResult.recommended.storage.requiredPowerKw.toLocaleString() }} kW / {{ analysisResult.recommended.storage.requiredCapacityKwh.toLocaleString() }} kWh</div>
+            <div style="font-size:11px;margin-top:2px">
+              <span style="color:#909399">类型：</span><span style="font-weight:500">{{ storageTypeOptions.find(o => o.value === analysisResult!.recommended.storage.storageType)?.label }}</span>
+            </div>
+            <div style="font-size:11px;margin-top:1px">
+              <span style="color:#909399">布局：</span><span style="font-weight:500">{{ layoutPlanOptions.find(o => o.value === analysisResult!.recommended.storage.layoutPlan)?.label || analysisResult!.recommended.storage.layoutPlan }}</span>
+            </div>
+            <div style="color:#909399;font-size:11px;margin-top:2px">{{ analysisResult.recommended.storage.reasoning }}</div>
+          </div>
+          <div style="padding:6px 8px;background:#f9fafb;border:1px solid #ebeef5;border-radius:4px">
+            <div style="color:#909399">无功补偿</div>
+            <div style="font-weight:600">{{ analysisResult.recommended.reactive.compType }} {{ analysisResult.recommended.reactive.requiredCapacityKvar.toLocaleString() }} kvar</div>
+            <div style="color:#909399;font-size:11px;margin-top:2px">{{ analysisResult.recommended.reactive.reasoning }}</div>
+          </div>
+          <div style="padding:6px 8px;background:#f9fafb;border:1px solid #ebeef5;border-radius:4px">
+            <div style="color:#909399">线路改造</div>
+            <div style="font-weight:600">{{ analysisResult.recommended.line.currentSpec }} → {{ analysisResult.recommended.line.targetSpec }} ({{ analysisResult.recommended.line.lineLengthKm }}km)</div>
+            <div style="color:#909399;font-size:11px;margin-top:2px">{{ analysisResult.recommended.line.reasoning }}</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;display:flex;align-items:center;gap:12px">
+        <el-input v-model="planName" style="width:320px" placeholder="请输入消纳方案名称" size="small" />
+        <el-button type="primary" @click="generatePlan" :loading="loading">生成消纳方案</el-button>
+      </div>
+    </div>
+
+    <!-- 没选候选点或分析失败 -->
+    <div v-if="!analysisResult && !analyzing && selectedCandidate" class="chart-panel" style="text-align:center;padding:20px;color:#909399;font-size:13px">
+      分析失败，请重新选择候选接入点
+    </div>
+
+    <!-- ===== 方案详情与对比（生成后展示） ===== -->
+    <div v-if="plan" style="margin-top:12px">
+      <div class="sub-tabs" style="margin-bottom:12px">
+        <span :class="['sub-tab', { active: bottomActiveTab === 'detail' }]" @click="bottomActiveTab = 'detail'">方案详情</span>
+        <span :class="['sub-tab', { active: bottomActiveTab === 'compare' }]" @click="bottomActiveTab = 'compare'">方案对比</span>
+      </div>
+
+      <!-- 方案详情 tab -->
+      <div v-if="bottomActiveTab === 'detail'" class="chart-panel">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-        <div class="chart-panel-title" style="margin-bottom:0">消纳方案详情 — {{ plan.planName }}</div>
+        <div class="chart-panel-title" style="margin-bottom:0">方案详情 — {{ plan.planName }}</div>
         <el-switch
           v-model="detailEditing"
           active-text="编辑参数"
@@ -714,189 +684,145 @@ onMounted(() => {
         />
       </div>
 
-
-      <!-- Edit mode: parameter adjustment -->
+      <!-- 编辑模式 -->
       <template v-if="detailEditing">
-        <!-- ===== 储能配置 ===== -->
         <el-divider content-position="left">储能配置</el-divider>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-          <div>
-            <div style="font-size:12px;font-weight:600;margin-bottom:6px;color:#606266">光伏出力与负荷对比</div>
-            <ChartContainer :option="storageChartOption" height="140px" />
-            <div style="font-size:11px;color:#909399;margin-top:2px">储能容量 {{ editingStorage.requiredCapacityKwh?.toLocaleString() }} kWh</div>
-          </div>
-          <div>
-            <el-form label-width="100px" size="small">
-              <el-form-item label="额定容量"><el-input v-model.number="editingStorage.requiredCapacityKwh" type="number"><template #append>kWh</template></el-input></el-form-item>
-              <el-form-item label="额定功率"><el-input v-model.number="editingStorage.requiredPowerKw" type="number"><template #append>kW</template></el-input></el-form-item>
-              <el-form-item label="持续时长"><el-input v-model.number="editingStorage.durationHours" type="number"><template #append>h</template></el-input></el-form-item>
-              <el-form-item label="储能类型"><el-select v-model="editingStorage.storageType" style="width:100%">
-                <el-option v-for="o in storageTypeOptions" :key="o.value" :label="o.label" :value="o.value" />
-              </el-select></el-form-item>
-            </el-form>
-          </div>
-        </div>
+        <el-form label-width="100px" size="small">
+          <el-row :gutter="16">
+            <el-col :span="8"><el-form-item label="额定容量"><el-input v-model.number="editingStorage.requiredCapacityKwh" type="number"><template #append>kWh</template></el-input></el-form-item></el-col>
+            <el-col :span="8"><el-form-item label="额定功率"><el-input v-model.number="editingStorage.requiredPowerKw" type="number"><template #append>kW</template></el-input></el-form-item></el-col>
+            <el-col :span="8"><el-form-item label="持续时长"><el-input v-model.number="editingStorage.durationHours" type="number"><template #append>h</template></el-input></el-form-item></el-col>
+          </el-row>
+          <el-row :gutter="16">
+            <el-col :span="12"><el-form-item label="储能类型"><el-select v-model="editingStorage.storageType" style="width:100%"><el-option v-for="o in storageTypeOptions" :key="o.value" :label="o.label" :value="o.value" /></el-select></el-form-item></el-col>
+            <el-col :span="12"><el-form-item label="布局方案"><el-select v-model="editingStorage.layoutPlan" style="width:100%"><el-option v-for="o in layoutPlanOptions" :key="o.value" :label="o.label" :value="o.value" /></el-select></el-form-item></el-col>
+          </el-row>
+        </el-form>
 
-        <!-- ===== 无功补偿 ===== -->
         <el-divider content-position="left">无功补偿</el-divider>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-          <div>
-            <div style="font-size:12px;font-weight:600;margin-bottom:6px;color:#606266">无功需求分析</div>
-            <ChartContainer :option="reactiveChartOption" height="140px" />
-          </div>
-          <div>
-            <el-form label-width="100px" size="small">
-              <el-form-item label="补偿类型"><el-select v-model="editingReactive.compType" style="width:100%">
-                <el-option v-for="o in compTypeOptions" :key="o.value" :label="o.label" :value="o.value" />
-              </el-select></el-form-item>
-              <el-form-item label="补偿容量"><el-input v-model.number="editingReactive.requiredCapacityKvar" type="number"><template #append>kvar</template></el-input></el-form-item>
-              <el-form-item label="目标功率因数"><el-input v-model.number="editingReactive.targetPowerFactor" type="number" :step="0.01" :min="0.9" :max="1.0" /></el-form-item>
-            </el-form>
-          </div>
-        </div>
+        <el-form label-width="100px" size="small">
+          <el-row :gutter="16">
+            <el-col :span="8"><el-form-item label="补偿类型"><el-select v-model="editingReactive.compType" style="width:100%"><el-option v-for="o in compTypeOptions" :key="o.value" :label="o.label" :value="o.value" /></el-select></el-form-item></el-col>
+            <el-col :span="8"><el-form-item label="补偿容量"><el-input v-model.number="editingReactive.requiredCapacityKvar" type="number"><template #append>kvar</template></el-input></el-form-item></el-col>
+            <el-col :span="8"><el-form-item label="目标功率因数"><el-input v-model.number="editingReactive.targetPowerFactor" type="number" :step="0.01" :min="0.9" :max="1.0" /></el-form-item></el-col>
+          </el-row>
+        </el-form>
 
-        <!-- ===== 线路改造 ===== -->
         <el-divider content-position="left">线路改造方案</el-divider>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-          <div>
-            <div style="font-size:12px;font-weight:600;margin-bottom:6px;color:#606266">线路负载率分析</div>
-            <ChartContainer :option="lineChartOption" height="140px" />
-            <div v-if="editingLineMod.modificationType === 'upgrade_transformer'" style="font-size:11px;color:#909399;margin-top:2px">目标容量 {{ editingLineMod.targetCapacityKva?.toLocaleString() }} kVA</div>
-            <div v-else style="font-size:11px;color:#909399;margin-top:2px">当前线长 {{ editingLineMod.lineLengthKm }} km</div>
-          </div>
-          <div>
-            <el-form label-width="100px" size="small">
-              <el-form-item label="改造类型"><el-select v-model="editingLineMod.modificationType" style="width:100%">
-                <el-option v-for="o in modTypeOptions" :key="o.value" :label="o.label" :value="o.value" />
-              </el-select></el-form-item>
-              <el-form-item v-if="editingLineMod.modificationType === 'upgrade_transformer'" label="电压等级">
-                <el-select v-model="editingLineMod.voltageLevel" style="width:100%">
-                  <el-option v-for="v in voltageLevelOptions" :key="v" :label="v" :value="v" />
-                </el-select>
-              </el-form-item>
-              <el-form-item v-else-if="editingLineMod.modificationType !== 'other'" label="线路长度">
-                <el-input v-model.number="editingLineMod.lineLengthKm" type="number"><template #append>km</template></el-input>
-              </el-form-item>
-              <template v-if="editingLineMod.modificationType === 'upgrade_conductor'">
-                <el-form-item label="当前规格"><el-input v-model="editingLineMod.currentSpec" /></el-form-item>
-                <el-form-item label="目标规格"><el-input v-model="editingLineMod.targetSpec" /></el-form-item>
-              </template>
-              <el-form-item v-if="editingLineMod.modificationType === 'new_tie_line'" label="目标规格">
-                <el-input v-model="editingLineMod.targetSpec" />
-              </el-form-item>
-              <template v-if="editingLineMod.modificationType === 'upgrade_transformer'">
-                <el-form-item label="当前容量"><el-input v-model.number="editingLineMod.currentCapacityKva" type="number"><template #append>kVA</template></el-input></el-form-item>
-                <el-form-item label="目标容量"><el-input v-model.number="editingLineMod.targetCapacityKva" type="number"><template #append>kVA</template></el-input></el-form-item>
-              </template>
-            </el-form>
-          </div>
-        </div>
-
-<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <el-button type="primary" size="small" @click="showSaveVariantDialog = true">保存为变体方案</el-button>
-          <el-button size="small" @click="resetToBasePlan" :disabled="!selectedVariantId">恢复基准方案</el-button>
-          <span v-if="selectedVariantId" style="font-size:12px;color:#909399;margin-left:4px">当前查看: {{ variants.find(v => v.id === selectedVariantId)?.name }}</span>
-        </div>
-
-        <el-divider content-position="left">已保存变体</el-divider>
-        <div v-if="variants.length === 0" style="color:#909399;font-size:13px;padding:8px 0">调整参数后点击"保存为变体方案"可创建对比方案</div>
-        <div v-else style="display:flex;flex-wrap:wrap;gap:8px">
-          <el-tag v-for="v in variants" :key="v.id" :type="v.id === selectedVariantId ? 'primary' : 'info'" style="cursor:pointer" closable @click="switchToVariant(v.id)" @close="deleteVariant(v.id)">
-            {{ v.name }}
-          </el-tag>
-        </div>
-
-        <el-dialog v-model="showSaveVariantDialog" title="保存为变体方案" width="400px">
-          <el-form>
-            <el-form-item label="变体名称"><el-input v-model="newVariantName" placeholder="如：保守配置、激进配置" /></el-form-item>
-          </el-form>
-          <template #footer>
-            <el-button @click="showSaveVariantDialog = false">取消</el-button>
-            <el-button type="primary" @click="saveCurrentAsVariant(newVariantName)" :disabled="!newVariantName.trim()">保存</el-button>
-          </template>
-        </el-dialog>
+        <el-form label-width="100px" size="small">
+          <el-row :gutter="16">
+            <el-col :span="12"><el-form-item label="改造类型"><el-select v-model="editingLineMod.modificationType" style="width:100%"><el-option v-for="o in modTypeOptions" :key="o.value" :label="o.label" :value="o.value" /></el-select></el-form-item></el-col>
+            <el-col :span="12">
+              <el-form-item v-if="editingLineMod.modificationType === 'upgrade_transformer'" label="电压等级"><el-select v-model="editingLineMod.voltageLevel" style="width:100%"><el-option v-for="v in voltageLevelOptions" :key="v" :label="v" :value="v" /></el-select></el-form-item>
+              <el-form-item v-else-if="editingLineMod.modificationType !== 'other'" label="线路长度"><el-input v-model.number="editingLineMod.lineLengthKm" type="number"><template #append>km</template></el-input></el-form-item>
+            </el-col>
+          </el-row>
+          <el-row v-if="editingLineMod.modificationType === 'upgrade_conductor'" :gutter="16">
+            <el-col :span="12"><el-form-item label="当前规格"><el-input v-model="editingLineMod.currentSpec" /></el-form-item></el-col>
+            <el-col :span="12"><el-form-item label="目标规格"><el-input v-model="editingLineMod.targetSpec" /></el-form-item></el-col>
+          </el-row>
+          <el-row v-if="editingLineMod.modificationType === 'new_tie_line'" :gutter="16">
+            <el-col :span="12"><el-form-item label="目标规格"><el-input v-model="editingLineMod.targetSpec" /></el-form-item></el-col>
+          </el-row>
+          <el-row v-if="editingLineMod.modificationType === 'upgrade_transformer'" :gutter="16">
+            <el-col :span="12"><el-form-item label="当前容量"><el-input v-model.number="editingLineMod.currentCapacityKva" type="number"><template #append>kVA</template></el-input></el-form-item></el-col>
+            <el-col :span="12"><el-form-item label="目标容量"><el-input v-model.number="editingLineMod.targetCapacityKva" type="number"><template #append>kVA</template></el-input></el-form-item></el-col>
+          </el-row>
+        </el-form>
       </template>
 
+      <!-- 变体管理（编辑和预览模式均可见） -->
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <el-button type="primary" size="small" @click="showSaveVariantDialog = true">保存为变体方案</el-button>
+        <el-button size="small" @click="resetToBasePlan" :disabled="!selectedVariantId">恢复基准方案</el-button>
+        <span v-if="selectedVariantId" style="font-size:12px;color:#909399">当前查看: {{ variants.find(v => v.id === selectedVariantId)?.name }}</span>
+      </div>
+
+      <el-divider content-position="left">已保存变体</el-divider>
+      <div v-if="variants.length === 0" style="color:#909399;font-size:13px;padding:8px 0">调整参数后点击"保存为变体方案"可创建对比方案</div>
+      <div v-else style="display:flex;flex-wrap:wrap;gap:8px">
+        <el-tag v-for="v in variants" :key="v.id" :type="v.id === selectedVariantId ? 'primary' : 'info'" style="cursor:pointer" closable @click="switchToVariant(v.id)" @close="deleteVariant(v.id)">{{ v.name }}</el-tag>
+      </div>
+
+      <el-dialog v-model="showSaveVariantDialog" title="保存为变体方案" width="400px">
+        <el-form>
+          <el-form-item label="变体名称"><el-input v-model="newVariantName" placeholder="如：保守配置、激进配置" /></el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="showSaveVariantDialog = false">取消</el-button>
+          <el-button type="primary" @click="saveCurrentAsVariant(newVariantName)" :disabled="!newVariantName.trim()">保存</el-button>
+        </template>
+      </el-dialog>
+
+      <!-- 预览模式 -->
       <template v-if="!detailEditing && plan">
-        <el-divider content-position="left">储能配置</el-divider>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-          <div>
-            <div style="font-size:12px;font-weight:600;margin-bottom:6px;color:#606266">光伏出力与负荷对比</div>
-            <ChartContainer :option="storageChartOption" height="140px" />
-          </div>
-          <div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:4px 0">
-              <div><div style="font-size:11px;color:#909399">额定容量</div><div style="font-size:13px;font-weight:600;color:#303133">{{ plan!.storageConfig?.requiredCapacityKwh?.toLocaleString() }} kWh</div></div>
-              <div><div style="font-size:11px;color:#909399">额定功率</div><div style="font-size:13px;font-weight:600;color:#303133">{{ plan!.storageConfig?.requiredPowerKw?.toLocaleString() }} kW</div></div>
-              <div><div style="font-size:11px;color:#909399">储能类型</div><div style="font-size:13px;font-weight:600;color:#303133">{{ storageTypeOptions.find((o:any) => o.value === plan!.storageConfig?.storageType)?.label || plan!.storageConfig?.storageType }}</div></div>
+          <!-- 储能配置 -->
+          <div style="border:1px solid #ebeef5;border-radius:4px;overflow:hidden">
+            <div style="font-size:13px;font-weight:600;color:#303133;padding:8px 12px;background:#fafafa;border-bottom:1px solid #ebeef5">储能配置</div>
+            <div style="padding:8px 12px">
+              <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px"><span style="color:#909399">额定容量</span><span style="color:#303133;font-weight:500">{{ plan!.storageConfig?.requiredCapacityKwh?.toLocaleString() }} kWh</span></div>
+              <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px"><span style="color:#909399">额定功率</span><span style="color:#303133;font-weight:500">{{ plan!.storageConfig?.requiredPowerKw?.toLocaleString() }} kW</span></div>
+              <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px"><span style="color:#909399">持续时长</span><span style="color:#303133;font-weight:500">{{ plan!.storageConfig?.durationHours }} h</span></div>
+              <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px"><span style="color:#909399">储能类型</span><span style="color:#303133;font-weight:500">{{ storageTypeOptions.find((o:any) => o.value === plan!.storageConfig?.storageType)?.label || plan!.storageConfig?.storageType }}</span></div>
+              <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px"><span style="color:#909399">布局方案</span><span style="color:#303133;font-weight:500">{{ layoutPlanOptions.find((o:any) => o.value === plan!.storageConfig?.layoutPlan)?.label || plan!.storageConfig?.layoutPlan || '-' }}</span></div>
             </div>
           </div>
-        </div>
 
-        <el-divider content-position="left">无功补偿</el-divider>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-          <div>
-            <div style="font-size:12px;font-weight:600;margin-bottom:6px;color:#606266">无功需求分析</div>
-            <ChartContainer :option="reactiveChartOption" height="140px" />
-          </div>
-          <div>
-            <div style="display:grid;grid-template-columns:1fr;gap:12px;padding:4px 0">
-              <div><div style="font-size:11px;color:#909399">补偿类型</div><div style="font-size:13px;font-weight:600;color:#303133">{{ compTypeOptions.find((o:any) => o.value === plan!.reactiveCompConfig?.compType)?.label || plan!.reactiveCompConfig?.compType }}</div></div>
-              <div><div style="font-size:11px;color:#909399">补偿容量</div><div style="font-size:13px;font-weight:600;color:#303133">{{ plan!.reactiveCompConfig?.requiredCapacityKvar?.toLocaleString() }} kvar</div></div>
+          <!-- 无功补偿 -->
+          <div style="border:1px solid #ebeef5;border-radius:4px;overflow:hidden">
+            <div style="font-size:13px;font-weight:600;color:#303133;padding:8px 12px;background:#fafafa;border-bottom:1px solid #ebeef5">无功补偿</div>
+            <div style="padding:8px 12px">
+              <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px"><span style="color:#909399">补偿类型</span><span style="color:#303133;font-weight:500">{{ compTypeOptions.find((o:any) => o.value === plan!.reactiveCompConfig?.compType)?.label || plan!.reactiveCompConfig?.compType }}</span></div>
+              <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px"><span style="color:#909399">补偿容量</span><span style="color:#303133;font-weight:500">{{ plan!.reactiveCompConfig?.requiredCapacityKvar?.toLocaleString() }} kvar</span></div>
+              <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px"><span style="color:#909399">目标功率因数</span><span style="color:#303133;font-weight:500">{{ plan!.reactiveCompConfig?.targetPowerFactor }}</span></div>
             </div>
           </div>
-        </div>
 
-        <el-divider content-position="left">线路改造方案</el-divider>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-          <div>
-            <div style="font-size:12px;font-weight:600;margin-bottom:6px;color:#606266">线路负载率分析</div>
-            <ChartContainer :option="lineChartOption" height="140px" />
-          </div>
-          <div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:4px 0">
-              <div><div style="font-size:11px;color:#909399">改造类型</div><div style="font-size:13px;font-weight:600;color:#303133">{{ modTypeOptions.find((o:any) => o.value === plan!.lineModification?.modificationType)?.label || plan!.lineModification?.modificationType }}</div></div>
+          <!-- 线路改造 -->
+          <div style="border:1px solid #ebeef5;border-radius:4px;overflow:hidden;grid-column:1 / -1">
+            <div style="font-size:13px;font-weight:600;color:#303133;padding:8px 12px;background:#fafafa;border-bottom:1px solid #ebeef5">线路改造方案</div>
+            <div style="padding:8px 12px">
+              <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px"><span style="color:#909399">改造类型</span><span style="color:#303133;font-weight:500">{{ modTypeOptions.find((o:any) => o.value === plan!.lineModification?.modificationType)?.label || plan!.lineModification?.modificationType }}</span></div>
               <template v-if="plan!.lineModification?.modificationType === 'upgrade_transformer'">
-                <div><div style="font-size:11px;color:#909399">电压等级</div><div style="font-size:13px;font-weight:600;color:#303133">{{ plan!.lineModification?.voltageLevel }}</div></div>
-                <div><div style="font-size:11px;color:#909399">当前容量</div><div style="font-size:13px;font-weight:600;color:#303133">{{ plan!.lineModification?.currentCapacityKva?.toLocaleString() }} kVA</div></div>
-                <div><div style="font-size:11px;color:#909399">目标容量</div><div style="font-size:13px;font-weight:600;color:#303133">{{ plan!.lineModification?.targetCapacityKva?.toLocaleString() }} kVA</div></div>
+                <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px"><span style="color:#909399">电压等级</span><span style="color:#303133;font-weight:500">{{ plan!.lineModification?.voltageLevel }}</span></div>
+                <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px"><span style="color:#909399">当前容量</span><span style="color:#303133;font-weight:500">{{ plan!.lineModification?.currentCapacityKva?.toLocaleString() }} kVA</span></div>
+                <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px"><span style="color:#909399">目标容量</span><span style="color:#303133;font-weight:500">{{ plan!.lineModification?.targetCapacityKva?.toLocaleString() }} kVA</span></div>
               </template>
               <template v-else>
-                <div v-if="plan!.lineModification?.modificationType !== 'other'"><div style="font-size:11px;color:#909399">线路长度</div><div style="font-size:13px;font-weight:600;color:#303133">{{ plan!.lineModification?.lineLengthKm }} km</div></div>
-                <div v-if="plan!.lineModification?.modificationType === 'upgrade_conductor'"><div style="font-size:11px;color:#909399">当前规格</div><div style="font-size:13px;font-weight:600;color:#303133">{{ plan!.lineModification?.currentSpec }}</div></div>
-                <div v-if="plan!.lineModification?.modificationType === 'upgrade_conductor' || plan!.lineModification?.modificationType === 'new_tie_line'"><div style="font-size:11px;color:#909399">目标规格</div><div style="font-size:13px;font-weight:600;color:#303133">{{ plan!.lineModification?.targetSpec }}</div></div>
+                <div v-if="plan!.lineModification?.modificationType !== 'other'" style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px"><span style="color:#909399">线路长度</span><span style="color:#303133;font-weight:500">{{ plan!.lineModification?.lineLengthKm }} km</span></div>
+                <div v-if="plan!.lineModification?.modificationType === 'upgrade_conductor'" style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px"><span style="color:#909399">当前规格</span><span style="color:#303133;font-weight:500">{{ plan!.lineModification?.currentSpec }}</span></div>
+                <div v-if="plan!.lineModification?.modificationType === 'upgrade_conductor' || plan!.lineModification?.modificationType === 'new_tie_line'" style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px"><span style="color:#909399">目标规格</span><span style="color:#303133;font-weight:500">{{ plan!.lineModification?.targetSpec }}</span></div>
               </template>
             </div>
           </div>
         </div>
       </template>
-    </div>
+    </div>  <!-- end detail tab -->
 
-    <div v-if="activeTab === 'detail' && !plan" class="chart-panel" style="text-align:center;padding:60px;color:#909399">
-      请先在"方案编制"标签页生成消纳方案
-    </div>
-
-    <!-- ===== Comparison Tab ===== -->
-    <div v-if="activeTab === 'compare'" class="chart-panel">
+      <!-- 方案对比 tab -->
+      <div v-if="bottomActiveTab === 'compare'" class="chart-panel">
+        <div v-if="variants.length === 0" style="text-align:center;padding:60px;color:#909399;font-size:13px">
+          暂无变体方案，请在"方案详情"标签页保存变体后再进行对比
+        </div>
+        <template v-if="variants.length > 0">
       <div class="chart-panel-title">多方案对比</div>
-      <div v-if="variants.length === 0" style="text-align:center;padding:60px;color:#909399;font-size:13px">
-        请在"方案详情"标签页保存至少两个变体方案后，在此进行对比
-      </div>
-      <template v-if="variants.length > 0 && comparisonReport">
+      <div style="font-size:12px;color:#909399;margin-bottom:8px">基准方案：{{ plan!.planName }}</div>
+      <template v-if="comparisonReport">
         <div style="margin-bottom:12px;padding:10px 12px;background:#f9fafb;border:1px solid #ebeef5;border-radius:4px">
           <div style="font-size:13px;font-weight:600;color:#303133;margin-bottom:6px">综合推荐报告</div>
-          <div v-for="(p, pi) in comparisonReport.narrative" :key="pi" style="font-size:13px;color:#606266;line-height:1.6;margin-bottom:2px">
-            <template v-if="p.startsWith('场景化建议')"><div style="margin-top:6px">{{ p }}</div></template>
-            <template v-else-if="p.startsWith('-')"><div style="margin-left:14px;font-size:12.5px">{{ p }}</div></template>
-            <template v-else-if="p.startsWith('综上')"><div style="margin-top:6px;padding-top:6px;border-top:1px dashed #e4e7ed;font-weight:500;color:#303133">{{ p }}</div></template>
-            <template v-else><div>{{ p }}</div></template>
-          </div>
+          <template v-for="(p, pi) in comparisonReport.narrative" :key="pi">
+            <div v-if="p.startsWith('场景化建议')" style="margin-top:6px;font-size:13px;color:#606266;line-height:1.6">{{ p }}</div>
+            <div v-else-if="p.startsWith('-')" style="margin-left:14px;font-size:12.5px;color:#606266;line-height:1.6">{{ p }}</div>
+            <div v-else-if="p.startsWith('综上')" style="margin-top:6px;padding-top:6px;border-top:1px dashed #e4e7ed;font-weight:500;color:#303133;font-size:13px;line-height:1.6">{{ p }}</div>
+            <div v-else style="font-size:13px;color:#606266;line-height:1.6">{{ p }}</div>
+          </template>
           <div style="margin-top:4px;font-size:12px;color:#909399">
             评分规则：总分 = IRR×0.3 + 年收益(万元)×0.25 + 消纳提升(%)×0.2 - 总投资(万元)×0.15 - 回收期(年)×0.1
           </div>
         </div>
       </template>
-      <el-table v-if="variants.length > 0" :data="comparisonTableData" border size="small" style="width:100%">
+      <el-table :data="comparisonTableData" border size="small" style="width:100%">
         <el-table-column label="指标" prop="label" width="150" fixed />
         <el-table-column v-for="v in variants" :key="v.id" :label="v.name" min-width="170">
           <template #default="{ row }">
@@ -909,7 +835,9 @@ onMounted(() => {
           </template>
         </el-table-column>
       </el-table>
-    </div>
+        </template>
+    </div>  <!-- end compare tab -->
+    </div>  <!-- end outer tab container -->
   </div>
 </template>
 

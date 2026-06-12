@@ -9,13 +9,15 @@ export interface Project {
   projectType: ProjectType
   pvType: string | null
   planId: string | null
+  stationId: string | null
   capacityKw: number
   budget: number
-  actualCost: number
+  actualCost: number | null
   status: ProjectStatus
   startDate: string
   expectedCompletionDate: string
   actualCompletionDate: string | null
+  customFields?: Record<string, any>
   createdBy: string
   createdAt: string
   updatedAt: string
@@ -71,15 +73,40 @@ export interface FeasibilityReport {
 // ==================== Effectiveness ====================
 export interface EffectivenessVerification {
   id: string
-  projectId: string
-  verificationDate: string
-  plannedOutputKwh: number
-  actualOutputKwh: number
-  absorptionRatePct: number
-  voltageCompliancePct: number
-  deviationPct: number
-  isEffective: boolean
-  remarks: string
+  project_id: string
+  period_start: string
+  period_end: string
+  // 自动聚合值
+  auto_output_kwh: number | null
+  auto_equivalent_hours: number | null
+  auto_voltage_compliance_pct: number | null
+  auto_frequency_compliance_pct: number | null
+  auto_power_factor_rate: number | null
+  auto_completeness_pct: number | null
+  // 手动修正值
+  final_output_kwh: number | null
+  final_equivalent_hours: number | null
+  final_voltage_compliance_pct: number | null
+  final_frequency_compliance_pct: number | null
+  final_power_factor_rate: number | null
+  final_voltage_violation_rate: number | null
+  final_reactive_reverse_rate: number | null
+  final_completeness_pct: number | null
+  // 消纳率
+  absorption_rate_pct: number | null
+  // 规划目标快照
+  planned_output_mwh: number | null
+  planned_equivalent_hours: number | null
+  planned_absorption_rate_pct: number | null
+  planned_voltage_compliance_pct: number | null
+  // 修正标记
+  manual_override: number
+  correction_note: string | null
+  // 判定
+  is_effective: number
+  remarks: string | null
+  verified_by: string | null
+  created_at: string
 }
 
 export interface EffectivenessReport {
@@ -91,6 +118,37 @@ export interface EffectivenessReport {
   }
   causeAnalysis: string
   lessonsLearned: string[]
+}
+
+// ==================== Assessment Model ====================
+export type AssessmentDimension = 'resource' | 'grid' | 'investment' | 'environment'
+export type FieldType = 'numeric' | 'text'
+export type ScoreRule =
+  | 'direct_ratio'
+  | 'inverse_ratio'
+  | 'threshold_full'
+  | 'map_direct'
+  | 'map_inverse'
+  | 'map_fixed'
+  | 'match_full'
+
+export interface AssessmentModelField {
+  id: string
+  field_code: string
+  field_name: string
+  field_desc?: string | null
+  field_type: FieldType
+  dimension: AssessmentDimension
+  base_value?: number | null
+  score_rule: ScoreRule
+  text_map?: string | null
+  match_value?: string | null
+  max_score: number
+  fail_score: number
+  sort_order: number
+  is_active: number
+  created_at?: string
+  updated_at?: string | null
 }
 
 // ==================== Project Audit ====================

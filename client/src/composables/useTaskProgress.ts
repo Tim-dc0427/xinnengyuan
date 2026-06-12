@@ -33,10 +33,16 @@ export function useTaskProgress(taskId: import('vue').Ref<string | null>) {
         }
       } catch (e: any) {
         error.value = e.message
-        // 如果任务不存在则停止轮询
+        // 任务不存在 → 停止轮询并重置状态，避免残留旧数据
         if (e?.response?.status === 404) {
           if (pollTimer) clearInterval(pollTimer)
           pollTimer = null
+          progressPct.value = 0
+          etaMs.value = null
+          status.value = 'pending'
+          phaseLabel.value = ''
+          elapsedSec.value = 0
+          checkpointAvailable.value = false
         }
       }
     }, 1000)

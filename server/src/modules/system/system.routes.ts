@@ -26,3 +26,4 @@ systemRoutes.delete('/users/:id', auth(['admin']), ctrl.deleteUser)
 // 操作日志
 systemRoutes.get('/audit-logs', auth(['admin']), ctrl.getAuditLogs)
 systemRoutes.get('/user-options', auth(['admin']), ctrl.getUserOptions)
+systemRoutes.get('/data-ranges', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getDataRanges)

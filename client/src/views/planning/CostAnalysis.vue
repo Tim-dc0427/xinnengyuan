@@ -298,7 +298,7 @@ onMounted(async () => { loadCostItems(); await loadInvestmentPlans(); costItemOp
 
     <div class="main-tabs">
       <span :class="['tab', { active: mainTab === 'params' }]" @click="mainTab = 'params'">造价参数管理</span>
-      <span :class="['tab', { active: mainTab === 'calc' }]" @click="mainTab = 'calc'">项目投资计算</span>
+      <span :class="['tab', { active: mainTab === 'calc' }]" @click="mainTab = 'calc'">项目投资自动计算</span>
       <span :class="['tab', { active: mainTab === 'compare' }]" @click="mainTab = 'compare'">传统电网造价对比</span>
       <span :class="['tab', { active: mainTab === 'roi' }]" @click="mainTab = 'roi'">成本效益分析</span>
     </div>
@@ -347,7 +347,7 @@ onMounted(async () => { loadCostItems(); await loadInvestmentPlans(); costItemOp
       </div>
     </template>
 
-    <!-- ===== 项目投资计算 ===== -->
+    <!-- ===== 项目投资自动计算 ===== -->
     <template v-if="mainTab === 'calc'">
       <div class="chart-panel">
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">

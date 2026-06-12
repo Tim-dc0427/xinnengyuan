@@ -6,17 +6,19 @@ import {
   fetchProjectTypesWithFields, createProjectType, updateProjectType, deleteProjectType,
   fetchTypeFields, saveTypeFields,
   fetchProjectFieldLibrary, createProjectFieldLibraryItem, deleteProjectFieldLibraryItem,
-  fetchProjectDocuments, uploadProjectDocument, deleteProjectDocument, getDocumentDownloadUrl,
+  fetchProjectDocuments, uploadProjectDocument, deleteProjectDocument, downloadProjectDocument, previewProjectDocument, canPreview,
 } from '@/api/achievement'
 import type { ProjectItem, ProjectType, ProjectTypeField, ProjectDocument } from '@/api/achievement'
 
 // ==================== 标签页 ====================
-const activeTab = ref('project-list')
+const activeTab = ref('type-mgmt')
 
 // ==================== 项目类型管理 ====================
 const types = ref<ProjectType[]>([])
 const selectedType = ref<ProjectType | null>(null)
 const fields = ref<ProjectTypeField[]>([])
+const fieldPage = ref(1)
+const fieldPageSize = ref(20)
 const typeDialogVisible = ref(false)
 const typeEditMode = ref(false)
 const typeForm = ref({ name: '', code: '', description: '', sortOrder: 0 })
@@ -96,6 +98,7 @@ async function handleTypeDelete(row: ProjectType) {
 
 async function selectTypeForFields(row: ProjectType) {
   selectedType.value = row
+  fieldPage.value = 1
   fields.value = await fetchTypeFields(row.id)
 }
 
@@ -109,6 +112,8 @@ async function doSaveFields(list: any[]) {
   })))
   await loadTypes(); allTypes.value = types.value
   fields.value = await fetchTypeFields(selectedType.value.id)
+  const maxPage = Math.max(1, Math.ceil(fields.value.length / fieldPageSize.value))
+  if (fieldPage.value > maxPage) fieldPage.value = maxPage
 }
 
 async function openFieldLibrary() {
@@ -129,7 +134,7 @@ async function handleBatchAddFields() {
     list.push({ field_code: f.field_code, field_name: f.field_name, field_type: f.field_type, field_options: f.field_options || null, is_required: 0, sort_order: list.length, category: (f as any).category || '项目基础信息' } as any)
   }
   libraryDialogVisible.value = false
-  try { await doSaveFields(list) } catch { ElMessage.error('添加失败') }
+  try { await doSaveFields(list); fieldPage.value = Math.ceil(fields.value.length / fieldPageSize.value) } catch { ElMessage.error('添加失败') }
 }
 
 async function handleDeleteLibraryField(id: string) {
@@ -141,7 +146,7 @@ async function handleClearAllFields() {
   if (fields.value.length === remaining.length) return ElMessage.warning('无可删除的非核心字段')
   try {
     await ElMessageBox.confirm(`将删除 ${fields.value.length - remaining.length} 个非核心字段，核心字段保留`, '确认清空', { type: 'warning' })
-    await doSaveFields(remaining); ElMessage.success('已清空非核心字段')
+    await doSaveFields(remaining); fieldPage.value = 1; ElMessage.success('已清空非核心字段')
   } catch {}
 }
 
@@ -160,10 +165,11 @@ function openFieldEdit(idx: number, f: ProjectTypeField) {
 async function handleFieldSave() {
   if (!selectedType.value) return
   const list = [...fields.value]; const item = { fieldCode: fieldForm.value.fieldCode, fieldName: fieldForm.value.fieldName, fieldType: fieldForm.value.fieldType, fieldOptions: fieldForm.value.fieldOptions || undefined, isRequired: fieldForm.value.isRequired, sortOrder: fieldEditIdx.value >= 0 ? list[fieldEditIdx.value].sort_order : list.length }
+  const wasAdd = fieldEditIdx.value < 0
   if (fieldEditIdx.value >= 0) { list.splice(fieldEditIdx.value, 1, { ...list[fieldEditIdx.value], ...item } as any) }
   else { list.push(item as any); createProjectFieldLibraryItem({ fieldCode: item.fieldCode, fieldName: item.fieldName, fieldType: item.fieldType, fieldOptions: item.fieldOptions, category: fieldForm.value.category }).catch(() => {}) }
   fieldDialogVisible.value = false
-  try { await doSaveFields(list) } catch { ElMessage.error('保存失败') }
+  try { await doSaveFields(list); if (wasAdd) fieldPage.value = Math.ceil(fields.value.length / fieldPageSize.value) } catch { ElMessage.error('保存失败') }
 }
 
 async function handleFieldDelete(idx: number) {
@@ -297,9 +303,10 @@ async function openDocDialog(row: ProjectItem) {
   docProjectId.value = row.id; docProjectName.value = row.project_name; docDialogVisible.value = true; docLoading.value = true
   try { documents.value = await fetchProjectDocuments(row.id) } catch { documents.value = [] } finally { docLoading.value = false }
 }
-async function handleDocUpload(file: any) { try { await uploadProjectDocument(docProjectId.value, file.raw, '其他'); documents.value = await fetchProjectDocuments(docProjectId.value); ElMessage.success('上传成功') } catch { ElMessage.error('上传失败') } }
+async function handleDocUpload(file: any) { try { const rawFile = file.raw || file; await uploadProjectDocument(docProjectId.value, rawFile, '其他'); documents.value = await fetchProjectDocuments(docProjectId.value); ElMessage.success('上传成功') } catch (e: any) { ElMessage.error(e?.response?.data?.message || e?.message || '上传失败') } }
 async function handleDocDelete(docId: string) { try { await ElMessageBox.confirm('确定删除该文档？', '确认删除', { type: 'warning' }); await deleteProjectDocument(docProjectId.value, docId); documents.value = documents.value.filter(d => d.id !== docId); ElMessage.success('已删除') } catch {} }
-function handleDownload(docId: string) { window.open(getDocumentDownloadUrl(docId, docProjectId.value)) }
+async function handleDownload(docId: string, docName: string) { try { await downloadProjectDocument(docProjectId.value, docId, docName) } catch { ElMessage.error('下载失败') } }
+async function handlePreview(docId: string) { try { await previewProjectDocument(docProjectId.value, docId) } catch { ElMessage.error('预览失败') } }
 function formatFileSize(bytes: number) { if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB'; return (bytes / 1048576).toFixed(1) + ' MB' }
 
 function getStatusLabel(s: string) {
@@ -307,8 +314,8 @@ function getStatusLabel(s: string) {
   return m[s] || s
 }
 
-function getTypeName(code: string) {
-  return allTypes.value.find(t => t.code === code)?.name || code
+function getTypeName(codeOrId: string) {
+  return allTypes.value.find(t => t.code === codeOrId || t.id === codeOrId)?.name || codeOrId
 }
 
 function renderFieldValue(row: ProjectItem, fieldCode: string): string {
@@ -330,8 +337,8 @@ onMounted(async () => {
     <div class="chart-panel-title">光伏项目类型兼容</div>
 
     <el-tabs v-model="activeTab">
-      <el-tab-pane label="项目列表" name="project-list" />
       <el-tab-pane label="项目类型维护" name="type-mgmt" />
+      <el-tab-pane label="项目列表" name="project-list" />
     </el-tabs>
 
     <!-- ==================== 项目类型维护 ==================== -->
@@ -365,9 +372,12 @@ onMounted(async () => {
               <el-button size="small" @click="handleClearAllFields" :disabled="fields.length === 0">一键删除</el-button>
             </div>
           </div>
-          <el-table :data="fields" stripe size="small">
+          <el-table :data="fields.slice((fieldPage - 1) * fieldPageSize, fieldPage * fieldPageSize)" stripe size="small" row-style="height:42px">
             <el-table-column prop="field_name" label="字段名" width="130" />
             <el-table-column prop="field_code" label="字段编码" width="130" />
+            <el-table-column label="字段属性" width="120">
+              <template #default="{ row }">{{ (row as any).category || '项目基础信息' }}</template>
+            </el-table-column>
             <el-table-column label="字段类型" width="100">
               <template #default="{ row }">
                 {{ fieldTypeOptions.find(o => o.value === row.field_type)?.label || row.field_type }}
@@ -378,12 +388,21 @@ onMounted(async () => {
             </el-table-column>
             <el-table-column label="操作" width="120">
               <template #default="{ row, $index }">
-                <el-button size="small" link type="primary" @click="openFieldEdit($index, row)">编辑</el-button>
-                <el-button v-if="!isSystemField(row.field_code)" size="small" link @click="handleFieldDelete($index)">删除</el-button>
+                <el-button size="small" link type="primary" @click="openFieldEdit((fieldPage - 1) * fieldPageSize + $index, row)">编辑</el-button>
+                <el-button v-if="!isSystemField(row.field_code)" size="small" link @click="handleFieldDelete((fieldPage - 1) * fieldPageSize + $index)">删除</el-button>
                 <el-tag v-else size="small" type="info">核心</el-tag>
               </template>
             </el-table-column>
           </el-table>
+          <el-pagination
+            v-if="fields.length > fieldPageSize"
+            style="margin-top:12px;justify-content:flex-end"
+            layout="total, prev, pager, next"
+            :total="fields.length"
+            :page-size="fieldPageSize"
+            v-model:current-page="fieldPage"
+            small
+          />
 
         </div>
         <div class="chart-panel" v-else style="display:flex;align-items:center;justify-content:center;color:#909399;font-size:14px">
@@ -609,9 +628,10 @@ onMounted(async () => {
           <template #default="{ row }">{{ formatFileSize(row.file_size) }}</template>
         </el-table-column>
         <el-table-column prop="uploaded_at" label="上传时间" width="160" />
-        <el-table-column label="操作" width="120">
+        <el-table-column label="操作" width="180">
           <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="handleDownload(row.id)">下载</el-button>
+            <el-button v-if="canPreview(row.doc_name)" size="small" link type="primary" @click="handlePreview(row.id)">预览</el-button>
+            <el-button size="small" link type="primary" @click="handleDownload(row.id, row.doc_name)">下载</el-button>
             <el-button size="small" link @click="handleDocDelete(row.id)">删除</el-button>
           </template>
         </el-table-column>

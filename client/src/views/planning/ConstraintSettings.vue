@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fetchConstraintRules, saveConstraintRules } from '@/api/planning'
 import { CONSTRAINT_CATEGORIES, getDefaultCategoryValues } from '@/config/constraintCategories'
@@ -12,6 +12,11 @@ const emit = defineEmits<{
 
 const loading = ref(false)
 const categories = ref<ConstraintCategoryValue[]>(getDefaultCategoryValues())
+const weights = reactive<Record<string, number>>({
+  resource: 35,
+  grid: 35,
+  land: 30,
+})
 
 function getCategoryMeta(type: string) {
   return CONSTRAINT_CATEGORIES.find((c) => c.type === type)
@@ -24,12 +29,17 @@ async function loadConfig() {
     if (rules.length > 0) {
       categories.value.forEach((cat) => {
         const rule = rules.find((r) => r.ruleType === cat.categoryType || isLegacyRuleMatch(cat.categoryType, r.ruleType))
-        if (rule && rule.params && Object.keys(rule.params).length > 0) {
-          Object.keys(rule.params).forEach((key) => {
-            if (key in cat.paramValues) {
-              cat.paramValues[key] = rule.params![key]
-            }
-          })
+        if (rule) {
+          if (rule.weight !== undefined && rule.weight > 0) {
+            weights[cat.categoryType] = Math.round(rule.weight * 100)
+          }
+          if (rule.params && Object.keys(rule.params).length > 0) {
+            Object.keys(rule.params).forEach((key) => {
+              if (key in cat.paramValues) {
+                cat.paramValues[key] = rule.params![key]
+              }
+            })
+          }
         }
       })
     }
@@ -52,14 +62,14 @@ async function saveConfig() {
       return {
         ruleName: meta?.name ?? cat.categoryType,
         ruleType: cat.categoryType,
-        weight: 1,
+        weight: (weights[cat.categoryType] ?? 30) / 100,
         enabled: true,
         params: cat.paramValues,
         description: `${meta?.name ?? ''}约束配置`,
       }
     })
     await saveConstraintRules(payload as any)
-    ElMessage.success('约束条件配置已保存')
+    ElMessage.success('约束条件及权重配置已保存')
     emit('saved')
     emit('close')
   } catch {
@@ -71,6 +81,9 @@ async function saveConfig() {
 
 function resetDefaults() {
   categories.value = getDefaultCategoryValues()
+  weights.resource = 35
+  weights.grid = 35
+  weights.land = 30
   ElMessage.info('已恢复默认配置')
 }
 
@@ -80,7 +93,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="constraint-page">
+  <div>
     <div class="page-header">
       <div class="header-left">布点约束条件配置</div>
       <div class="header-actions">
@@ -90,7 +103,19 @@ onMounted(() => {
     </div>
 
     <div class="section" v-for="catMeta in CONSTRAINT_CATEGORIES" :key="catMeta.type">
-      <div class="section-title">{{ catMeta.name }}</div>
+      <div class="section-title">
+        <span>{{ catMeta.name }}</span>
+        <span class="weight-inline">
+          权重
+          <el-input-number
+            :model-value="weights[catMeta.type]"
+            @update:model-value="(v: number | undefined) => { if (v !== undefined) weights[catMeta.type] = v }"
+            :min="0" :max="100" :step="5"
+            size="small" controls-position="right"
+          />
+          %
+        </span>
+      </div>
       <div class="param-grid">
         <div class="param-row" v-for="param in catMeta.params" :key="param.key">
           <span class="param-label">{{ param.label }}</span>
@@ -98,7 +123,7 @@ onMounted(() => {
             <el-input-number
               v-if="param.type === 'number'"
               :model-value="categories.find(c => c.categoryType === catMeta.type)!.paramValues[param.key]"
-              @update:model-value="(v: number) => { const c = categories.find(x => x.categoryType === catMeta.type); if (c) c.paramValues[param.key] = v }"
+              @update:model-value="(v: number | undefined) => { const c = categories.find(x => x.categoryType === catMeta.type); if (c && v !== undefined) c.paramValues[param.key] = v }"
               :min="param.min" :max="param.max" :step="param.step ?? 1"
               size="small" controls-position="right"
             />
@@ -127,10 +152,6 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.constraint-page {
-  /* dialog内使用 */
-}
-
 .page-header {
   display: flex;
   justify-content: space-between;
@@ -162,12 +183,24 @@ onMounted(() => {
   overflow: hidden;
 }
 .section-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   padding: 10px 16px;
   font-size: 13px;
   font-weight: 600;
   color: #303133;
   background: #f9fafb;
   border-bottom: 1px solid #ebeef5;
+}
+
+.weight-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 400;
+  color: #606266;
 }
 
 .param-grid {

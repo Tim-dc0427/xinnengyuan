@@ -1,6 +1,21 @@
 import type { Knex } from 'knex'
 import { v4 as uuid } from 'uuid'
 
+// 简单字符串哈希，用于确定性扰动
+function hashStr(s: string): number {
+  let h = 0
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) - h + s.charCodeAt(i)) | 0
+  }
+  return Math.abs(h)
+}
+// 在 base 的 ±pct 范围内扰动，seed 确定性
+function jitter(base: number, pct: number, seed: number, decimals = 1): number {
+  const r = (seed % 1000) / 1000 // 0..0.999
+  const delta = base * pct * (r * 2 - 1) // -pct..+pct
+  return +(base + delta).toFixed(decimals)
+}
+
 export async function seed(knex: Knex): Promise<void> {
   await knex('access_point_resources').del()
 
@@ -27,25 +42,44 @@ export async function seed(knex: Knex): Promise<void> {
   const buses = await knex('grid_buses').select('id', 'name', 'zone', 'base_kv')
   const busRows = buses.map((b: any) => {
     const sol = zoneSolar[b.zone] || { irr: null, hours: null, grade: null }
+    const busKv = b.base_kv || 10  // 母线电压，用于推算短路容量/造价等
+    const grade = sol.grade || 'C'
+    const seed = hashStr(b.name)
+    // 接入并网电压比母线低1-2级（光伏不直接接高压母线）
+    const accessKv = busKv >= 220 ? (seed % 2 === 0 ? 110 : 35)
+      : busKv >= 110 ? (seed % 2 === 0 ? 35 : 10)
+      : busKv >= 35 ? 10
+      : seed % 3 === 0 ? 0.38 : 10
+    // 按母线电压等级取基础值，再施加确定性扰动
+    const baseScc = busKv >= 220 ? 800 : busKv >= 110 ? 400 : busKv >= 35 ? 200 : 100
+    const baseDist = busKv >= 220 ? 5 : busKv >= 110 ? 4 : busKv >= 35 ? 3 : 2
+    const baseCost = busKv >= 220 ? 3.2 : busKv >= 110 ? 3.8 : busKv >= 35 ? 4.2 : 4.5
+    const basePayback = grade === 'A' ? 7 : grade === 'B' ? 8 : 9
+    const baseIrr = grade === 'A' ? 12 : grade === 'B' ? 10 : 8
+    // 非数值字段按 hash 取不同值（含不良值）
+    const landOpts = ['建设用地', '建设用地', '未利用地', '草地', '农用地', '林地']
+    const envOpts = ['不敏感', '不敏感', '一般', '一般', '敏感']
+    const corrOpts = ['可用', '可用', '可用', '受限', '不可用']
+    const geoOpts = ['低', '低', '低', '中', '高']
     return {
       id: uuid(),
       source_type: 'grid_bus',
       source_id: b.id,
       name: b.name,
       zone: b.zone || null,
-      annual_irradiance: sol.irr,
-      sunshine_hours: sol.hours,
+      annual_irradiance: sol.irr ? jitter(sol.irr, 0.05, seed + 10, 0) : null,
+      sunshine_hours: sol.hours ? jitter(sol.hours, 0.05, seed + 11, 0) : null,
       solar_grade: sol.grade,
-      voltage_kv: b.base_kv || null,
-      short_circuit_capacity_mva: null,
-      corridor_available: null,
-      transmission_line_length_km: null,
-      unit_cost: null,
-      payback_years: null,
-      irr_pct: null,
-      land_type: null,
-      env_sensitivity: null,
-      geohazard_risk: null,
+      voltage_kv: accessKv,
+      short_circuit_capacity_mva: jitter(baseScc, 0.2, seed + 2, 0),
+      corridor_available: corrOpts[seed % corrOpts.length],
+      transmission_line_length_km: jitter(baseDist, 0.4, seed + 3, 1),
+      unit_cost: jitter(baseCost, 0.15, seed + 4, 2),
+      payback_years: jitter(basePayback, 0.2, seed + 5, 1),
+      irr_pct: jitter(baseIrr, 0.15, seed + 6, 1),
+      land_type: landOpts[seed % landOpts.length],
+      env_sensitivity: envOpts[(seed + 1) % envOpts.length],
+      geohazard_risk: geoOpts[(seed + 2) % geoOpts.length],
       created_at: now,
     }
   })
@@ -57,28 +91,33 @@ export async function seed(knex: Knex): Promise<void> {
     'transmission_line_length_km', 'transmission_cost', 'land_cost'
   )
   const cpRows = cpoints.map((cp: any) => {
-    // 根据经纬度归入区县
     const zone = guessZone(cp.latitude, cp.longitude)
     const sol = zoneSolar[zone] || { irr: null, hours: null, grade: null }
+    const grade = sol.grade || 'C'
+    const dist = cp.transmission_line_length_km || 5
+    const seed = hashStr(cp.location_desc || cp.id)
+    const landOpts2 = ['建设用地', '建设用地', '未利用地', '草地', '农用地', '林地']
+    const envOpts2 = ['不敏感', '不敏感', '一般', '一般', '敏感']
+    const geoOpts2 = ['低', '低', '低', '中', '高']
     return {
       id: uuid(),
       source_type: 'candidate_point',
       source_id: cp.id,
       name: cp.location_desc || '候选接入点',
       zone,
-      annual_irradiance: sol.irr,
-      sunshine_hours: sol.hours,
+      annual_irradiance: sol.irr ? jitter(sol.irr, 0.05, seed, 0) : null,
+      sunshine_hours: sol.hours ? jitter(sol.hours, 0.05, seed + 1, 0) : null,
       solar_grade: sol.grade,
-      voltage_kv: null,
-      short_circuit_capacity_mva: null,
-      corridor_available: null,
-      transmission_line_length_km: cp.transmission_line_length_km || null,
-      unit_cost: null,
-      payback_years: null,
-      irr_pct: null,
-      land_type: null,
-      env_sensitivity: null,
-      geohazard_risk: null,
+      voltage_kv: seed % 3 === 0 ? 35 : 10,
+      short_circuit_capacity_mva: jitter(seed % 3 === 0 ? 200 : 100, 0.2, seed + 2, 0),
+      corridor_available: '可用',
+      transmission_line_length_km: jitter(dist, 0.4, seed + 3, 1),
+      unit_cost: jitter(dist <= 3 ? 3.5 : dist <= 8 ? 4.0 : 4.5, 0.15, seed + 4, 2),
+      payback_years: jitter(grade === 'A' ? 7 : grade === 'B' ? 8 : 9, 0.2, seed + 5, 1),
+      irr_pct: jitter(grade === 'A' ? 12 : grade === 'B' ? 10 : 8, 0.15, seed + 6, 1),
+      land_type: landOpts2[seed % landOpts2.length],
+      env_sensitivity: envOpts2[(seed + 1) % envOpts2.length],
+      geohazard_risk: geoOpts2[(seed + 2) % geoOpts2.length],
       created_at: now,
     }
   })
@@ -87,31 +126,18 @@ export async function seed(knex: Knex): Promise<void> {
 
 // 根据经纬度归入杭州区县
 function guessZone(lat: number, lng: number): string {
-  // 钱塘区: 30.29-30.35, 120.55-120.65
   if (lat >= 30.29 && lat <= 30.35 && lng >= 120.55 && lng <= 120.65) return '钱塘区'
-  // 萧山区: 30.15-30.25, 120.20-120.55
   if (lat >= 30.15 && lat <= 30.25 && lng >= 120.20 && lng <= 120.55) return '萧山区'
-  // 滨江区: 30.19-30.22, 120.18-120.22
   if (lat >= 30.19 && lat <= 30.22 && lng >= 120.18 && lng <= 120.22) return '滨江区'
-  // 余杭区: 30.35-30.45, 119.80-120.30
   if (lat >= 30.35 && lat <= 30.45 && lng >= 119.80 && lng <= 120.30) return '余杭区'
-  // 富阳区: 30.00-30.10, 119.80-120.10
   if (lat >= 30.00 && lat <= 30.10 && lng >= 119.80 && lng <= 120.10) return '富阳区'
-  // 临安区: 30.15-30.35, 119.40-119.80
   if (lat >= 30.15 && lat <= 30.35 && lng >= 119.40 && lng <= 119.80) return '临安区'
-  // 建德市: 29.45-29.65, 119.20-119.50
   if (lat >= 29.45 && lat <= 29.65 && lng >= 119.20 && lng <= 119.50) return '建德市'
-  // 桐庐县: 29.75-29.95, 119.60-119.80
   if (lat >= 29.75 && lat <= 29.95 && lng >= 119.60 && lng <= 119.80) return '桐庐县'
-  // 淳安县: 29.55-29.80, 118.80-119.20
   if (lat >= 29.55 && lat <= 29.80 && lng >= 118.80 && lng <= 119.20) return '淳安县'
-  // 西湖区: 30.22-30.30, 120.05-120.18
   if (lat >= 30.22 && lat <= 30.30 && lng >= 120.05 && lng <= 120.18) return '西湖区'
-  // 拱墅区: 30.30-30.36, 120.12-120.20
   if (lat >= 30.30 && lat <= 30.36 && lng >= 120.12 && lng <= 120.20) return '拱墅区'
-  // 上城区: 30.22-30.28, 120.16-120.22
   if (lat >= 30.22 && lat <= 30.28 && lng >= 120.16 && lng <= 120.22) return '上城区'
-  // 临平区: 30.38-30.46, 120.28-120.38
   if (lat >= 30.38 && lat <= 30.46 && lng >= 120.28 && lng <= 120.38) return '临平区'
-  return '余杭区' // 默认
+  return '余杭区'
 }

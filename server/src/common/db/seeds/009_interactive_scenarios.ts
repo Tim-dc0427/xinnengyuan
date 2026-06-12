@@ -17,7 +17,7 @@ export async function seed(knex: Knex): Promise<void> {
   const s1Id = uuid()
   const s1Config = {
     accessPoints: [
-      { nodeType: 'GRID', nodeId: 'bus-yuhang-220', nodeName: '余杭变220kV', connectedCapacity: 360, voltageLevel: 220, connectionType: 'AC', params: { tapRegulation: true, reactiveCompensation: true } },
+      { nodeType: 'GRID', nodeId: 'bus-yuhang-220', nodeName: '仓前变', connectedCapacity: 360, voltageLevel: 220, connectionType: 'AC', params: { tapRegulation: true, reactiveCompensation: true } },
       { nodeType: 'SOURCE', nodeId: 'pv-shuneng', nodeName: '舒能渔光互补400MW', connectedCapacity: 400, voltageLevel: 220, connectionType: 'AC', params: { outputUpperLimit: 95, outputLowerLimit: 10, powerFactor: 0.95, regulationDelay: 30 } },
       { nodeType: 'SOURCE', nodeId: 'pv-lingneng', nodeName: '凌能渔光互补250MW', connectedCapacity: 250, voltageLevel: 220, connectionType: 'AC', params: { outputUpperLimit: 95, outputLowerLimit: 10, powerFactor: 0.93, regulationDelay: 30 } },
       { nodeType: 'LOAD', nodeId: 'load-qiantang', nodeName: '钱塘区临江工业园负荷', connectedCapacity: 80, voltageLevel: 220, connectionType: 'AC', params: { peakClippingRate: 20, valleyFillingRate: 15, interruptibleLoadRatio: 8 } },
@@ -88,7 +88,7 @@ export async function seed(knex: Knex): Promise<void> {
   const s2Id = uuid()
   const s2Config = {
     accessPoints: [
-      { nodeType: 'GRID', nodeId: 'bus-jiande-110', nodeName: '建德变110kV', connectedCapacity: 126, voltageLevel: 110, connectionType: 'AC', params: { tapRegulation: true, reactiveCompensation: false } },
+      { nodeType: 'GRID', nodeId: 'bus-jiande-110', nodeName: '寿昌变', connectedCapacity: 126, voltageLevel: 110, connectionType: 'AC', params: { tapRegulation: true, reactiveCompensation: false } },
       { nodeType: 'SOURCE', nodeId: 'pv-huayang', nodeName: '华洋山地光伏155MW', connectedCapacity: 155, voltageLevel: 110, connectionType: 'AC', params: { outputUpperLimit: 80, outputLowerLimit: 0, powerFactor: 0.95, regulationDelay: 10 } },
       { nodeType: 'LOAD', nodeId: 'load-linan', nodeName: '临安区农业灌溉负荷', connectedCapacity: 5, voltageLevel: 110, connectionType: 'AC', params: { peakClippingRate: 30, valleyFillingRate: 20, interruptibleLoadRatio: 50 } },
       { nodeType: 'STORAGE', nodeId: 'storage-linan', nodeName: '临安抽水蓄能站', connectedCapacity: 100, voltageLevel: 110, connectionType: 'AC', params: { chargeSchedule: '22:00-06:00', dischargeSchedule: '按需调度', socUpper: 100, socLower: 0, ratedPowerKw: 100000, ratedCapacityKwh: 800000 } },
@@ -144,19 +144,19 @@ export async function seed(knex: Knex): Promise<void> {
   const s3Id = uuid()
   const s3Config = {
     accessPoints: [
-      { nodeType: 'GRID', nodeId: 'bus-xiaoshan-110', nodeName: '萧山变110kV', connectedCapacity: 100, voltageLevel: 110, connectionType: 'AC', params: { tapRegulation: true, reactiveCompensation: true } },
+      { nodeType: 'GRID', nodeId: 'bus-xiaoshan-110', nodeName: '光明变', connectedCapacity: 100, voltageLevel: 110, connectionType: 'AC', params: { tapRegulation: true, reactiveCompensation: true } },
       { nodeType: 'SOURCE', nodeId: 'pv-xiaoshanny', nodeName: '萧山南阳集中式光伏50MW', connectedCapacity: 50, voltageLevel: 110, connectionType: 'AC', params: { outputUpperLimit: 95, outputLowerLimit: 10, powerFactor: 0.93, regulationDelay: 30 } },
       { nodeType: 'LOAD', nodeId: 'load-xiaoshan', nodeName: '萧山区居民负荷聚合', connectedCapacity: 30, voltageLevel: 110, connectionType: 'AC', params: { peakClippingRate: 10, valleyFillingRate: 8, interruptibleLoadRatio: 3 } },
     ],
     controlRules: [
-      { name: 'N-1转供', condition: '萧山变主变检修退出', action: '负荷转由萧山东变110kV供电 + 光伏限出力50%', priority: 1 },
+      { name: 'N-1转供', condition: '萧山变主变检修退出', action: '负荷转由航坞变供电 + 光伏限出力50%', priority: 1 },
       { name: '过载保护', condition: '萧山东变负载率 > 90%', action: '降低光伏出力 + 启动居民可中断负荷', priority: 2 },
     ],
     dataSource: { type: 'history', frequency: '30min', startDate: '2026-09-01', endDate: '2026-09-07' },
   }
   await knex('interactive_scenarios').insert({
     id: s3Id, name: '线路检修N-1场景', type: 'industrial_park', scenario_condition: 'maintenance', version_limit: 10,
-    description: '模拟萧山变110kV主变检修期间，负荷转供至萧山东变。验证N-1条件下转供方案是否导致设备过载和电压越限。',
+    description: '模拟光明变主变检修期间，负荷转供至萧山东变。验证N-1条件下转供方案是否导致设备过载和电压越限。',
     config: JSON.stringify(s3Config), control_logic: JSON.stringify({ mode: 'n1_transfer', safetyCheck: true, fallbackStrategy: 'generation_curtailment' }),
     tags: JSON.stringify(['检修', 'N-1', '负荷转供', '萧山']),
     status: 'active', created_by: '李工',
@@ -190,7 +190,7 @@ export async function seed(knex: Knex): Promise<void> {
   const s4Id = uuid()
   const s4Config = {
     accessPoints: [
-      { nodeType: 'GRID', nodeId: 'bus-qiantang-220', nodeName: '钱塘变220kV', connectedCapacity: 720, voltageLevel: 220, connectionType: 'AC', params: { tapRegulation: true, reactiveCompensation: true } },
+      { nodeType: 'GRID', nodeId: 'bus-qiantang-220', nodeName: '义蓬变', connectedCapacity: 720, voltageLevel: 220, connectionType: 'AC', params: { tapRegulation: true, reactiveCompensation: true } },
       { nodeType: 'SOURCE', nodeId: 'pv-shuneng', nodeName: '舒能渔光互补400MW', connectedCapacity: 400, voltageLevel: 220, connectionType: 'AC', params: { outputUpperLimit: 100, outputLowerLimit: 5, powerFactor: 0.95, regulationDelay: 30 } },
       { nodeType: 'SOURCE', nodeId: 'pv-jiada', nodeName: '嘉达渔光互补350MW', connectedCapacity: 350, voltageLevel: 220, connectionType: 'AC', params: { outputUpperLimit: 100, outputLowerLimit: 5, powerFactor: 0.95, regulationDelay: 30 } },
       { nodeType: 'SOURCE', nodeId: 'pv-lingneng', nodeName: '凌能渔光互补250MW', connectedCapacity: 250, voltageLevel: 220, connectionType: 'AC', params: { outputUpperLimit: 100, outputLowerLimit: 5, powerFactor: 0.93, regulationDelay: 30 } },

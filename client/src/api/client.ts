@@ -1,11 +1,12 @@
 import axios from 'axios'
+import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth.store'
 import { router } from '@/router'
 
 export const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '',
   timeout: 30000,
-  headers: { 'Content-Type': 'application/json' },
+  // Content-Type 由 axios 自动检测（JSON 对象 → application/json，FormData → multipart/form-data）
 })
 
 apiClient.interceptors.request.use((config) => {
@@ -22,7 +23,13 @@ apiClient.interceptors.response.use(
     if (error.response?.status === 401) {
       const authStore = useAuthStore()
       authStore.logout()
-      router.push({ name: 'Login' })
+      if (router.currentRoute.value.name !== 'Login') {
+        router.push({ name: 'Login' })
+      }
+    }
+    if (error.response?.status === 403) {
+      ElMessage.error('无权限访问')
+      router.push('/')
     }
     return Promise.reject(error)
   },

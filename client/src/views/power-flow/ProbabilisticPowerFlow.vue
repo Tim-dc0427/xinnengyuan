@@ -193,17 +193,6 @@ const branchCdfChartOption = computed(() => {
         </div>
 
       </div>
-      <div v-if="feeder.selectedFeederIds.value.length > 0" class="filter-group">
-        <el-tooltip content="光伏出力计算的基准天气条件" placement="top">
-          <span class="filter-label">天气场景：</span>
-        </el-tooltip>
-        <el-select v-model="weatherScenario" size="small" style="width:130px">
-          <el-option value="actual" label="实际测量值" />
-          <el-option value="sunny" label="典型晴天" />
-          <el-option value="cloudy" label="多云天气" />
-          <el-option value="rainy" label="阴雨天气" />
-        </el-select>
-      </div>
       <el-button type="primary" :loading="loading" @click="startCalculation">
         {{ result ? '重新计算' : '开始概率潮流计算' }}
       </el-button>

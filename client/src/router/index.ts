@@ -244,13 +244,27 @@ const routes: RouteRecordRaw[] = [
         path: 'power-flow/data-validation',
         component: () => import('@/views/power-flow/DataValidationHub.vue'),
         meta: { title: '数据校验', roles: ['admin', 'planner', 'operator'] },
-        redirect: '/power-flow/data-validation/completeness',
+        redirect: '/power-flow/data-validation/pv-completeness',
         children: [
           {
-            path: 'completeness',
-            name: 'PVCompleteness',
-            component: () => import('@/views/power-flow/PVCompleteness.vue'),
+            path: 'pv-completeness',
+            component: () => import('@/views/power-flow/PVCompletenessHub.vue'),
             meta: { title: '光伏数据完整性校验', roles: ['admin', 'planner', 'operator'] },
+            redirect: '/power-flow/data-validation/pv-completeness/check',
+            children: [
+              {
+                path: 'check',
+                name: 'PVCompletenessCheck',
+                component: () => import('@/views/power-flow/PVCompleteness.vue'),
+                meta: { title: '数据完整性校验维度', roles: ['admin', 'planner', 'operator'] },
+              },
+              {
+                path: 'report',
+                name: 'PVCompletenessReport',
+                component: () => import('@/views/power-flow/PVCompletenessReport.vue'),
+                meta: { title: '数据质量报告生成', roles: ['admin', 'planner', 'operator'] },
+              },
+            ],
           },
           {
             path: 'boundary',
@@ -470,7 +484,36 @@ export const router = createRouter({
   routes,
 })
 
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
   document.title = `${to.meta.title || '系统'} - 新能源智能分析系统`
+
+  const authStore = useAuthStore()
+
+  // 有 token 但无用户信息时，恢复用户信息（页面刷新后）
+  if (authStore.token && !authStore.user && !to.meta.noAuth) {
+    try {
+      await authStore.fetchUser()
+    } catch {
+      // fetchUser 失败（token 无效），清空 token 跳登录页
+      authStore.logout()
+      if (to.name !== 'Login') {
+        next({ name: 'Login' })
+        return
+      }
+    }
+  }
+
+  // 路由角色权限校验
+  const allowedRoles = to.meta.roles as string[] | undefined
+  if (allowedRoles && allowedRoles.length > 0 && !to.meta.noAuth) {
+    const userRole = authStore.user?.role
+    if (userRole) {
+      if (userRole !== 'admin' && !allowedRoles.includes(userRole)) {
+        next('/')
+        return
+      }
+    }
+  }
+
   next()
 })

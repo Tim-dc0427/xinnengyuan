@@ -1,52 +1,58 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { fetchThresholds, updateThresholds } from '@/api/power-flow'
+import { fetchThresholds, updateThresholds, deleteThreshold } from '@/api/power-flow'
 import type { ThresholdItem } from '@/api/power-flow'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useThresholds } from '@/composables/useThresholds'
+
+const { load: refreshGlobalThresholds } = useThresholds()
 
 const loading = ref(false)
 const saving = ref(false)
 const list = ref<ThresholdItem[]>([])
-const original = ref<ThresholdItem[]>([])
 
-const changedIndexes = ref<Set<number>>(new Set())
+const filterVoltageLevel = ref('')
+const filterRegion = ref('')
 
-const indicatorLabelMap: Record<string, string> = {
-  voltage_deviation: '电压偏差',
-  three_phase_imbalance: '三相不平衡度',
-  equipment_load_rate: '设备负载率',
-  frequency_deviation: '频率偏差',
+const dialogVisible = ref(false)
+const form = ref<ThresholdItem>({
+  indicatorName: 'voltage_deviation',
+  indicatorLabel: '电压偏差',
+  warningThreshold: 5,
+  criticalThreshold: 10,
+  unit: '%',
+  voltageLevel: null,
+  region: null,
+  enabled: true,
+  isCustom: true,
+})
+
+const voltageLevelOptions = ['', '220kV', '110kV', '10kV']
+const regionOptions = ['', '余杭区', '萧山区', '滨江区', '西湖区', '拱墅区', '上城区', '钱塘区', '临平区', '富阳区', '临安区', '桐庐县', '建德市', '淳安县']
+
+const indicatorOptions = [
+  { value: 'voltage_deviation', label: '电压偏差', unit: '%' },
+  { value: 'three_phase_imbalance', label: '三相不平衡度', unit: '%' },
+  { value: 'equipment_load_rate', label: '设备负载率', unit: '%' },
+  { value: 'frequency_deviation', label: '频率偏差', unit: 'Hz' },
+]
+
+function indicatorLabel(name: string) {
+  return indicatorOptions.find(i => i.value === name)?.label || name
 }
 
-function isChanged(index: number) {
-  return changedIndexes.value.has(index)
-}
-
-function markChanged(index: number) {
-  const item = list.value[index]
-  const orig = original.value[index]
-  if (!orig || item.warningThreshold !== orig.warningThreshold || item.criticalThreshold !== orig.criticalThreshold) {
-    changedIndexes.value.add(index)
-  } else {
-    changedIndexes.value.delete(index)
-  }
-}
-
-function resetRow(index: number) {
-  list.value[index] = { ...original.value[index] }
-  changedIndexes.value.delete(index)
-}
-
-function rowClass({ rowIndex }: { rowIndex: number }) {
-  return isChanged(rowIndex) ? 'changed-row' : ''
+function formatCell(val: string | null) {
+  return val || '全部'
 }
 
 async function loadData() {
   loading.value = true
   try {
-    list.value = await fetchThresholds()
-    original.value = list.value.map(t => ({ ...t }))
-    changedIndexes.value.clear()
+    const params: any = {}
+    if (filterVoltageLevel.value) params.voltageLevel = filterVoltageLevel.value
+    if (filterRegion.value) params.region = filterRegion.value
+    const raw = await fetchThresholds(params)
+    list.value = raw.map((t: ThresholdItem) => ({ ...t, enabled: t.enabled !== false }))
   } catch {
     list.value = []
   } finally {
@@ -54,130 +60,264 @@ async function loadData() {
   }
 }
 
-async function handleSave() {
-  const changed = list.value.filter((_, i) => changedIndexes.value.has(i))
-  if (changed.length === 0) {
-    ElMessage.info('未检测到修改')
-    return
-  }
-  try {
-    await ElMessageBox.confirm(
-      `确认保存 ${changed.length} 项阈值变更？`,
-      '保存确认',
-      { confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning' },
-    )
-  } catch {
-    return
-  }
+onMounted(loadData)
+
+// 阈值修改即时保存
+async function autoSave(item: ThresholdItem) {
+  if (!item.id || saving.value) return
   saving.value = true
   try {
-    await updateThresholds(list.value.map(t => ({
-      ...t,
-      isCustom: true,
-    })))
-    original.value = list.value.map(t => ({ ...t }))
-    changedIndexes.value.clear()
-    ElMessage.success('阈值配置已保存')
+    await updateThresholds([item])
+    refreshGlobalThresholds()
   } catch {
     ElMessage.error('保存失败')
+    await loadData()
   } finally {
     saving.value = false
   }
 }
 
-// 验证：预警阈值必须 < 严重阈值
-function validateThreshold(item: ThresholdItem): boolean {
-  return item.warningThreshold < item.criticalThreshold
+// 启用/禁用即时切换
+async function toggleEnabled(item: ThresholdItem) {
+  if (saving.value) return
+  saving.value = true
+  try {
+    await updateThresholds([item])
+    refreshGlobalThresholds()
+    ElMessage.success(item.enabled ? '已启用' : '已禁用')
+  } catch {
+    item.enabled = !item.enabled
+    ElMessage.error('操作失败')
+  } finally {
+    saving.value = false
+  }
 }
 
-onMounted(loadData)
+function openCreate() {
+  form.value = {
+    indicatorName: 'voltage_deviation',
+    indicatorLabel: '电压偏差',
+    warningThreshold: 5,
+    criticalThreshold: 10,
+    unit: '%',
+    voltageLevel: filterVoltageLevel.value || null,
+    region: filterRegion.value || null,
+    enabled: true,
+    isCustom: true,
+  }
+  dialogVisible.value = true
+}
+
+function onIndicatorChange(val: string) {
+  const opt = indicatorOptions.find(i => i.value === val)
+  if (opt) {
+    form.value.indicatorLabel = opt.label
+    form.value.unit = opt.unit
+  }
+}
+
+async function confirmCreate() {
+  if (form.value.warningThreshold >= form.value.criticalThreshold) {
+    ElMessage.error('预警阈值必须小于严重阈值')
+    return
+  }
+  saving.value = true
+  try {
+    await updateThresholds([form.value])
+    dialogVisible.value = false
+    refreshGlobalThresholds()
+    ElMessage.success('规则已创建')
+    await loadData()
+  } catch {
+    ElMessage.error('创建失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function handleDelete(item: ThresholdItem) {
+  if (!item.isCustom) {
+    ElMessage.warning('默认阈值不可删除')
+    return
+  }
+  if (!item.id) return
+  try {
+    await ElMessageBox.confirm(
+      `确认删除规则"${indicatorLabel(item.indicatorName)} - ${formatCell(item.voltageLevel)} - ${formatCell(item.region)}"？`,
+      '删除确认',
+      { confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await deleteThreshold(item.id)
+    refreshGlobalThresholds()
+    ElMessage.success('已删除')
+    await loadData()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || '删除失败')
+  }
+}
+
+function filterChange() {
+  loadData()
+}
 </script>
 
 <template>
   <div class="page-container">
     <div class="chart-panel-title">阈值配置</div>
+
     <div class="chart-panel">
-      <div class="panel-header">
-        <div class="chart-panel-title">指标阈值自定义配置</div>
-        <div>
-          <el-button size="small" @click="loadData" :loading="loading">重置</el-button>
-          <el-button size="small" type="primary" @click="handleSave" :loading="saving">保存配置</el-button>
+      <div class="filter-bar">
+        <div class="filter-group">
+          <span class="filter-label">电压等级</span>
+          <el-select v-model="filterVoltageLevel" size="small" style="width:120px" clearable placeholder="全部" @change="filterChange">
+            <el-option v-for="v in voltageLevelOptions" :key="v" :label="v || '全部'" :value="v" />
+          </el-select>
         </div>
+        <div class="filter-group">
+          <span class="filter-label">区域</span>
+          <el-select v-model="filterRegion" size="small" style="width:140px" clearable placeholder="全部" @change="filterChange">
+            <el-option v-for="r in regionOptions" :key="r" :label="r || '全部'" :value="r" />
+          </el-select>
+        </div>
+        <div style="flex:1" />
+        <el-button size="small" type="primary" plain @click="openCreate">新建规则</el-button>
       </div>
 
-      <el-alert
-        title="修改预警阈值或严重阈值后，对应行将高亮显示。保存后配置立即生效。"
-        type="info"
-        :closable="false"
-        show-icon
-        style="margin-bottom:16px"
-      />
-
-      <el-table :data="list" stripe size="small" v-loading="loading" :row-class-name="rowClass">
-        <el-table-column label="指标">
+      <el-table :data="list" stripe size="small" v-loading="loading" max-height="500">
+        <el-table-column label="指标" min-width="130">
           <template #default="{ row }">
-            {{ indicatorLabelMap[row.indicatorName] || row.indicatorName }}
+            {{ indicatorLabel(row.indicatorName) }}
           </template>
         </el-table-column>
-        <el-table-column label="预警阈值" width="200">
-          <template #default="{ row, $index }">
+        <el-table-column label="电压等级" width="110">
+          <template #default="{ row }">
+            {{ formatCell(row.voltageLevel) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="区域" width="110">
+          <template #default="{ row }">
+            {{ formatCell(row.region) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="预警阈值" width="180">
+          <template #default="{ row }">
             <el-input-number
               v-model="row.warningThreshold"
               :min="0"
-              :step="row.unit === '%' ? 0.1 : 0.01"
-              :precision="2"
+              :step="row.unit === 'Hz' ? 0.1 : 1"
+              :precision="row.unit === 'Hz' ? 1 : 0"
               size="small"
               controls-position="right"
-              @change="markChanged($index)"
+              style="width:120px"
+              @change="autoSave(row)"
             />
             <span style="margin-left:6px;color:#909399">{{ row.unit }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="严重阈值" width="200">
-          <template #default="{ row, $index }">
+        <el-table-column label="严重阈值" width="180">
+          <template #default="{ row }">
             <el-input-number
               v-model="row.criticalThreshold"
               :min="0"
-              :step="row.unit === '%' ? 0.1 : 0.01"
-              :precision="2"
+              :step="row.unit === 'Hz' ? 0.1 : 1"
+              :precision="row.unit === 'Hz' ? 1 : 0"
               size="small"
               controls-position="right"
-              @change="markChanged($index)"
+              style="width:120px"
+              @change="autoSave(row)"
             />
             <span style="margin-left:6px;color:#909399">{{ row.unit }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="120">
-          <template #default="{ row, $index }">
-            <el-tag v-if="isChanged($index)" type="warning" size="small">已修改</el-tag>
-            <el-tag v-else-if="row.isCustom" type="info" size="small">自定义</el-tag>
-            <el-tag v-else type="success" size="small">默认</el-tag>
+        <el-table-column label="启用" width="70" align="center">
+          <template #default="{ row }">
+            <el-switch v-model="row.enabled" size="small" @change="toggleEnabled(row)" />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120">
-          <template #default="{ $index }">
+        <el-table-column label="操作" width="80">
+          <template #default="{ row }">
             <el-button
-              v-if="isChanged($index)"
+              v-if="row.isCustom"
               size="small"
-              type="warning"
+              type="danger"
               link
-              @click="resetRow($index)"
-            >还原</el-button>
+              @click="handleDelete(row)"
+            >删除</el-button>
+            <span v-else style="color:#c0c4cc">—</span>
           </template>
         </el-table-column>
       </el-table>
+
+      <div v-if="list.length === 0 && !loading" style="padding:40px 0;text-align:center;color:#c0c4cc">
+        该筛选条件下暂无阈值配置，可点击"新建规则"创建
+      </div>
     </div>
+
+    <!-- 新建规则对话框 -->
+    <el-dialog v-model="dialogVisible" title="新建阈值规则" width="480px" :close-on-click-modal="false">
+      <el-form label-width="100px" size="small">
+        <el-form-item label="指标">
+          <el-select v-model="form.indicatorName" style="width:100%" @change="onIndicatorChange">
+            <el-option v-for="opt in indicatorOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="电压等级">
+          <el-select v-model="form.voltageLevel" style="width:100%" clearable placeholder="全部电压等级">
+            <el-option label="全部" :value="null" />
+            <el-option v-for="v in voltageLevelOptions.slice(1)" :key="v" :label="v" :value="v" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="区域">
+          <el-select v-model="form.region" style="width:100%" clearable placeholder="全部区域">
+            <el-option label="全部" :value="null" />
+            <el-option v-for="r in regionOptions.slice(1)" :key="r" :label="r" :value="r" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="预警阈值">
+          <el-input-number v-model="form.warningThreshold" :min="0" :step="form.unit === 'Hz' ? 0.1 : 1" :precision="form.unit === 'Hz' ? 1 : 0" style="width:160px" />
+          <span style="margin-left:8px;color:#909399">{{ form.unit }}</span>
+        </el-form-item>
+        <el-form-item label="严重阈值">
+          <el-input-number v-model="form.criticalThreshold" :min="0" :step="form.unit === 'Hz' ? 0.1 : 1" :precision="form.unit === 'Hz' ? 1 : 0" style="width:160px" />
+          <span style="margin-left:8px;color:#909399">{{ form.unit }}</span>
+        </el-form-item>
+        <el-form-item label="启用">
+          <el-switch v-model="form.enabled" size="small" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button size="small" @click="dialogVisible = false">取消</el-button>
+        <el-button size="small" type="primary" @click="confirmCreate" :loading="saving">确认创建</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <style scoped>
-.panel-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
+.page-container {
+  padding: 16px;
 }
-:deep(.changed-row) {
-  background-color: #fdf6ec !important;
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 12px;
+  padding: 10px 16px;
+  background: #f5f7fa;
+  border-radius: 4px;
+}
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.filter-label {
+  font-size: 13px;
+  color: #606266;
+  white-space: nowrap;
 }
 </style>

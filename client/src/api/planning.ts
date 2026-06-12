@@ -5,6 +5,7 @@ import type {
   InvestmentResult, CostComparison, RoiAnalysis,
   EquipmentLifecycleRecord, EquipmentLedgerItem, PotentialSite, ComprehensiveEvaluation, SchemeVariant,
   PvModelType, PvModelTypeField,
+  StorageConfig, ReactiveCompConfig, LineModificationPlan,
 } from '@new-energy/shared'
 
 // ==================== Plan ====================
@@ -85,7 +86,7 @@ export async function fetchCostLibrary(params?: { modelType?: string; modelTypeI
   return res.data?.data as PvCostLibraryItem[]
 }
 
-export async function upsertCostLibraryItem(data: { modelTypeId: string; unitCostPerKw?: number; remark?: string }) {
+export async function upsertCostLibraryItem(data: { modelTypeId: string; unitCostPerKw?: number; remark?: string; installedCapacityKw?: number; comprehensiveCost?: number }) {
   const res = await apiClient.post('/api/v1/planning/pv-cost-library', data)
   return res.data?.data as PvCostLibraryItem
 }
@@ -121,6 +122,61 @@ export async function runSpatialAnalysis(data: any) {
 export async function fetchCandidatePoints(params?: { planId?: string; status?: string }) {
   const res = await apiClient.get('/api/v1/planning/candidate-points', { params })
   return res.data?.data as CandidatePoint[]
+}
+
+// ==================== Candidate Analysis (候选接入点综合分析) ====================
+export interface CandidateAnalysisResult {
+  candidatePointId: string
+  siteInfo: {
+    name: string; longitude: number; latitude: number
+    annualIrradiance: number; equivHours: number
+    distanceToSubstationKm: number; availableCapacityMw: number
+    description: string
+  }
+  pvOutputProfile: Array<{ time: string; outputKw: number }>
+  loadProfile: Array<{ time: string; loadKw: number }>
+  netLoadProfile: Array<{ time: string; pvKw: number; loadKw: number; netKw: number }>
+  backfeedAnalysis: {
+    risk: 'low' | 'medium' | 'high'
+    maxBackfeedKw: number
+    backfeedHoursCount: number
+    backfeedHours: string[]
+  }
+  voltageAnalysis: {
+    timeSeries: Array<{ time: string; voltageKv: number; deviationPct: number }>
+    maxDeviationPct: number
+    avgDeviationPct: number
+    violationCount: number
+    violationRatePct: number
+  }
+  lineAnalysis: {
+    lineLengthKm: number
+    currentSpec: string
+    currentResistanceOhm: number
+    currentReactanceOhm: number
+    currentImpedanceOhm: number
+    currentRatedMva: number
+    actualPeakMva: number
+    loadRatePct: number
+    isOverloaded: boolean
+    voltageDropPct: number
+    recommendedSpec: string
+    recommendedResistanceOhm: number
+    recommendedReactanceOhm: number
+    targetRatedMva: number
+    constructionDifficulty: string
+  }
+  recommended: {
+    ratedCapacityKw: number
+    storage: StorageConfig & { reasoning: string }
+    reactive: ReactiveCompConfig & { reasoning: string }
+    line: LineModificationPlan & { reasoning: string }
+  }
+}
+
+export async function analyzeCandidatePoint(candidatePointId: string) {
+  const res = await apiClient.post('/api/v1/planning/candidate-analysis', { candidatePointId })
+  return res.data?.data as CandidateAnalysisResult
 }
 
 // ==================== Absorption Plans (2.1.3) ====================
@@ -391,7 +447,7 @@ export async function fetchModelTypeFields(typeId: string) {
 
 export async function saveModelTypeFields(typeId: string, fields: Array<{
   fieldCode: string; fieldName: string; fieldType: string
-  fieldOptions?: string; isRequired: boolean; sortOrder: number
+  fieldOptions?: string; isRequired: boolean; sortOrder: number; category?: string
 }>) {
   const res = await apiClient.post(`/api/v1/planning/pv-model-types/${typeId}/fields`, fields)
   return res.data?.data as PvModelTypeField[]

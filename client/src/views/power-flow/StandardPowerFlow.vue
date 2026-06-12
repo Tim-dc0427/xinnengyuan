@@ -1,119 +1,47 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
-import { submitStandardPF, getTaskResult, fetchGridBranches, fetchGridBuses, reuseHistoryParams } from '@/api/power-flow'
+import { ref, computed, onMounted } from 'vue'
+import { submitStandardPF, getTaskResult, fetchGridBranches, fetchSolarPVStations, reuseHistoryParams } from '@/api/power-flow'
 import { ElMessage } from 'element-plus'
 import CalcProgress from '@/components/calculation/CalcProgress.vue'
-import ChartContainer from '@/components/common/ChartContainer.vue'
-import PowerFlowTopology from '@/components/power-flow/PowerFlowTopology.vue'
-import FeederSelector from '@/components/calculation/FeederSelector.vue'
 import { useRoute } from 'vue-router'
-import { useFeederSelection } from '@/composables/useFeederSelection'
 
 const route = useRoute()
 
 const taskId = ref<string | null>(null)
 const loading = ref(false)
 const result: any = ref(null)
-const viewMode = ref<'topology' | 'tables'>('topology')
-const allBranches = ref<any[]>([])
-const allBuses = ref<any[]>([])
 const scenario = ref<'normal' | 'fault' | 'solar'>('normal')
 const faultBranchId = ref('')
-const weatherScenario = ref<'actual' | 'sunny' | 'cloudy' | 'rainy'>('actual')
 
-const feeder = useFeederSelection()
+// 光伏电站列表
+const solarStations = ref<any[]>([])
+const selectedSolarBusIds = ref<string[]>([])
 
-// 客户端 BFS，与后端 trimTopology 算法一致
-function getReachableBusIds(startBusIds: string[], branches: any[], buses: any[]): Set<string> {
-  const busMap = new Map<string, any>()
-  for (const bus of buses) {
-    busMap.set(bus.id, bus)
-  }
-
-  const byToBus = new Map<string, any[]>()
-  const byFromBus = new Map<string, any[]>()
-  for (const b of branches) {
-    if (!byToBus.has(b.to_bus_id)) byToBus.set(b.to_bus_id, [])
-    byToBus.get(b.to_bus_id)!.push(b)
-    if (!byFromBus.has(b.from_bus_id)) byFromBus.set(b.from_bus_id, [])
-    byFromBus.get(b.from_bus_id)!.push(b)
-  }
-
-  const reachable = new Set<string>()
-
-  // 阶段1：只沿变压器向上追溯（10kV→110kV→220kV→500kV），遇跨区节点停止
-  const startZones = new Set(startBusIds.map(id => busMap.get(id)?.zone).filter(Boolean))
-  const frontier = [...startBusIds]
-  while (frontier.length > 0) {
-    const busId = frontier.pop()!
-    if (reachable.has(busId)) continue
-    if (!busMap.has(busId)) continue
-    reachable.add(busId)
-    for (const br of (byToBus.get(busId) || [])) {
-      if (!reachable.has(br.from_bus_id) && br.branch_type === 'TRANSFORMER') {
-        const targetZone = busMap.get(br.from_bus_id)?.zone
-        if (targetZone && startZones.has(targetZone)) {
-          frontier.push(br.from_bus_id)
-        }
-      }
-    }
-  }
-
-  // 阶段2：10kV 起点层级同级互联（仅同区域）
-  for (const busId of startBusIds) {
-    for (const br of (byToBus.get(busId) || [])) {
-      if (br.branch_type !== 'TRANSFORMER' && !reachable.has(br.from_bus_id)) {
-        const tz = busMap.get(br.from_bus_id)?.zone
-        if (tz && startZones.has(tz)) reachable.add(br.from_bus_id)
-      }
-    }
-    for (const br of (byFromBus.get(busId) || [])) {
-      if (br.branch_type !== 'TRANSFORMER' && !reachable.has(br.to_bus_id)) {
-        const tz = busMap.get(br.to_bus_id)?.zone
-        if (tz && startZones.has(tz)) reachable.add(br.to_bus_id)
-      }
-    }
-  }
-
-  // 阶段3：从起点向下游1跳（仅同区域）
-  for (const busId of startBusIds) {
-    for (const br of (byFromBus.get(busId) || [])) {
-      if (!reachable.has(br.to_bus_id)) {
-        const tz = busMap.get(br.to_bus_id)?.zone
-        if (tz && startZones.has(tz)) reachable.add(br.to_bus_id)
-      }
-    }
-  }
-
-  return reachable
-}
-
-// 根据选中馈线过滤的故障支路选项
+// N-1 开断选项：仅 110kV 及以上线路/变压器
+const allBranches = ref<any[]>([])
 const faultBranchOptions = computed(() => {
-  if (feeder.selectedFeederIds.value.length === 0) return allBranches.value
-  // 从选中馈线获取 10kV 母线 ID
-  const startBusIds: string[] = []
-  for (const fid of feeder.selectedFeederIds.value) {
-    const f = feeder.feeders.value.find((x: any) => x.id === fid)
-    if (f?.busIds) startBusIds.push(...f.busIds)
-  }
-  if (startBusIds.length === 0) return allBranches.value
-
-  const reachable = getReachableBusIds(startBusIds, allBranches.value, allBuses.value)
-  const filtered = allBranches.value.filter(b => reachable.has(b.from_bus_id) && reachable.has(b.to_bus_id))
-
-  // 如果当前选中的故障支路不在过滤后列表中，清空
-  if (faultBranchId.value && !filtered.find((b: any) => b.id === faultBranchId.value)) {
-    faultBranchId.value = ''
-  }
-
-  return filtered
+  return allBranches.value.filter((b: any) =>
+    (b.voltage_level === '110kV' || b.voltage_level === '220kV')
+  )
 })
 
+const busTypeMap: Record<string, string> = {
+  PQ: 'PQ节点',
+  PV: 'PV节点',
+  Slack: '平衡节点',
+}
+
 onMounted(async () => {
-  allBranches.value = (await fetchGridBranches()) || []
-  allBuses.value = (await fetchGridBuses()) || []
-  feeder.loadFeeders()
+  const [branches, stations] = await Promise.all([
+    fetchGridBranches(),
+    fetchSolarPVStations(),
+  ])
+  allBranches.value = branches || []
+  solarStations.value = (stations || []).map((s: any) => ({
+    ...s,
+    busId: s.bus_id,
+  }))
+
   const tid = route.query.taskId as string
   if (tid) {
     taskId.value = tid
@@ -126,38 +54,37 @@ onMounted(async () => {
       if (p.scenario) {
         scenario.value = p.scenario.type || 'normal'
         if (p.scenario.faultBranchId) faultBranchId.value = p.scenario.faultBranchId
-        if (p.scenario.weatherScenario) weatherScenario.value = p.scenario.weatherScenario
       }
-      if (p.feederIds?.length) feeder.selectedFeederIds.value = p.feederIds
+      if (p.solarBusIds?.length) selectedSolarBusIds.value = p.solarBusIds
     } catch (_) {}
   }
 })
 
-// 馈线选择变化时清空旧计算结果，避免拓扑图与断开支路下拉不一致
-watch(() => feeder.selectedFeederIds.value, () => {
+// 场景切换时清空旧结果
+function onScenarioChange() {
   result.value = null
-})
+  if (scenario.value !== 'fault') faultBranchId.value = ''
+}
 
 async function startCalculation() {
-  if (scenario.value === 'solar' && feeder.selectedFeederIds.value.length === 0) {
-    ElMessage.warning('光伏接入场景请先选择馈线')
+  if (scenario.value === 'solar' && selectedSolarBusIds.value.length === 0) {
+    ElMessage.warning('请选择光伏电站')
+    return
+  }
+  if (scenario.value === 'fault' && !faultBranchId.value) {
+    ElMessage.warning('请选择开断元件')
     return
   }
   loading.value = true
   result.value = null
   try {
-    const useFeeder = feeder.selectedFeederIds.value.length > 0
     const params: any = { scenario: { type: scenario.value } }
-    if (scenario.value === 'fault') params.scenario.faultBranchId = faultBranchId.value
+    if (scenario.value === 'fault') {
+      params.scenario.faultBranchId = faultBranchId.value
+    }
     if (scenario.value === 'solar') {
-      params.scenario.pvBusIds = feeder.feederPVBusIds.value
-      params.scenario.weatherScenario = weatherScenario.value
+      params.scenario.pvBusIds = selectedSolarBusIds.value
     }
-    if (useFeeder) {
-      params.feederIds = feeder.selectedFeederIds.value
-      params.pvBusIds = feeder.feederPVBusIds.value
-    }
-    console.log('[StandardPowerFlow] submitting params:', JSON.stringify(params))
     const res = await submitStandardPF(params)
     taskId.value = res.taskId
   } catch (e: any) {
@@ -188,79 +115,37 @@ function onFailed(err: string) {
   loading.value = false
 }
 
-
-// 拓扑区域筛选
-const zoneFilter = ref('')
-const zoneOptions = computed(() => {
-  if (!result.value?.nodes) return []
-  const zones = [...new Set(result.value.nodes.map((n: any) => n.zone).filter(Boolean))] as string[]
-  return zones.sort()
-})
-const filteredTopoNodes = computed(() => {
-  if (!result.value?.nodes) return []
-  if (!zoneFilter.value) return result.value.nodes
-  return result.value.nodes.filter((n: any) => n.zone === zoneFilter.value)
-})
-const filteredTopoBranches = computed(() => {
-  if (!result.value?.branchRes) return []
-  if (!zoneFilter.value) return result.value.branchRes
-  const nodeIds = new Set(filteredTopoNodes.value.map((n: any) => n.busId))
-  return result.value.branchRes.filter((b: any) => nodeIds.has(b.fromBus) && nodeIds.has(b.toBus))
-})
-
-// 节点表格行样式：弱节点高亮
-function nodeRowStyle({ row }: any) {
-  if (row.isWeakNode) return { backgroundColor: '#fff5f5' }
-  if (row.stabilityMargin < 0.9) return { backgroundColor: '#fffbe6' }
-  return {}
-}
-
-// 支路表格行样式：反向潮流高亮
+// 线路/变压器表格行样式：反向潮流高亮
 function branchRowStyle({ row }: any) {
   if (row.pFromMw < 0) return { backgroundColor: '#fff5f5' }
   if (row.isOverloaded) return { backgroundColor: '#fff5f5' }
   if (row.loadingPct > 80) return { backgroundColor: '#fffbe6' }
   return {}
 }
-
 </script>
 
 <template>
   <div class="online-page">
     <div class="chart-panel-title">潮流计算支持</div>
     <div class="filter-bar">
-      <FeederSelector
-        v-if="feeder.feeders.value.length > 0"
-        :feeder-zone-options="feeder.feederZoneOptions.value"
-        :feeder-options="feeder.feederOptions.value"
-        :selected-feeder-ids="feeder.selectedFeederIds.value"
-        :feeder-zone-filter="feeder.feederZoneFilter.value"
-        @update:selected-feeder-ids="feeder.selectedFeederIds.value = $event"
-        @update:feeder-zone-filter="feeder.feederZoneFilter.value = $event"
-        @select-all="feeder.selectAllFeeders()"
-        @deselect-all="feeder.deselectAllFeeders()"
-      />
       <div class="filter-group">
         <span class="filter-label">场景类型：</span>
-        <el-radio-group v-model="scenario">
+        <el-radio-group v-model="scenario" @change="onScenarioChange">
           <el-radio value="normal">正常运行</el-radio>
           <el-radio value="fault">N-1故障</el-radio>
           <el-radio value="solar">光伏接入</el-radio>
         </el-radio-group>
       </div>
       <div v-if="scenario === 'fault'" class="filter-group">
-        <span class="filter-label">断开支路：</span>
-        <el-select v-model="faultBranchId" placeholder="选择断开支路" size="small" style="width:200px">
-          <el-option v-for="b in faultBranchOptions" :key="b.id" :label="`${b.from_bus_id} → ${b.to_bus_id}`" :value="b.id" />
+        <span class="filter-label">N-1开断：</span>
+        <el-select v-model="faultBranchId" placeholder="选择开断元件" size="small" style="width:280px">
+          <el-option v-for="b in faultBranchOptions" :key="b.id" :label="b.remark || `${b.from_bus_id} → ${b.to_bus_id}`" :value="b.id" />
         </el-select>
       </div>
-      <div v-if="scenario === 'solar' && feeder.selectedFeederIds.value.length > 0" class="filter-group">
-        <span class="filter-label">天气场景：</span>
-        <el-select v-model="weatherScenario" size="small" style="width:160px">
-          <el-option value="actual" label="实际测量值" />
-          <el-option value="sunny" label="典型晴天" />
-          <el-option value="cloudy" label="多云天气" />
-          <el-option value="rainy" label="阴雨天气" />
+      <div v-if="scenario === 'solar'" class="filter-group">
+        <span class="filter-label">光伏电站：</span>
+        <el-select v-model="selectedSolarBusIds" multiple collapse-tags collapse-tags-tooltip placeholder="选择电站" size="small" style="width:340px">
+          <el-option v-for="s in solarStations" :key="s.busId" :label="`${s.station_name}（${s.installed_capacity_mw}MW / ${s.grid_connection_voltage_kv || '-'}kV）`" :value="s.busId" />
         </el-select>
       </div>
       <el-button type="primary" :loading="loading" @click="startCalculation">
@@ -276,66 +161,6 @@ function branchRowStyle({ row }: any) {
     />
 
     <template v-if="result">
-      <!-- 视图切换 -->
-      <div class="view-toggle">
-        <el-radio-group v-model="viewMode" size="small">
-          <el-radio-button value="topology">
-            <el-icon><Monitor /></el-icon>
-            拓扑图
-          </el-radio-button>
-          <el-radio-button value="tables">
-            <el-icon><List /></el-icon>
-            数据表
-          </el-radio-button>
-        </el-radio-group>
-      </div>
-
-      <!-- 拓扑图视图 -->
-      <div v-if="viewMode === 'topology'" class="chart-panel">
-        <div class="panel-header">
-          <el-icon color="#267F7B"><Connection /></el-icon>
-          <span>电网拓扑潮流图</span>
-          <el-select v-model="zoneFilter" size="small" style="width:140px;margin-left:12px" clearable placeholder="全部区域">
-            <el-option v-for="z in zoneOptions" :key="z" :label="z" :value="z" />
-          </el-select>
-        </div>
-        <PowerFlowTopology
-          :nodes="filteredTopoNodes"
-          :branches="filteredTopoBranches"
-        />
-      </div>
-
-      <!-- 数据表视图 -->
-      <template v-if="viewMode === 'tables'">
-      <div class="chart-panel">
-        <div class="panel-header">
-          <el-icon color="#267F7B"><TrendCharts /></el-icon>
-          <span>节点电压分布（标幺值）</span>
-        </div>
-        <ChartContainer
-          :option="{
-            tooltip: {
-              trigger: 'axis',
-              formatter: (params: any) => {
-                const p = params[0];
-                const row = result.nodes[p.dataIndex];
-                return `${row.name}（${row.voltageLevel}）<br/>标幺电压: ${p.value} p.u.<br/>实际电压: ${(row.voltagePu * row.baseKv).toFixed(2)} kV<br/>相角: ${row.angleDeg}°<br/>类型: ${row.busType}`;
-              }
-            },
-            xAxis: { type: 'category', data: result.nodes.map((n: any) => n.name || n.busId), axisLabel: { rotate: 45, fontSize: 11 } },
-            yAxis: { type: 'value', name: '电压(p.u.)', min: 0.9, max: 1.1 },
-            series: [{
-              type: 'bar', data: result.nodes.map((n: any) => ({
-                value: Number(n.voltagePu.toFixed(4)),
-                itemStyle: { color: Math.abs(n.voltagePu - 1) > 0.05 ? '#F56C6C' : Math.abs(n.voltagePu - 1) > 0.03 ? '#E6A23C' : '#67C23A' },
-              })),
-              barWidth: '40%',
-            }],
-            grid: { left: 50, right: 20, bottom: 80, top: 20 },
-          }"
-          style="height: 300px"
-        />
-      </div>
 
       <!-- 节点潮流结果表：实际电压 + 有功/无功 -->
       <div class="chart-panel">
@@ -343,15 +168,15 @@ function branchRowStyle({ row }: any) {
           <el-icon color="#267F7B"><List /></el-icon>
           <span>节点潮流结果 — 电压幅值/相角、有功/无功功率</span>
         </div>
-        <el-table :data="result.nodes" stripe size="small" max-height="500" style="width: 100%" :row-style="nodeRowStyle">
+        <el-table :data="result.nodes" stripe size="small" max-height="500" style="width: 100%">
           <el-table-column label="节点名称" min-width="110">
             <template #default="{ row }">{{ row.name }}</template>
           </el-table-column>
           <el-table-column label="电压等级" width="80">
             <template #default="{ row }">{{ row.voltageLevel }}</template>
           </el-table-column>
-          <el-table-column label="类型" width="60">
-            <template #default="{ row }">{{ row.busType }}</template>
+          <el-table-column label="节点类型" width="80">
+            <template #default="{ row }">{{ busTypeMap[row.busType] || row.busType }}</template>
           </el-table-column>
           <el-table-column label="实际电压(kV)" width="110">
             <template #default="{ row }">
@@ -390,34 +215,21 @@ function branchRowStyle({ row }: any) {
               <span v-else class="null-value">—</span>
             </template>
           </el-table-column>
-          <el-table-column label="稳定裕度" width="85">
-            <template #default="{ row }">
-              <span :style="{ color: row.stabilityMargin < 0.9 ? '#F56C6C' : '#67C23A', fontWeight: row.isWeakNode ? 'bold' : 'normal' }">
-                {{ (row.stabilityMargin * 100).toFixed(1) }}%
-              </span>
-            </template>
-          </el-table-column>
-          <el-table-column label="薄弱节点" width="80">
-            <template #default="{ row }">
-              <el-tag v-if="row.isWeakNode" type="danger" size="small">是</el-tag>
-              <span v-else class="null-value">—</span>
-            </template>
-          </el-table-column>
         </el-table>
       </div>
 
-      <!-- 支路潮流结果表：有功/无功 + 潮流方向 + 网损 -->
+      <!-- 线路/变压器潮流 -->
       <div class="chart-panel">
         <div class="panel-header">
           <el-icon color="#267F7B"><Connection /></el-icon>
-          <span>支路潮流结果 — 有功/无功功率、潮流方向、网损</span>
+          <span>线路/变压器潮流 — 有功/无功功率、潮流方向、网损</span>
         </div>
         <el-table :data="result.branchRes" stripe size="small" max-height="500" style="width: 100%" :row-style="branchRowStyle">
-          <el-table-column label="支路" min-width="130">
-            <template #default="{ row }">{{ row.fromBusName }}→{{ row.toBusName }}</template>
+          <el-table-column label="线路/变压器名称" min-width="130">
+            <template #default="{ row }">{{ row.remark || `${row.fromBusName}→${row.toBusName}` }}</template>
           </el-table-column>
           <el-table-column label="类型" width="70">
-            <template #default="{ row }">{{ row.branchType }}</template>
+            <template #default="{ row }">{{ row.branchType === 'LINE' ? '线路' : row.branchType === 'TRANSFORMER' ? '变压器' : row.branchType }}</template>
           </el-table-column>
           <el-table-column label="电压等级" width="80">
             <template #default="{ row }">{{ row.voltageLevel }}</template>
@@ -444,39 +256,27 @@ function branchRowStyle({ row }: any) {
           <el-table-column label="末端无功(Mvar)" width="110">
             <template #default="{ row }">{{ Number(row.qToMvar).toFixed(2) }}</template>
           </el-table-column>
-          <el-table-column label="线损(MW)" width="80">
+          <el-table-column label="网损(MW)" width="80">
             <template #default="{ row }">
               <span style="color:#E6A23C;font-weight:600">{{ Number(row.lossMw).toFixed(3) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="线损率(%)" width="85">
-            <template #default="{ row }">
-              <span :style="{ color: row.lossPercent > 3 ? '#F56C6C' : '#909399' }">{{ Number(row.lossPercent).toFixed(2) }}%</span>
-            </template>
-          </el-table-column>
           <el-table-column label="负载率(%)" width="85">
             <template #default="{ row }">
-              <el-tag :type="row.isOverloaded ? 'danger' : row.loadingPct > 80 ? 'warning' : 'success'" size="small">
+              <el-tag :type="row.loadingPct > 80 ? 'warning' : 'success'" size="small">
                 {{ Number(row.loadingPct).toFixed(1) }}%
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="过载" width="60">
-            <template #default="{ row }">
-              <el-tag v-if="row.isOverloaded" type="danger" size="small">是</el-tag>
-              <span v-else class="null-value">—</span>
-            </template>
-          </el-table-column>
         </el-table>
       </div>
-    </template> <!-- end tables -->
     </template> <!-- end result -->
   </div>
 </template>
 
 <script lang="ts">
-import { TrendCharts, List, Connection, Monitor } from '@element-plus/icons-vue'
-export default { components: { TrendCharts, List, Connection, Monitor } }
+import { List, Connection } from '@element-plus/icons-vue'
+export default { components: { List, Connection } }
 </script>
 
 <style scoped>

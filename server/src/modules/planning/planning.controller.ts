@@ -159,6 +159,16 @@ export class PlanningController {
     res.json({ code: 200, message: 'ok', data })
   }
 
+  // ==================== Candidate Analysis ====================
+  analyzeCandidatePoint = async (req: Request, res: Response) => {
+    try {
+      const data = await this.service.analyzeCandidatePoint(req.body.candidatePointId)
+      res.json({ code: 200, message: 'ok', data })
+    } catch (e: any) {
+      res.status(400).json({ code: 400, message: e.message || '分析失败', data: null })
+    }
+  }
+
   // ==================== Absorption Plans (2.1.3) ====================
   generateAbsorptionPlan = async (req: Request, res: Response) => {
     const data = await this.service.generateAbsorptionPlan(req.body)

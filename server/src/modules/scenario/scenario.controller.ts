@@ -61,7 +61,7 @@ export class ScenarioController {
   }
 
   exportScenarios = async (req: Request, res: Response) => {
-    const ids = req.body.ids || req.query.ids ? String(req.query.ids).split(',') : []
+    const ids = req.body.ids ?? (req.query.ids ? String(req.query.ids).split(',') : [])
     const data = await this.service.exportScenarios(ids)
     res.json({ code: 200, message: 'ok', data })
   }

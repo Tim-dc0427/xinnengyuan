@@ -25,6 +25,7 @@ import type {
   EquipmentImpactItem,
   ComplaintStatsItem,
   HotspotItem,
+  ComplaintTicketItem,
   EventAnalysisResult,
   Alert,
 } from '@new-energy/shared'
@@ -191,7 +192,7 @@ export async function fetchPowerReliability(query: ReliabilityQuery) {
 
 export async function fetchQualificationRate(query: { startDate: string; endDate: string; voltageLevel?: string }) {
   const res = await apiClient.get('/api/v1/grid-diagnosis/power-quality/qualification-rate', { params: query })
-  return res.data?.data as { summaryLedger: QualificationLedgerItem[]; monthlyLedger: QualificationLedgerItem[]; trendData: QualificationTrendItem[]; trendKeys: string[]; anomalyPoints: VoltageAnomalyPoint[] }
+  return res.data?.data as { hourlyLedger: QualificationLedgerItem[]; trendData: QualificationTrendItem[]; trendKeys: string[]; anomalyPoints: VoltageAnomalyPoint[] }
 }
 
 export async function fetchEquipmentImpact(query: { startDate: string; endDate: string }) {
@@ -207,6 +208,11 @@ export async function fetchComplaintStats(query: { startDate: string; endDate: s
 export async function fetchHotspotDistribution(query: { startDate: string; endDate: string }) {
   const res = await apiClient.get('/api/v1/grid-diagnosis/power-quality/hotspot-distribution', { params: query })
   return res.data?.data as HotspotItem[]
+}
+
+export async function fetchComplaintTickets(query?: { isVoltageRelated?: string; industry?: string; zone?: string }) {
+  const res = await apiClient.get('/api/v1/grid-diagnosis/power-quality/complaint-tickets', { params: query })
+  return res.data?.data as ComplaintTicketItem[]
 }
 
 export async function fetchAlerts(query?: { level?: string; limit?: number }) {

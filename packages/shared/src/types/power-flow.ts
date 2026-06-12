@@ -27,12 +27,27 @@ export interface ThreePhaseImbalance {
 
 export interface NodeStabilityResult {
   nodeId: string
-  nodeName: string
+  busId: string
+  name: string
+  zone: string
+  voltageLevel: string
   voltagePu: number
   angleDeg: number
   stabilityMargin: number
   isWeakNode: boolean
   weakNodeReason: string | null
+  /** 关联发电机有功出力 (MW) */
+  pgMw: number
+  /** 关联发电机无功出力 (Mvar) */
+  qgMvar: number
+  /** 关联负荷有功 (MW) */
+  pdMw: number
+  /** 关联负荷无功 (Mvar) */
+  qdMvar: number
+  /** 母线类型 (slack/pv/pq) */
+  busType: string
+  /** 关联设备描述（发电机/负荷/光伏电站名称等） */
+  connectedDevices: string[]
 }
 
 // ==================== Data Validation ====================

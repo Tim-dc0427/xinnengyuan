@@ -26,7 +26,7 @@ export async function seed(knex: Knex): Promise<void> {
     {
       name: '钱塘区临江工业园负荷',
       loadType: 'INDUSTRIAL',
-      busName: '钱塘变220kV',
+      busName: '义蓬变',
       peakLoadKw: 80000,
       annualConsumptionMwh: 350000,
       zone: '钱塘区',
@@ -38,7 +38,7 @@ export async function seed(knex: Knex): Promise<void> {
     {
       name: '钱塘区临江高科园东区负荷',
       loadType: 'INDUSTRIAL',
-      busName: '钱塘东变220kV',
+      busName: '临江变',
       peakLoadKw: 120000,
       annualConsumptionMwh: 520000,
       zone: '钱塘区',
@@ -50,7 +50,7 @@ export async function seed(knex: Knex): Promise<void> {
     {
       name: '钱塘区临江高科园西区负荷',
       loadType: 'INDUSTRIAL',
-      busName: '钱塘西变220kV',
+      busName: '新湾变',
       peakLoadKw: 160000,
       annualConsumptionMwh: 700000,
       zone: '钱塘区',
@@ -62,7 +62,7 @@ export async function seed(knex: Knex): Promise<void> {
     {
       name: '余杭区未来科技城负荷',
       loadType: 'COMMERCIAL',
-      busName: '余杭变220kV',
+      busName: '仓前变',
       peakLoadKw: 45000,
       annualConsumptionMwh: 180000,
       zone: '余杭区',
@@ -74,7 +74,7 @@ export async function seed(knex: Knex): Promise<void> {
     {
       name: '萧山区居民负荷聚合',
       loadType: 'RESIDENTIAL',
-      busName: '萧山变220kV',
+      busName: '花木变',
       peakLoadKw: 30000,
       annualConsumptionMwh: 120000,
       zone: '萧山区',
@@ -86,7 +86,7 @@ export async function seed(knex: Knex): Promise<void> {
     {
       name: '临安区农业灌溉负荷',
       loadType: 'AGRICULTURAL',
-      busName: '临安变110kV',
+      busName: '锦城变',
       peakLoadKw: 5000,
       annualConsumptionMwh: 8000,
       zone: '临安区',
@@ -98,7 +98,7 @@ export async function seed(knex: Knex): Promise<void> {
     {
       name: '滨江区市政照明负荷',
       loadType: 'MUNICIPAL',
-      busName: '滨江变220kV',
+      busName: '滨江变',
       peakLoadKw: 8000,
       annualConsumptionMwh: 15000,
       zone: '滨江区',
@@ -152,7 +152,7 @@ export async function seed(knex: Knex): Promise<void> {
     {
       name: '钱塘储能站一期',
       storageType: 'BATTERY',
-      busName: '钱塘变220kV',
+      busName: '义蓬变',
       ratedPowerKw: 50000,
       ratedCapacityKwh: 200000,
       efficiencyPct: 92,
@@ -165,7 +165,7 @@ export async function seed(knex: Knex): Promise<void> {
     {
       name: '钱塘储能站二期',
       storageType: 'BATTERY',
-      busName: '钱塘东变220kV',
+      busName: '临江变',
       ratedPowerKw: 40000,
       ratedCapacityKwh: 80000,
       efficiencyPct: 93,
@@ -178,7 +178,7 @@ export async function seed(knex: Knex): Promise<void> {
     {
       name: '钱塘储能站三期',
       storageType: 'BATTERY',
-      busName: '钱塘西变220kV',
+      busName: '新湾变',
       ratedPowerKw: 55000,
       ratedCapacityKwh: 110000,
       efficiencyPct: 93,
@@ -191,7 +191,7 @@ export async function seed(knex: Knex): Promise<void> {
     {
       name: '余杭储能站',
       storageType: 'BATTERY',
-      busName: '余杭变220kV',
+      busName: '仓前变',
       ratedPowerKw: 30000,
       ratedCapacityKwh: 100000,
       efficiencyPct: 90,
@@ -204,7 +204,7 @@ export async function seed(knex: Knex): Promise<void> {
     {
       name: '临安抽水蓄能站',
       storageType: 'PUMPED_HYDRO',
-      busName: '临安变110kV',
+      busName: '锦城变',
       ratedPowerKw: 100000,
       ratedCapacityKwh: 800000,
       efficiencyPct: 78,
@@ -217,7 +217,7 @@ export async function seed(knex: Knex): Promise<void> {
     {
       name: '建德储能站',
       storageType: 'BATTERY',
-      busName: '建德变110kV',
+      busName: '寿昌变',
       ratedPowerKw: 15000,
       ratedCapacityKwh: 30000,
       efficiencyPct: 91,
@@ -230,7 +230,7 @@ export async function seed(knex: Knex): Promise<void> {
     {
       name: '临安东储能站',
       storageType: 'BATTERY',
-      busName: '临安东变110kV',
+      busName: '科创变',
       ratedPowerKw: 4000,
       ratedCapacityKwh: 8000,
       efficiencyPct: 90,
@@ -243,7 +243,7 @@ export async function seed(knex: Knex): Promise<void> {
     {
       name: '萧山南阳储能站',
       storageType: 'BATTERY',
-      busName: '萧山10kV',
+      busName: '建设四路开闭所',
       ratedPowerKw: 5000,
       ratedCapacityKwh: 10000,
       efficiencyPct: 90,
@@ -256,7 +256,7 @@ export async function seed(knex: Knex): Promise<void> {
     {
       name: '余杭径山储能站',
       storageType: 'BATTERY',
-      busName: '余杭10kV',
+      busName: '文一西路开闭所',
       ratedPowerKw: 1000,
       ratedCapacityKwh: 2000,
       efficiencyPct: 89,
@@ -269,7 +269,7 @@ export async function seed(knex: Knex): Promise<void> {
     {
       name: '富阳渔山储能站',
       storageType: 'BATTERY',
-      busName: '富阳10kV',
+      busName: '富春路开闭所',
       ratedPowerKw: 3000,
       ratedCapacityKwh: 6000,
       efficiencyPct: 90,

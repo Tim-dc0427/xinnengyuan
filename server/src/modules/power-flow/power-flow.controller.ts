@@ -7,9 +7,14 @@ export class PowerFlowController {
   getIndicators = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getIndicators(req.query as any) }) }
   getNodeStability = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getNodeStability(req.query as any) }) }
   getThreePhase = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getThreePhase(req.query as any) }) }
+  getThreePhaseTrend = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getThreePhaseTrend(req.query as any) }) }
 
-  getThresholds = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getThresholds() }) }
+  getThresholds = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getThresholds(req.query as any) }) }
   updateThresholds = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.updateThresholds(req.body) }) }
+  deleteThreshold = async (req: Request, res: Response) => {
+    try { res.json({ code: 200, message: 'ok', data: await this.service.deleteThreshold(req.params.id) }) }
+    catch (e: any) { res.status(400).json({ code: 400, message: e.message || '删除失败' }) }
+  }
 
   checkCompleteness = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.checkCompleteness(req.body) }) }
   checkBoundary = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.checkBoundary(req.body) }) }

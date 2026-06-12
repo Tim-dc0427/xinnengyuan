@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import ChartContainer from '@/components/common/ChartContainer.vue'
 import { fetchStations, fetchPowerReliability } from '@/api/grid-diagnosis'
+import { fetchDataRanges } from '@/api/system'
 import type { PowerSupplyReliability, FaultTreeNode } from '@new-energy/shared'
 
 const selectedPoint = ref('')
@@ -17,6 +18,15 @@ onMounted(async () => {
   stations.value = list || []
   if (list?.length) {
     selectedPoint.value = list[0].id
+    try {
+      const ranges = await fetchDataRanges()
+      const pv = ranges.pv_output_measurements
+      if (pv?.minTime && pv?.maxTime) {
+        const today = new Date().toISOString().slice(0, 10)
+        const endDate = today < pv.maxTime.slice(0, 10) ? today : pv.maxTime.slice(0, 10)
+        dateRange.value = [pv.minTime.slice(0, 10), endDate]
+      }
+    } catch { /* 兜底 */ }
     await loadData()
   }
 })
@@ -92,11 +102,11 @@ const comparisonSAIFIOption = computed(() => {
   return {
     tooltip: { trigger: 'axis', formatter: (p: any) => {
       const theo = p[0]?.value ?? '-', actual = p[1]?.value
-      return `${p[0]?.axisValue}<br/>理论 SAIFI：${theo} 次/年<br/>实际 SAIFI：${actual ?? '无数据'} 次/年`
+      return `${p[0]?.axisValue}<br/>理论 SAIFI：${theo} 次/户·年<br/>实际 SAIFI：${actual ?? '无数据'} 次/户·年`
     }},
     legend: { data: ['理论 SAIFI', '实际 SAIFI'] },
     xAxis: { type: 'category', data: mc.map(d => d.month.slice(0, 7)), axisLabel: { rotate: 45 } },
-    yAxis: { type: 'value', name: '次/年' },
+    yAxis: { type: 'value', name: '次/户·年' },
     series: [
       { name: '理论 SAIFI', type: 'line', data: mc.map(d => d.theoretical), smooth: true, symbol: 'none', lineStyle: { color: '#409EFF' } },
       { name: '实际 SAIFI', type: 'scatter', data: mc.map((d, i) => {
@@ -104,13 +114,15 @@ const comparisonSAIFIOption = computed(() => {
         const dev = Math.abs(d.actual - d.theoretical)
         const isSignificant = dev > threshold
         return { value: [mc[i].month.slice(0, 7), d.actual], symbolSize: isSignificant ? 18 : 10, itemStyle: { color: isSignificant ? '#F56C6C' : '#E6A23C' }, dev }
-      }).filter(Boolean), symbolSize: 12,
-        markLine: { silent: true, symbol: 'none', label: { formatter: '理论值' }, data: [{ yAxis: result.value.saifi, lineStyle: { color: '#409EFF', type: 'dashed' } }] },
-      },
+      }).filter((v: any) => v != null), symbolSize: 12 },
     ],
     grid: { left: 60, right: 24, top: 32, bottom: 50 },
   }
 })
+
+const contributionsTableOption = computed(() => ({
+  rowClass: ({ row }: any) => row.group && !row.group.startsWith('  ') ? 'aggregate-row' : '',
+}))
 
 const comparisonSAIDIOption = computed(() => {
   if (!result.value) return {}
@@ -119,13 +131,13 @@ const comparisonSAIDIOption = computed(() => {
     tooltip: { trigger: 'axis' },
     legend: { data: ['理论 SAIDI', '实际 SAIDI'] },
     xAxis: { type: 'category', data: mc.map(d => d.month.slice(0, 7)), axisLabel: { rotate: 45 } },
-    yAxis: { type: 'value', name: '分钟/年' },
+    yAxis: { type: 'value', name: '小时/户·年' },
     series: [
       { name: '理论 SAIDI', type: 'line', data: mc.map(() => result.value!.saidi), smooth: true, symbol: 'none', lineStyle: { color: '#409EFF' } },
       { name: '实际 SAIDI', type: 'scatter', data: mc.map((d, i) => {
         if (d.actualSAIDI == null) return null
         return { value: [mc[i].month.slice(0, 7), d.actualSAIDI], symbolSize: d.actualSAIDI > result.value!.saidi * 1.3 ? 16 : 10, itemStyle: { color: d.actualSAIDI > result.value!.saidi * 1.3 ? '#F56C6C' : '#E6A23C' } }
-      }).filter(Boolean) },
+      }).filter((v: any) => v != null) },
     ],
     grid: { left: 60, right: 24, top: 32, bottom: 50 },
   }
@@ -169,14 +181,14 @@ const comparisonSAIDIOption = computed(() => {
       <div class="metrics-row">
         <div class="metric-card">
           <div class="metric-value">{{ result.saifi }}</div>
-          <div class="metric-label">SAIFI（次/年）</div>
+          <div class="metric-label">SAIFI（次/户·年）</div>
         </div>
         <div class="metric-card">
           <div class="metric-value">{{ result.saidi }}</div>
-          <div class="metric-label">SAIDI（分钟/年）</div>
+          <div class="metric-label">SAIDI（小时/户·年）</div>
         </div>
         <div class="metric-card">
-          <div class="metric-value" style="color:#67C23A">{{ (result.theoreticalReliability * 100).toFixed(2) }}%</div>
+          <div class="metric-value" style="color:#67C23A">{{ (result.theoreticalReliability * 100).toFixed(6) }}%</div>
           <div class="metric-label">理论可靠率</div>
         </div>
         <div class="metric-card" v-if="result.deviationPct != null">
@@ -198,14 +210,14 @@ const comparisonSAIDIOption = computed(() => {
         </div>
         <div style="flex:1">
           <div style="font-size:12px;font-weight:600;color:#606266;margin-bottom:8px">理论贡献值分解</div>
-          <el-table :data="result.contributions" size="small">
+          <el-table :data="result.contributions" size="small" :row-class-name="contributionsTableOption.rowClass">
             <el-table-column prop="group" label="故障类型" />
             <el-table-column prop="saifi" label="SAIFI贡献" width="90" />
             <el-table-column label="占比" width="70">
-              <template #default="{ row }">{{ row.saidiPct }}%</template>
+              <template #default="{ row }">{{ row.saidiPct >= 0 ? row.saidiPct + '%' : '-' }}</template>
             </el-table-column>
           </el-table>
-          <div style="padding:6px 0;font-size:12px;color:#303133;font-weight:600">合计 SAIFI：{{ result.saifi }} 次/年</div>
+          <div style="padding:6px 0;font-size:12px;color:#303133;font-weight:600">合计 SAIFI：{{ result.saifi }} 次/户·年</div>
         </div>
       </div>
       <!-- 故障树节点数据列表 -->
@@ -256,4 +268,7 @@ const comparisonSAIDIOption = computed(() => {
 .metric-card:last-child { border-right:none }
 .metric-value { font-size:22px; font-weight:700; color:#303133; line-height:1.4 }
 .metric-label { font-size:12px; color:#909399; margin-top:2px }
+
+:deep(.aggregate-row) { font-weight:700; background:#f5f7fa }
+:deep(.aggregate-row) td { border-bottom: 1px solid #dcdfe6 }
 </style>

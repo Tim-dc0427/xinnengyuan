@@ -3,18 +3,20 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { usePlanningStore } from '@/stores/planning.store'
-import { fetchConstraintRules, runSpatialAnalysis, fetchCandidatePoints, fetchEvaluation } from '@/api/planning'
-import type { CandidatePoint, ConstraintRule, ComprehensiveEvaluation } from '@new-energy/shared'
+import { fetchConstraintRules, runSpatialAnalysis, fetchCandidatePoints, fetchEvaluation, fetchPotentialSites } from '@/api/planning'
+import type { CandidatePoint, ConstraintRule, ComprehensiveEvaluation, PotentialSite } from '@new-energy/shared'
 import EvaluationTab from './EvaluationTab.vue'
 import ConstraintSettings from './ConstraintSettings.vue'
 
 const router = useRouter()
 const planningStore = usePlanningStore()
 const { candidates } = storeToRefs(planningStore)
-const activeTab = ref('distribution')
+const activeTab = ref('constraint-management')
 const loading = ref(false)
 const rules = ref<ConstraintRule[]>([])
 const evaluations = ref<ComprehensiveEvaluation[]>([])
+const potentialSites = ref<PotentialSite[]>([])
+const selectedCandidate = ref<CandidatePoint | null>(null)
 const selectedEval = ref<ComprehensiveEvaluation | null>(null)
 const evalDialogVisible = ref(false)
 const constraintDialogVisible = ref(false)
@@ -36,6 +38,10 @@ function scoreColor(s: number) {
 
 async function loadRules() {
   try { rules.value = await fetchConstraintRules() } catch { /* ignore */ }
+}
+
+async function loadPotentialSites() {
+  try { potentialSites.value = await fetchPotentialSites() } catch { /* ignore */ }
 }
 
 async function loadCandidates() {
@@ -65,6 +71,7 @@ async function runAnalysis() {
 }
 
 function showEval(candidate: CandidatePoint) {
+  selectedCandidate.value = candidate
   const siteId = candidate.id.replace('cp-', '')
   selectedEval.value = evaluations.value.find(e => e.siteId === siteId) ?? null
   evalDialogVisible.value = true
@@ -81,8 +88,19 @@ function onConstraintSaved() {
   loadRules()
 }
 
+function landTypeLabel(t: string) {
+  const map: Record<string, string> = { desert: '荒漠', gobi: '戈壁', agricultural: '农用地', unused: '未利用地', forest: '林地', other: '其他' }
+  return map[t] ?? t
+}
+
+function terrainLabel(t: string) {
+  const map: Record<string, string> = { plain: '平原', hill: '丘陵', mountain: '山地', plateau: '高原' }
+  return map[t] ?? t
+}
+
 onMounted(() => {
   loadRules()
+  loadPotentialSites()
   loadCandidates()
 })
 </script>
@@ -91,13 +109,73 @@ onMounted(() => {
   <div>
     <div class="chart-panel-title">布点规划智能推荐</div>
     <el-tabs v-model="activeTab">
-      <el-tab-pane label="综合评估" name="evaluation">
+      <!-- Tab 1: 布点约束条件管理 -->
+      <el-tab-pane label="布点约束条件管理" name="constraint-management">
+        <div class="action-bar">
+          <el-button type="primary" @click="constraintDialogVisible = true">约束条件配置</el-button>
+        </div>
+
+        <div class="section">
+          <div class="section-title">接入点约束条件数据</div>
+          <el-table :data="potentialSites" stripe size="small" max-height="520">
+            <el-table-column prop="name" label="接入点名称" min-width="140" fixed />
+            <el-table-column label="资源禀赋">
+              <el-table-column prop="annualIrradiance" label="年辐照量" width="90">
+                <template #default="{ row }">{{ row.annualIrradiance }} kWh/m²</template>
+              </el-table-column>
+              <el-table-column prop="equivHours" label="等效利用小时" width="100">
+                <template #default="{ row }">{{ row.equivHours }} h</template>
+              </el-table-column>
+              <el-table-column prop="annualSunshineHours" label="年日照时数" width="90">
+                <template #default="{ row }">{{ row.annualSunshineHours }} h</template>
+              </el-table-column>
+              <el-table-column prop="peakSunHours" label="峰值日照" width="80">
+                <template #default="{ row }">{{ row.peakSunHours }} h/d</template>
+              </el-table-column>
+            </el-table-column>
+            <el-table-column label="电网接入">
+              <el-table-column prop="distanceToSubstationKm" label="距变电站" width="80">
+                <template #default="{ row }">{{ row.distanceToSubstationKm }} km</template>
+              </el-table-column>
+              <el-table-column prop="availableCapacityMw" label="可开放容量" width="90">
+                <template #default="{ row }">{{ row.availableCapacityMw }} MW</template>
+              </el-table-column>
+              <el-table-column prop="shortCircuitMva" label="短路容量" width="80">
+                <template #default="{ row }">{{ row.shortCircuitMva }} MVA</template>
+              </el-table-column>
+            </el-table-column>
+            <el-table-column label="土地条件">
+              <el-table-column prop="landType" label="土地类型" width="80">
+                <template #default="{ row }">{{ landTypeLabel(row.landType) }}</template>
+              </el-table-column>
+              <el-table-column prop="terrainType" label="地形" width="70">
+                <template #default="{ row }">{{ terrainLabel(row.terrainType) }}</template>
+              </el-table-column>
+              <el-table-column prop="slopeDeg" label="坡度" width="70">
+                <template #default="{ row }">{{ row.slopeDeg }}°</template>
+              </el-table-column>
+              <el-table-column prop="areaMu" label="面积" width="70">
+                <template #default="{ row }">{{ row.areaMu }} 亩</template>
+              </el-table-column>
+              <el-table-column prop="isForbidden" label="禁止建设" width="80">
+                <template #default="{ row }">
+                  <span :style="{ color: row.isForbidden ? '#f56c6c' : '#67c23a', fontWeight: 600 }">{{ row.isForbidden ? '是' : '否' }}</span>
+                </template>
+              </el-table-column>
+            </el-table-column>
+          </el-table>
+        </div>
+      </el-tab-pane>
+
+      <!-- Tab 2: 接入点综合指标评估 -->
+      <el-tab-pane label="接入点综合指标评估" name="evaluation">
         <EvaluationTab />
       </el-tab-pane>
-      <el-tab-pane label="推荐布点规划" name="distribution">
+
+      <!-- Tab 3: 空间分析与候选点推荐 -->
+      <el-tab-pane label="空间分析与候选点推荐" name="spatial-analysis">
         <div class="action-bar">
           <el-button type="primary" @click="runAnalysis" :loading="loading">执行空间分析</el-button>
-          <el-button @click="constraintDialogVisible = true">约束条件配置</el-button>
         </div>
 
         <div class="chart-panel">
@@ -177,34 +255,47 @@ onMounted(() => {
       </el-tab-pane>
     </el-tabs>
 
-    <el-dialog v-model="evalDialogVisible" :title="selectedEval?.locationDesc + ' — 综合指标评估'" width="680" top="5vh">
-      <template v-if="selectedEval">
+    <!-- 约束条件配置弹窗 -->
+    <el-dialog v-model="constraintDialogVisible" title="约束条件配置" width="700px" top="5vh">
+      <ConstraintSettings @close="constraintDialogVisible = false" @saved="onConstraintSaved" />
+    </el-dialog>
+
+    <!-- 候选点综合评估详情弹窗 -->
+    <el-dialog v-model="evalDialogVisible" :title="(selectedCandidate?.locationDesc ?? '') + ' — 综合指标评估'" width="680" top="5vh">
+      <template v-if="selectedCandidate">
         <div class="eval-grid">
           <div class="eval-group">
             <div class="eval-group-title">消纳能力</div>
-            <div class="eval-row"><span class="eval-label">本地最大负荷</span><span class="eval-value">{{ selectedEval.localMaxLoadKw?.toLocaleString() }} kW</span></div>
-            <div class="eval-row"><span class="eval-label">本地最小负荷</span><span class="eval-value">{{ selectedEval.localMinLoadKw?.toLocaleString() }} kW</span></div>
-            <div class="eval-row"><span class="eval-label">可调峰能力</span><span class="eval-value">{{ selectedEval.peakRegulationCapacityKw?.toLocaleString() }} kW</span></div>
-            <div class="eval-row"><span class="eval-label">可接纳容量</span><span class="eval-value">{{ selectedEval.acceptableCapacityKw?.toLocaleString() }} kW</span></div>
+            <div class="eval-row"><span class="eval-label">推荐容量</span><span class="eval-value">{{ (selectedCandidate.recommendedCapacityKw / 1000).toFixed(1) }} MW</span></div>
+            <div class="eval-row"><span class="eval-label">消纳能力</span><span class="eval-value">{{ (selectedCandidate.absorptionCapacityKw / 1000).toFixed(1) }} MW</span></div>
+            <div class="eval-row"><span class="eval-label">本地最大负荷</span><span class="eval-value">{{ selectedEval?.localMaxLoadKw?.toLocaleString() ?? '-' }} kW</span></div>
+            <div class="eval-row"><span class="eval-label">本地最小负荷</span><span class="eval-value">{{ selectedEval?.localMinLoadKw?.toLocaleString() ?? '-' }} kW</span></div>
+            <div class="eval-row"><span class="eval-label">可调峰能力</span><span class="eval-value">{{ selectedEval?.peakRegulationCapacityKw?.toLocaleString() ?? '-' }} kW</span></div>
+            <div class="eval-row"><span class="eval-label">可接纳容量</span><span class="eval-value">{{ selectedEval?.acceptableCapacityKw?.toLocaleString() ?? '-' }} kW</span></div>
           </div>
           <div class="eval-group">
             <div class="eval-group-title">送出通道</div>
-            <div class="eval-row"><span class="eval-label">线路长度</span><span class="eval-value">{{ selectedEval.lineLengthKm }} km</span></div>
-            <div class="eval-row"><span class="eval-label">施工难度</span><span class="eval-value" :style="{ color: difficultyColor(selectedEval.constructionDifficulty) }">{{ selectedEval.constructionDifficulty }}</span></div>
-            <div class="eval-row"><span class="eval-label">建设成本</span><span class="eval-value">{{ selectedEval.constructionCostTenThousand?.toLocaleString() }} 万元</span></div>
+            <div class="eval-row"><span class="eval-label">线路长度</span><span class="eval-value">{{ selectedCandidate.transmissionLineLengthKm }} km</span></div>
+            <div class="eval-row"><span class="eval-label">送出成本</span><span class="eval-value">{{ (selectedCandidate.transmissionCost / 10000).toFixed(0) }} 万元</span></div>
+            <div class="eval-row"><span class="eval-label">施工难度</span><span class="eval-value">{{ selectedEval?.constructionDifficulty ?? '-' }}</span></div>
+            <div class="eval-row"><span class="eval-label">建设成本</span><span class="eval-value">{{ selectedEval?.constructionCostTenThousand?.toLocaleString() ?? '-' }} 万元</span></div>
           </div>
           <div class="eval-group">
             <div class="eval-group-title">经济性</div>
-            <div class="eval-row"><span class="eval-label">征地成本</span><span class="eval-value">{{ selectedEval.landAcquisitionCostTenThousand?.toLocaleString() }} 万元</span></div>
-            <div class="eval-row"><span class="eval-label">租赁费用</span><span class="eval-value">{{ selectedEval.rentalCostTenThousandPerYear?.toLocaleString() }} 万元/年</span></div>
-            <div class="eval-row"><span class="eval-label">环评等级</span><span class="eval-value" :style="{ color: envColor(selectedEval.envAssessmentLevel) }">{{ selectedEval.envAssessmentLevel }}</span></div>
+            <div class="eval-row"><span class="eval-label">土地成本</span><span class="eval-value">{{ (selectedCandidate.landCost / 10000).toFixed(0) }} 万元</span></div>
+            <div class="eval-row"><span class="eval-label">征地成本</span><span class="eval-value">{{ selectedEval?.landAcquisitionCostTenThousand?.toLocaleString() ?? '-' }} 万元</span></div>
+            <div class="eval-row"><span class="eval-label">租赁费用</span><span class="eval-value">{{ selectedEval?.rentalCostTenThousandPerYear?.toLocaleString() ?? '-' }} 万元/年</span></div>
+            <div class="eval-row"><span class="eval-label">环评等级</span><span class="eval-value" :style="{ color: envColor(selectedEval?.envAssessmentLevel ?? '') }">{{ selectedEval?.envAssessmentLevel ?? '-' }}</span></div>
+          </div>
+          <div class="eval-group">
+            <div class="eval-group-title">综合评分</div>
+            <div class="eval-row"><span class="eval-label">消纳评分</span><span class="eval-value">{{ selectedCandidate.scores?.absorption }}</span></div>
+            <div class="eval-row"><span class="eval-label">通道评分</span><span class="eval-value">{{ selectedCandidate.scores?.transmission }}</span></div>
+            <div class="eval-row"><span class="eval-label">经济评分</span><span class="eval-value">{{ selectedCandidate.scores?.economic }}</span></div>
+            <div class="eval-row"><span class="eval-label">综合评分</span><span class="eval-value" :style="{ color: scoreColor(selectedCandidate.comprehensiveScore), fontWeight: 600 }">{{ selectedCandidate.comprehensiveScore }}</span></div>
           </div>
         </div>
       </template>
-    </el-dialog>
-
-    <el-dialog v-model="constraintDialogVisible" title="约束条件配置" width="700px" top="5vh">
-      <ConstraintSettings @close="constraintDialogVisible = false" @saved="onConstraintSaved" />
     </el-dialog>
   </div>
 </template>
@@ -218,6 +309,37 @@ onMounted(() => {
   background: #fff;
   border: 1px solid #ebeef5;
   border-radius: 6px;
+}
+
+.section {
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.section-title {
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+  background: #f9fafb;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.chart-panel {
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+.chart-panel-title {
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+  background: #f9fafb;
+  border-bottom: 1px solid #ebeef5;
 }
 
 .coord-map {

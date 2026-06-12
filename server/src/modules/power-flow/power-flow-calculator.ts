@@ -619,25 +619,40 @@ export function calculatePowerFlow(
     const pdMw = load ? load.pdMw : 0
     const qdMvar = load ? load.qdMvar : 0
 
-    // 反向潮流：PQ节点净注入为正（出力>负荷），或光伏装机超过本地负荷80%时标记
-    let reversePower = bus.busType === 'pq' && (Psch[i] > 0.001)
-    if (!reversePower && gen?.isPV && gen.installedCapacityMw && load && gen.installedCapacityMw > load.pdMw * 0.8) {
+    // 反向潮流：仅在110kV及以下电压等级判断
+    // PQ节点净注入为正 → 功率向上一级倒送
+    // 光伏装机超过本地负荷80% → 光伏出力可能向上一级倒送
+    let reversePower = false
+    const isSubTransmission = bus.voltageLevel === '110kV' || bus.voltageLevel === '10kV'
+    if (isSubTransmission && bus.busType === 'pq' && Psch[i] > 0.001) {
+      reversePower = true
+    }
+    if (!reversePower && isSubTransmission && gen?.isPV && gen.installedCapacityMw && load && gen.installedCapacityMw > load.pdMw * 0.8) {
       reversePower = true
     }
 
-    // 三相不平衡度：优先用分相负荷数据计算，无分相数据时用电压偏差估算
+    // 三相不平衡度：按节点实际物理属性区分数据源
+    // 发电/光伏节点 → 用发电机三相出力差异；配电/变电节点 → 用负荷三相功率差异
     let threePhaseImbalance = 0
-    if (load && load.pdAMw != null && load.pdBMw != null && load.pdCMw != null) {
-      const pa = load.pdAMw, pb = load.pdBMw, pc = load.pdCMw
+    const hasGenPhase = gen && gen.pgAMw != null && gen.pgBMw != null && gen.pgCMw != null
+    const hasLoadPhase = load && load.pdAMw != null && load.pdBMw != null && load.pdCMw != null
+
+    if (hasGenPhase) {
+      // 发电机/逆变器三相出力不对称度
+      const pa = gen!.pgAMw!, pb = gen!.pgBMw!, pc = gen!.pgCMw!
       const pavg = (pa + pb + pc) / 3
       if (pavg > 0.001) {
         const maxDev = Math.max(Math.abs(pa - pavg), Math.abs(pb - pavg), Math.abs(pc - pavg))
         threePhaseImbalance = Number((maxDev / pavg * 100).toFixed(2))
       }
-    } else {
-      const actualKv = vMag * bus.baseKv
-      const voltDevPct = Math.abs(actualKv - bus.baseKv) / bus.baseKv * 100
-      threePhaseImbalance = Number(Math.min(voltDevPct * 0.2, 5).toFixed(2))
+    } else if (hasLoadPhase) {
+      // 负荷三相功率不对称度
+      const pa = load!.pdAMw!, pb = load!.pdBMw!, pc = load!.pdCMw!
+      const pavg = (pa + pb + pc) / 3
+      if (pavg > 0.001) {
+        const maxDev = Math.max(Math.abs(pa - pavg), Math.abs(pb - pavg), Math.abs(pc - pavg))
+        threePhaseImbalance = Number((maxDev / pavg * 100).toFixed(2))
+      }
     }
 
     return {

@@ -6,7 +6,6 @@ import { fetchCurveTemplates, type CurveTemplate } from '@/api/model-params'
 import { ElMessage } from 'element-plus'
 import CalcProgress from '@/components/calculation/CalcProgress.vue'
 import ChartContainer from '@/components/common/ChartContainer.vue'
-import PowerFlowTopology from '@/components/power-flow/PowerFlowTopology.vue'
 import { useFeederSelection } from '@/composables/useFeederSelection'
 
 const route = useRoute()
@@ -14,7 +13,7 @@ const route = useRoute()
 const taskId = ref<string | null>(null)
 const loading = ref(false)
 const result: any = ref(null)
-const viewMode = ref<'tables' | 'topology' | 'charts'>('tables')
+const viewMode = ref<'tables' | 'charts'>('tables')
 
 // ==================== 输入：馈线选择 ====================
 const feeder = useFeederSelection()
@@ -141,9 +140,18 @@ async function loadData() {
   ])
 }
 
+// 馈线选择后自动加载对应天气曲线；清空馈线时重置曲线
+watch(() => feeder.selectedFeederIds.value, async (ids) => {
+  if (ids && ids.length > 0) {
+    await loadTemplates()
+  } else {
+    curveTemplates.value = []
+    pvOutputPu.value = [0, 0.04, 0.12, 0.29, 0.5, 0.75, 1.0, 0.92, 0.71, 0.46, 0.21, 0.07, 0]
+  }
+})
+
 onMounted(async () => {
   await loadData()
-  await loadTemplates()
   const tid = route.query.taskId as string
   if (tid) {
     taskId.value = tid
@@ -224,24 +232,6 @@ function onFailed(err: string) {
 }
 
 // ==================== 输出 ====================
-const zoneFilter = ref('')
-const zoneOptions = computed(() => {
-  const zones = [...new Set(currentNodeResults.value.map((n: any) => n.zone).filter(Boolean))] as string[]
-  return zones.sort()
-})
-
-const filteredNodes = computed(() => {
-  if (!zoneFilter.value) return currentNodeResults.value
-  return currentNodeResults.value.filter((n: any) => n.zone === zoneFilter.value)
-})
-
-const filteredBranches = computed(() => {
-  const nodeIds = new Set(filteredNodes.value.map((n: any) => n.busId))
-  if (!zoneFilter.value) return currentBranchResults.value
-  return currentBranchResults.value.filter(
-    (b: any) => nodeIds.has(b.fromBus) && nodeIds.has(b.toBus)
-  )
-})
 
 const hasPV = computed(() => (result.value?.timePoints || []).length > 1)
 const selectedTimeIndex = ref(-1)
@@ -431,19 +421,24 @@ function branchRowStyle({ row }: any) {
     <div class="input-row">
       <div class="input-panel">
         <div class="panel-header">光伏出力曲线</div>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-          <span style="font-size:12px;color:#606266">天气类型：</span>
-          <el-radio-group v-model="weatherType" size="small" @change="onWeatherTypeChange">
-            <el-radio-button value="sunny">晴天</el-radio-button>
-            <el-radio-button value="cloudy">多云</el-radio-button>
-            <el-radio-button value="rainy">雨天</el-radio-button>
-          </el-radio-group>
-        </div>
-        <div class="curve-tags">
-          <el-tag v-for="(v, i) in pvOutputPu" :key="i" size="small" :type="v > 0.6 ? 'danger' : v > 0.2 ? 'warning' : 'info'">
-            {{ 6 + i }}h: {{ (v * 100).toFixed(0) }}%
-          </el-tag>
-        </div>
+        <template v-if="feeder.selectedFeederIds.value.length === 0">
+          <div style="color:#909399;font-size:13px">请先选择馈线</div>
+        </template>
+        <template v-else>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span style="font-size:12px;color:#606266">天气类型：</span>
+            <el-radio-group v-model="weatherType" size="small" @change="onWeatherTypeChange">
+              <el-radio-button value="sunny">晴天</el-radio-button>
+              <el-radio-button value="cloudy">多云</el-radio-button>
+              <el-radio-button value="rainy">雨天</el-radio-button>
+            </el-radio-group>
+          </div>
+          <div class="curve-tags">
+            <el-tag v-for="(v, i) in pvOutputPu" :key="i" size="small" :type="v > 0.6 ? 'danger' : v > 0.2 ? 'warning' : 'info'">
+              {{ 6 + i }}h: {{ (v * 100).toFixed(0) }}%
+            </el-tag>
+          </div>
+        </template>
       </div>
 
       <div class="input-panel">
@@ -476,7 +471,6 @@ function branchRowStyle({ row }: any) {
       <div class="view-toggle">
         <el-radio-group v-model="viewMode" size="small">
           <el-radio-button value="tables">数据表</el-radio-button>
-          <el-radio-button value="topology">拓扑图</el-radio-button>
           <el-radio-button v-if="hasPV" value="charts">趋势曲线</el-radio-button>
         </el-radio-group>
       </div>
@@ -486,17 +480,6 @@ function branchRowStyle({ row }: any) {
         <el-select :model-value="selectedTimeIndex" @update:model-value="onTimeSelect" size="small" style="width:120px">
           <el-option v-for="opt in timeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
         </el-select>
-      </div>
-
-      <div v-if="viewMode === 'topology'" class="chart-panel topo-panel">
-        <div class="panel-header">
-          <span>电网拓扑 — {{ currentTimePoint?.time }}</span>
-          <el-select v-model="zoneFilter" size="small" style="width:140px;margin-left:12px">
-            <el-option label="全杭州" value="" />
-            <el-option v-for="z in zoneOptions" :key="z" :label="z" :value="z" />
-          </el-select>
-        </div>
-        <PowerFlowTopology :nodes="filteredNodes" :branches="filteredBranches" />
       </div>
 
       <div v-if="viewMode === 'charts'">

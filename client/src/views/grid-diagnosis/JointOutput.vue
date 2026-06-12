@@ -2,13 +2,14 @@
 import { ref, computed, onMounted } from 'vue'
 import ChartContainer from '@/components/common/ChartContainer.vue'
 import { fetchJointOutputAnalysis, fetchStations, fetchStorageList } from '@/api/grid-diagnosis'
+import { fetchDataRanges } from '@/api/system'
 import type { StationOption, StorageOption, JointOutputAnalysis } from '@new-energy/shared'
 
 const stations = ref<StationOption[]>([])
 const storageList = ref<StorageOption[]>([])
 const selectedStation = ref('')
 const viewMode = ref<'joint' | 'pv_only' | 'storage_only'>('joint')
-const jointDate = ref('2026-05-15')
+const jointDate = ref('2026-06-15')
 const loading = ref(false)
 const analysis = ref<JointOutputAnalysis | null>(null)
 
@@ -80,6 +81,14 @@ onMounted(async () => {
   stations.value = (await fetchStations()) || []
   storageList.value = (await fetchStorageList()) || []
   if (stations.value.length > 0) selectedStation.value = stations.value[0].id
+  try {
+    const ranges = await fetchDataRanges()
+    const pv = ranges.pv_output_measurements
+    if (pv?.maxTime) {
+      const today = new Date().toISOString().slice(0, 10)
+      jointDate.value = today < pv.maxTime.slice(0, 10) ? today : pv.maxTime.slice(0, 10)
+    }
+  } catch { /* 兜底 */ }
   if (selectedStation.value) await loadData()
 })
 </script>

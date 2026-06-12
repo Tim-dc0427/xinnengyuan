@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { ElMessage } from 'element-plus'
 import { checkBoundaryReasonability } from '@/api/data-validation'
 import { Warning, CircleClose } from '@element-plus/icons-vue'
 
@@ -8,7 +7,6 @@ const loading = ref(false)
 const result = ref<any>(null)
 const detailVisible = ref(false)
 const selectedParam = ref<any>(null)
-const confirmText = ref('')
 
 const voltageLevel = ref('')
 const region = ref('')
@@ -29,16 +27,7 @@ async function handleCheck() {
 
 function showDetail(param: any) {
   selectedParam.value = param
-  confirmText.value = ''
   detailVisible.value = true
-}
-
-function confirmData() {
-  const p = selectedParam.value
-  if (!p) return
-  // 模拟用户确认数据来源
-  detailVisible.value = false
-  ElMessage.success(`已确认参数"${p.paramName}"数据来源，偏差将不再预警`)
 }
 </script>
 
@@ -79,7 +68,59 @@ function confirmData() {
       </div>
     </div>
 
-    <!-- 参数偏差一览表 -->
+    <!-- 问题清单 -->
+    <div v-if="result" class="chart-panel">
+      <div class="chart-panel-title">
+        问题清单
+        <span style="font-size:12px;color:#909399;font-weight:normal;margin-left:8px">
+          共 {{ result.anomalies.length }} 项异常
+        </span>
+      </div>
+      <template v-if="result.anomalies.length">
+        <el-table :data="result.anomalies" stripe size="small" max-height="380">
+          <el-table-column label="参数类型" width="90">
+            <template #default="{ row }">
+              <el-tag size="small" type="danger">{{ row.paramType }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="paramName" label="参数名称" width="120" />
+          <el-table-column label="当前值" width="110">
+            <template #default="{ row }">{{ row.currentValue }} {{ row.unit }}</template>
+          </el-table-column>
+          <el-table-column label="参考边界" width="110">
+            <template #default="{ row }">{{ row.historicalAvg }} {{ row.unit }}</template>
+          </el-table-column>
+          <el-table-column label="偏差率" width="90">
+            <template #default="{ row }">
+              <span style="color:#F56C6C;font-weight:600">{{ row.deviationPct }}%</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="风险说明" min-width="180">
+            <template #default="{ row }">
+              {{ row.paramType === '电压幅值' ? `电压偏离基准值${row.deviationPct}%，影响潮流计算精度` : `偏离历史同期${row.deviationPct}%，输入参数可能异常` }}
+            </template>
+          </el-table-column>
+          <el-table-column label="数据来源" width="170">
+            <template #default="{ row }">
+              <span style="font-size:12px;color:#606266">{{ row.dataSource }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="70" fixed="right">
+            <template #default="{ row }">
+              <el-button type="primary" link size="small" @click="showDetail(row)">核查</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div v-if="result.suggestion" style="margin-top:8px;font-size:12px;color:#909399;background:#fef0f0;padding:8px 12px;border-radius:4px">
+          <el-icon><Warning /></el-icon> {{ result.suggestion }}
+        </div>
+      </template>
+      <div v-else style="padding:40px;text-align:center;color:#67C23A;font-size:13px">
+        未发现边界条件异常，输入参数符合电网运行规律
+      </div>
+    </div>
+
+    <!-- 全量参数偏差一览 -->
     <div v-if="result" class="chart-panel">
       <div class="chart-panel-title">
         边界参数偏差一览
@@ -89,7 +130,12 @@ function confirmData() {
       </div>
       <el-table :data="result.parameters" stripe size="small" max-height="420"
         :row-class-name="({ row }: any) => row.isAnomaly ? 'anomaly-row' : ''">
-        <el-table-column prop="paramName" label="参数名称" min-width="180" />
+        <el-table-column label="参数类型" width="90">
+          <template #default="{ row }">
+            <el-tag size="small">{{ row.paramType }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="paramName" label="参数名称" min-width="140" />
         <el-table-column label="当前值" width="100">
           <template #default="{ row }">{{ row.currentValue }} {{ row.unit === 'p.u.' ? '' : '' }}</template>
         </el-table-column>
@@ -125,9 +171,6 @@ function confirmData() {
           </template>
         </el-table-column>
       </el-table>
-      <div v-if="result.suggestion" style="margin-top:8px;font-size:12px;color:#909399;background:#fef0f0;padding:8px 12px;border-radius:4px">
-        <el-icon><Warning /></el-icon> {{ result.suggestion }}
-      </div>
     </div>
 
     <!-- 无结果 -->
@@ -140,7 +183,8 @@ function confirmData() {
     <el-dialog v-model="detailVisible" title="异常参数核查" width="480px">
       <template v-if="selectedParam">
         <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="参数名称" :span="2">{{ selectedParam.paramName }}</el-descriptions-item>
+          <el-descriptions-item label="参数类型">{{ selectedParam.paramType }}</el-descriptions-item>
+          <el-descriptions-item label="参数名称">{{ selectedParam.paramName }}</el-descriptions-item>
           <el-descriptions-item label="当前值">{{ selectedParam.currentValue }}</el-descriptions-item>
           <el-descriptions-item label="历史均值">{{ selectedParam.historicalAvg }}</el-descriptions-item>
           <el-descriptions-item label="偏差率">
@@ -150,22 +194,16 @@ function confirmData() {
             <el-tag :type="selectedParam.severity === '严重' ? 'danger' : 'warning'" size="small">{{ selectedParam.severity }}</el-tag>
           </el-descriptions-item>
         </el-descriptions>
-        <div style="margin:16px 0;padding:12px;background:#fdf6ec;border-radius:4px;font-size:13px;color:#E6A23C">
-          <el-icon><Warning /></el-icon> 该参数与历史同期偏差较大，请确认数据来源是否可靠
+        <div style="margin:16px 0;padding:12px;background:#f5f7fa;border-radius:4px;font-size:13px">
+          <span style="color:#606266">数据来源：</span>
+          <span style="color:#303133;font-weight:600">{{ selectedParam.dataSource }}</span>
         </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <span style="font-size:13px;color:#606266">数据来源确认：</span>
-          <el-select v-model="confirmText" placeholder="选择数据来源" size="small" style="flex:1">
-            <el-option label="SCADA 实时采集" value="SCADA" />
-            <el-option label="人工录入" value="manual" />
-            <el-option label="历史趋势外推" value="trend" />
-            <el-option label="需要重新采集" value="recall" />
-          </el-select>
+        <div style="font-size:12px;color:#E6A23C">
+          <el-icon><Warning /></el-icon> 该参数与历史同期偏差较大，建议核查数据源
         </div>
       </template>
       <template #footer>
-        <el-button size="small" @click="detailVisible = false">取消</el-button>
-        <el-button type="primary" size="small" :disabled="!confirmText" @click="confirmData">确认数据来源</el-button>
+        <el-button type="primary" size="small" @click="detailVisible = false">已知晓</el-button>
       </template>
     </el-dialog>
   </div>

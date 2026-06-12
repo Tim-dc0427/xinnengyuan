@@ -313,6 +313,7 @@ async function batchExport() {
   const ids = selectedIds.value.length ? selectedIds.value : []
   if (!ids.length) return
   const data = await exportScenarios(ids)
+  if (!data?.length) return
   const csv = [Object.keys(data[0]).join(','), ...data.map((r: any) => Object.values(r).map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','))].join('\n')
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)

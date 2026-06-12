@@ -1,259 +1,210 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, shallowRef } from 'vue'
 import ChartContainer from '@/components/common/ChartContainer.vue'
 import { fetchStations, fetchVoltageFluctuation } from '@/api/grid-diagnosis'
 import type { VoltageFluctuation } from '@new-energy/shared'
 
-const selectedDate = ref('2026-06-01')
 const selectedPoint = ref('')
+const selectedDate = ref('')
 const windowSize = ref(15)
 const loading = ref(false)
 const noData = ref(false)
 const stations = ref<any[]>([])
 const result = ref<VoltageFluctuation | null>(null)
-const selectedWindow = ref<{
-  clickTime: string
-  windowStart: string
-  windowEnd: string
-  maxV: number
-  minV: number
-  fluctuationPct: number
-  records: Array<{ time: string; voltageKv: number; activePowerKw: number; loadKw: number }>
-} | null>(null)
+const windowStartMs = ref(0)
+const chartContainerRef = ref<InstanceType<typeof ChartContainer> | null>(null)
 
-onMounted(async () => {
-  const list = await fetchStations()
-  stations.value = list || []
-  if (list?.length) {
-    selectedPoint.value = list[0].id
-    // 宽范围查询获取数据边界，默认展示最近一天
-    const boundary = await fetchVoltageFluctuation({
-      pointId: list[0].id,
-      startDate: '2025-01-01',
-      endDate: '2026-12-31',
-      windowMinutes: windowSize.value,
-    })
-    if (boundary?.dataRange?.lastTime) {
-      selectedDate.value = new Date(boundary.dataRange.lastTime).toISOString().slice(0, 10)
-    }
-    await loadData()
-  }
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+const nominalKv = computed(() => result.value?.nominalVoltageKv || 10)
+
+const windowData = computed(() => {
+  const ts = result.value?.timeSeries || []; if (!ts.length) return []
+  const ws = windowStartMs.value; const we = ws + windowSize.value * 60000
+  return ts.filter(r => { const t = new Date(r.time).getTime(); return t >= ws && t <= we })
 })
 
-function endDateStr(dateStr: string) {
-  const d = new Date(dateStr)
-  d.setDate(d.getDate() + 1)
-  return d.toISOString().slice(0, 10)
+const fluctuationPct = computed(() => {
+  const vals = windowData.value.map(d => d.voltageKv); if (vals.length < 2) return 0
+  return +(((Math.max(...vals) - Math.min(...vals)) / nominalKv.value) * 100).toFixed(2)
+})
+const windowMaxV = computed(() => windowData.value.length ? +Math.max(...windowData.value.map(d=>d.voltageKv)).toFixed(2) : 0)
+const windowMinV = computed(() => windowData.value.length ? +Math.min(...windowData.value.map(d=>d.voltageKv)).toFixed(2) : 0)
+
+const windowTimeText = computed(() => {
+  if (!windowStartMs.value) return ''
+  const s = new Date(windowStartMs.value), e = new Date(windowStartMs.value + windowSize.value * 60000)
+  const f = (d:Date) => `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
+  return `${f(s)} ~ ${f(e)}`
+})
+
+function getInst(): any {
+  const v = chartContainerRef.value?.echartsInst as any
+  const inst = (v && typeof v === 'object' && 'value' in v) ? v.value : v
+  return inst?.setOption ? inst : null
 }
+
+function applyDataZoom(s: number, e: number) {
+  const inst = getInst(); if (!inst) return
+  inst.dispatchAction({ type: 'dataZoom', startValue: s, endValue: e })
+}
+
+// 轮询 dataZoom 状态 → 同步到 windowStartMs/windowSize
+function startPolling() {
+  stopPolling()
+  let lastS = -1, lastE = -1
+  pollTimer = setInterval(() => {
+    const inst = getInst(); if (!inst) return
+    try {
+      const dz = inst.getOption()?.dataZoom?.[0]
+      if (!dz || dz.startValue == null || dz.endValue == null) return
+      const sv = dz.startValue as number, ev = dz.endValue as number
+      if (sv !== lastS || ev !== lastE) {
+        lastS = sv; lastE = ev
+        windowStartMs.value = sv
+        windowSize.value = Math.round((ev - sv) / 60000)
+      }
+    } catch { /* */ }
+  }, 150)
+}
+function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null } }
+
+// 仅数据加载时重建 chartOption（shallowRef 避免响应式循环）
+const chartOption = shallowRef<any>({})
+
+function buildOption(ts: any[], nKv: number, wStart: number, wEnd: number) {
+  return {
+    tooltip: { trigger: 'axis',
+      formatter: (params: any) => {
+        const p = Array.isArray(params) ? params[0] : params; if (!p) return ''
+        const d = ts[p.dataIndex]; if (!d) return ''
+        const t = new Date(d.time)
+        const tf = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')} ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`
+        return `${tf}<br/>电压：${d.voltageKv} kV<br/>光伏出力：${d.activePowerKw} kW<br/>负荷：${d.loadKw} kW`
+      },
+    },
+    xAxis: { type: 'time', axisLabel: { formatter: (v:number) => { const d=new Date(v); return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}` } } },
+    yAxis: { type: 'value', name: 'kV' },
+    series: [{
+      name: '并网点电压', type: 'line',
+      data: ts.map((d:any) => [new Date(d.time).getTime(), d.voltageKv]),
+      smooth: true, symbol: 'circle', symbolSize: 4,
+      markLine: { silent: true, symbol: 'none',
+        data: [{ yAxis: nKv, lineStyle: { type: 'dashed', color: '#909399', width: 1 }, label: { formatter: `基准 ${nKv}kV`, position: 'end' } }]
+      },
+      markArea: { silent: true,
+        data: wStart ? [[{ xAxis: wStart, itemStyle: { color: 'rgba(64,158,255,0.08)' } }, { xAxis: wEnd }]] : []
+      },
+    }],
+    grid: { left: 48, right: 16, top: 30, bottom: 52 },
+    dataZoom: [{ type: 'slider', height: 20, bottom: 24, filterMode: 'none' }],
+  }
+}
+
+onMounted(async () => {
+  try {
+    const list = await fetchStations(); stations.value = list || []
+    if (list?.length) {
+      selectedPoint.value = list[0].id
+      const d = new Date(); d.setDate(d.getDate()-1); selectedDate.value = d.toISOString().slice(0,10)
+      await loadData()
+      if (!result.value?.timeSeries?.length) {
+        d.setDate(d.getDate()-1); selectedDate.value = d.toISOString().slice(0,10); await loadData()
+      }
+    }
+  } catch { noData.value = true }
+})
+
+onUnmounted(stopPolling)
+
+function endDateStr(ds: string) { const d = new Date(ds); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10) }
 
 async function loadData() {
   if (!selectedPoint.value) return
-  loading.value = true
-  noData.value = false
-  selectedWindow.value = null
+  stopPolling()
+  loading.value = true; noData.value = false
   const data = await fetchVoltageFluctuation({
-    pointId: selectedPoint.value,
-    startDate: selectedDate.value,
-    endDate: endDateStr(selectedDate.value),
-    windowMinutes: windowSize.value,
+    pointId: selectedPoint.value, startDate: selectedDate.value,
+    endDate: endDateStr(selectedDate.value), windowMinutes: windowSize.value,
   })
   result.value = data
-  if (!data?.timeSeries?.length) {
-    noData.value = true
-  }
+  if (data?.timeSeries?.length) {
+    const ts = data.timeSeries
+    const first = new Date(ts[0].time).getTime()
+    const last = new Date(ts[ts.length-1].time).getTime()
+    const mid = first + (last - first) / 2
+    const ws = mid - windowSize.value * 30000
+    const we = ws + windowSize.value * 60000
+    windowStartMs.value = ws
+    // 一次性构建 option，后续不再变
+    chartOption.value = buildOption(ts, nominalKv.value, ws, we)
+  } else { noData.value = true }
   loading.value = false
+  // 等 VChart 渲染后启动轮询 + 设初始 dataZoom
+  setTimeout(() => {
+    const inst = getInst(); if (!inst) return
+    const ws = windowStartMs.value
+    applyDataZoom(ws, ws + windowSize.value * 60000)
+    startPolling()
+  }, 300)
 }
-
-function formatLocal(ms: number) {
-  const d = new Date(ms)
-  const y = d.getFullYear()
-  const mo = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  const h = String(d.getHours()).padStart(2, '0')
-  const mi = String(d.getMinutes()).padStart(2, '0')
-  return `${y}-${mo}-${day} ${h}:${mi}`
-}
-
-function handleChartClick(params: any) {
-  const ts = result.value?.timeSeries
-  if (!ts?.length || params?.dataIndex == null) return
-  const idx = params.dataIndex
-  const clickTime = ts[idx].time
-  const windowMs = windowSize.value * 60 * 1000
-  const clickMs = new Date(clickTime).getTime()
-  const windowStartMs = clickMs - windowMs
-
-  const windowRecords = ts.filter(r => {
-    const t = new Date(r.time).getTime()
-    return t >= windowStartMs && t <= clickMs
-  })
-
-  if (windowRecords.length === 0) return
-
-  const voltages = windowRecords.map(r => r.voltageKv)
-  const nominalKv = result.value?.nominalVoltageKv || 10
-  const maxV = Math.max(...voltages)
-  const minV = Math.min(...voltages)
-  const fluctuationPct = +(((maxV - minV) / nominalKv) * 100).toFixed(2)
-
-  selectedWindow.value = {
-    clickTime,
-    windowStart: formatLocal(windowStartMs),
-    windowEnd: clickTime.slice(0, 16).replace('T', ' '),
-    maxV: +maxV.toFixed(2),
-    minV: +minV.toFixed(2),
-    fluctuationPct,
-    records: windowRecords.map(r => ({
-      time: r.time.slice(0, 16).replace('T', ' '),
-      voltageKv: r.voltageKv,
-      activePowerKw: r.activePowerKw,
-      loadKw: r.loadKw,
-    })),
-  }
-}
-
-const voltageOption = computed(() => {
-  const ts = result.value?.timeSeries || []
-  const nominalKv = result.value?.nominalVoltageKv || 10
-  return {
-    tooltip: {
-      trigger: 'axis',
-      formatter: (params: any) => {
-        const p = Array.isArray(params) ? params[0] : params
-        if (!p) return ''
-        const d = ts[p.dataIndex]
-        if (!d) return `${p.axisValue}<br/>电压：${p.value} kV`
-        return `${d.time.slice(0, 16)}<br/>电压：${d.voltageKv} kV<br/>光伏出力：${d.activePowerKw} kW<br/>负荷：${d.loadKw} kW`
-      },
-    },
-    legend: { data: ['并网点电压', `基准线(${nominalKv}kV)`] },
-    xAxis: {
-      type: 'category',
-      data: ts.map(d => d.time.slice(11, 16)),
-      axisLabel: { rotate: 0 },
-    },
-    yAxis: { type: 'value', name: 'kV' },
-    series: [
-      { name: '并网点电压', type: 'line', data: ts.map(d => d.voltageKv), smooth: true, symbol: 'circle', symbolSize: 5 },
-      { name: `基准线(${nominalKv}kV)`, type: 'line', data: Array(ts.length).fill(nominalKv), lineStyle: { type: 'dashed', color: '#909399' }, symbol: 'none' },
-    ],
-    grid: { left: 50, right: 16, top: 32, bottom: 30 },
-  }
-})
-
-const fluctuationOption = computed(() => {
-  const ts = result.value?.timeSeries || []
-  const threshold = 5
-  return {
-    tooltip: {
-      trigger: 'axis',
-      formatter: (params: any) => {
-        const p = Array.isArray(params) ? params[0] : params
-        if (!p) return ''
-        const d = ts[p.dataIndex]
-        if (!d) return `${p.axisValue}<br/>波动率：${p.value}%`
-        return `${d.time.slice(0, 16)}<br/>波动率：${d.fluctuationPct}%<br/>光伏出力：${d.activePowerKw} kW<br/>负荷：${d.loadKw} kW`
-      },
-    },
-    xAxis: {
-      type: 'category',
-      data: ts.map(d => d.time.slice(11, 16)),
-      axisLabel: { rotate: 0 },
-    },
-    yAxis: { type: 'value', name: '%', max: Math.max(threshold + 2, result.value?.maxFluctuationPct || threshold + 1) },
-    series: [{
-      name: '电压波动率',
-      type: 'line',
-      data: ts.map(d => d.fluctuationPct),
-      smooth: true,
-      symbol: 'circle',
-      symbolSize: 5,
-      markLine: {
-        silent: true,
-        data: [
-          { yAxis: threshold, lineStyle: { color: '#E6A23C', type: 'dashed' }, label: { formatter: `${threshold}%` } },
-        ],
-      },
-    }],
-    grid: { left: 50, right: 16, top: 32, bottom: 30 },
-  }
-})
 </script>
 
 <template>
   <div class="page-container">
     <div class="chart-panel-title">并网点电压波动监测</div>
-
     <div class="filter-bar">
-      <div class="filter-group">
-        <span class="filter-label">并网点</span>
+      <div class="filter-group"><span class="filter-label">并网点</span>
         <el-select v-model="selectedPoint" size="small" style="width:200px" @change="loadData">
           <el-option v-for="s in stations" :key="s.id" :label="s.stationName" :value="s.id" />
         </el-select>
       </div>
-      <div class="filter-group">
-        <span class="filter-label">日期</span>
+      <div class="filter-group"><span class="filter-label">日期</span>
         <el-date-picker v-model="selectedDate" type="date" value-format="YYYY-MM-DD" size="small" @change="loadData" style="width:140px" />
       </div>
-      <div class="filter-group">
-        <span class="filter-label">滑动窗口</span>
-        <el-input-number v-model="windowSize" :min="5" :max="60" :step="5" size="small" style="width:100px" @change="loadData" />
-        <span class="filter-label">分钟</span>
+      <div class="filter-group"><span class="filter-label">窗口</span>
+        <span style="font-size:13px;color:#303133">{{ windowTimeText }}</span>
       </div>
     </div>
 
-    <div class="chart-panel" style="margin-bottom:16px">
-      <ChartContainer :option="voltageOption" height="300px" :loading="loading" @chart-click="handleChartClick" />
-      <div v-if="noData" style="text-align:center;color:#909399;padding:40px">该日期暂无数据</div>
+    <div class="chart-panel" style="margin-bottom:12px">
+      <ChartContainer ref="chartContainerRef" :option="chartOption" height="340px" :loading="loading" />
+      <div v-if="noData" style="text-align:center;color:#909399;padding:32px">该日期暂无数据</div>
     </div>
 
-    <div class="chart-panel" style="margin-bottom:16px">
-      <div style="font-size:14px;font-weight:600;padding:8px 0 0 16px;color:#303133">电压波动率（阈值 ±5%）</div>
-      <ChartContainer :option="fluctuationOption" height="250px" :loading="loading" @chart-click="handleChartClick" />
-      <div v-if="noData" style="text-align:center;color:#909399;padding:40px">该日期暂无数据</div>
-    </div>
-
-    <div class="chart-panel" v-if="selectedWindow" style="margin-bottom:16px">
-      <div style="font-size:14px;font-weight:600;padding:8px 0 0 16px;color:#303133">
-        窗口详情（{{ selectedWindow.windowStart }} ~ {{ selectedWindow.windowEnd }}）
-      </div>
+    <div v-if="!noData && windowData.length" class="chart-panel" style="margin-bottom:16px">
+      <div style="font-size:14px;font-weight:600;padding:8px 16px 0 16px;color:#303133">窗口分析（{{ windowTimeText }}）</div>
       <div style="display:flex;gap:24px;padding:8px 16px 0 16px">
-        <span>窗口大小：<b>{{ windowSize }} 分钟</b></span>
-        <span>最高电压：<b>{{ selectedWindow.maxV }} kV</b></span>
-        <span>最低电压：<b>{{ selectedWindow.minV }} kV</b></span>
-        <span>波动幅度：<b :style="{ color: selectedWindow.fluctuationPct > 5 ? '#F56C6C' : '#303133' }">{{ selectedWindow.fluctuationPct }}%</b></span>
-        <span>记录数：<b>{{ selectedWindow.records.length }}</b></span>
+        <span>记录数：<b>{{ windowData.length }}</b></span><span>最高电压：<b>{{ windowMaxV }} kV</b></span><span>最低电压：<b>{{ windowMinV }} kV</b></span>
+        <span>波动率：<b :style="{ color: fluctuationPct>7?'#F56C6C':fluctuationPct>5?'#E6A23C':'#303133' }">{{ fluctuationPct }}%</b>
+          <span v-if="fluctuationPct>7" style="color:#F56C6C;font-size:12px"> 严重越限</span>
+          <span v-else-if="fluctuationPct>5" style="color:#E6A23C;font-size:12px"> 超出阈值</span>
+        </span>
       </div>
-      <el-table :data="selectedWindow.records" size="small" stripe max-height="240" style="margin-top:8px">
-        <el-table-column prop="time" label="时间" width="170" />
+      <el-table :data="windowData" size="small" stripe max-height="240" style="margin-top:8px">
+        <el-table-column label="时间" width="170"><template #default="{row}">{{ row.time.slice(0,16).replace('T',' ') }}</template></el-table-column>
         <el-table-column prop="voltageKv" label="电压(kV)" width="120" />
         <el-table-column prop="activePowerKw" label="光伏出力(kW)" width="140" />
         <el-table-column prop="loadKw" label="负荷(kW)" width="120" />
       </el-table>
     </div>
 
-    <div class="chart-panel" v-if="result?.alerts?.length">
-      <div style="font-size:14px;font-weight:600;padding:8px 0 4px 16px;color:#303133">告警清单</div>
-      <el-table :data="result.alerts" size="small" stripe max-height="300">
-        <el-table-column prop="time" label="时间" width="170" />
-        <el-table-column label="级别" width="100">
-          <template #default="{ row }">
-            <el-tag :type="row.level === 'CRITICAL' ? 'danger' : 'warning'" size="small">{{ row.level === 'CRITICAL' ? '严重' : '警告' }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="title" label="告警内容" />
-        <el-table-column prop="fluctuationPct" label="波动率" width="100">
-          <template #default="{ row }">{{ row.fluctuationPct }}%</template>
-        </el-table-column>
-        <el-table-column prop="activePowerKw" label="光伏出力(kW)" width="140" />
-        <el-table-column prop="loadKw" label="负荷(kW)" width="120" />
+    <div v-if="!noData && result?.alerts?.length" class="chart-panel">
+      <div style="font-size:14px;font-weight:600;padding:8px 16px 0 16px;color:#303133">告警清单（波动率 > 5%）</div>
+      <el-table :data="result.alerts" size="small" stripe max-height="300" style="margin-top:4px">
+        <el-table-column label="时间" width="170"><template #default="{row}">{{ row.time.slice(0,16).replace('T',' ') }}</template></el-table-column>
+        <el-table-column label="级别" width="90"><template #default="{row}"><el-tag :type="row.level==='CRITICAL'?'danger':'warning'" size="small">{{ row.level==='CRITICAL'?'严重':'警告' }}</el-tag></template></el-table-column>
+        <el-table-column prop="title" label="告警内容" min-width="220" />
+        <el-table-column label="波动率" width="100"><template #default="{row}">{{ row.fluctuationPct }}%</template></el-table-column>
+        <el-table-column prop="activePowerKw" label="光伏出力(kW)" width="130" />
+        <el-table-column prop="loadKw" label="负荷(kW)" width="110" />
       </el-table>
     </div>
   </div>
 </template>
 
 <style scoped>
-.filter-bar { display:flex; align-items:center; gap:20px; flex-wrap:wrap; background:#f5f7fa; padding:10px 16px; border-radius:4px; margin-bottom:16px; }
-.filter-group { display:flex; align-items:center; gap:8px; }
-.filter-label { font-size:13px; color:#606266; white-space:nowrap; }
+.filter-bar{display:flex;align-items:center;gap:20px;flex-wrap:wrap;background:#f5f7fa;padding:10px 16px;border-radius:4px;margin-bottom:16px}
+.filter-group{display:flex;align-items:center;gap:8px}
+.filter-label{font-size:13px;color:#606266;white-space:nowrap}
 </style>

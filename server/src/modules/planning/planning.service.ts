@@ -157,6 +157,8 @@ export class PlanningService {
       await db('pv_cost_library').where('id', existing.id).update({
         unit_cost_per_kw: data.unitCostPerKw ?? existing.unit_cost_per_kw,
         remark: data.remark ?? existing.remark,
+        installed_capacity_kw: data.installedCapacityKw ?? existing.installed_capacity_kw,
+        comprehensive_cost: data.comprehensiveCost ?? existing.comprehensive_cost,
       })
       return db('pv_cost_library').where('id', existing.id).first()
     }
@@ -167,6 +169,8 @@ export class PlanningService {
       unit_cost_per_kw: data.unitCostPerKw || 0,
       remark: data.remark || '',
       model_type_id: data.modelTypeId,
+      installed_capacity_kw: data.installedCapacityKw || null,
+      comprehensive_cost: data.comprehensiveCost || null,
       created_at: new Date().toISOString(),
     })
     return db('pv_cost_library').where('model_type_id', data.modelTypeId).first()
@@ -235,7 +239,7 @@ export class PlanningService {
 
   async savePvModelTypeFields(typeId: string, fields: Array<{
     fieldCode: string; fieldName: string; fieldType: string
-    fieldOptions?: string; isRequired: boolean; sortOrder: number
+    fieldOptions?: string; isRequired: boolean; sortOrder: number; category?: string
   }>) {
     const type = await db('pv_model_types').where('id', typeId).first()
     if (!type) throw new Error(`模型类型不存在: ${typeId}`)
@@ -251,6 +255,7 @@ export class PlanningService {
           field_options: f.fieldOptions || null,
           is_required: f.isRequired ? 1 : 0,
           sort_order: f.sortOrder,
+          category: f.category || '基础信息',
           created_at: new Date().toISOString(),
         })),
       )
@@ -484,6 +489,236 @@ export class PlanningService {
     })
   }
 
+  // ==================== Candidate Analysis (候选接入点分析) ====================
+  /** 对候选接入点进行综合分析：光伏出力特性、负荷曲线、电压波动、倒送风险、线路参数 */
+  async analyzeCandidatePoint(candidatePointId: string) {
+    // 从候选接入点ID反查原始接入点数据
+    // 优先从DB查（种子数据），再回退到 potentialSites 内存数据
+    const dbCandidate = await db('candidate_points').where('id', candidatePointId).first().catch(() => null)
+    const locationName = dbCandidate?.location_desc || ''
+    const siteId = candidatePointId.startsWith('cp-')
+      ? candidatePointId.replace('cp-', '')
+      : candidatePointId
+    // 按ID匹配，失败则按名称匹配
+    let site = this.potentialSites.find(s => s.id === siteId)
+    if (!site && locationName) {
+      site = this.potentialSites.find(s => s.name === locationName)
+    }
+    if (!site) throw new Error(`接入点不存在: ${candidatePointId}`)
+
+    const capacityKw = Math.round(site.availableCapacityMw * 0.85 * 1000)
+    const peakPvKw = Math.round(capacityKw * 0.8)
+    const nominalVoltageKv = site.distanceToSubstationKm <= 5 ? 35 : site.distanceToSubstationKm <= 12 ? 110 : 220
+
+    // ===== 1. 光伏出力特性（24时段） =====
+    const pvProfile: Array<{ time: string; outputKw: number }> = []
+    const pvRatios = [0,0,0,0,0,0, 0.12,0.36,0.64,0.84,0.96,1.0,1.0,0.92,0.76,0.56,0.30,0.10,0,0,0,0,0,0]
+    for (let h = 0; h < 24; h++) {
+      pvProfile.push({ time: `${String(h).padStart(2, '0')}:00`, outputKw: Math.round(peakPvKw * pvRatios[h]) })
+    }
+
+    // ===== 2. 本地负荷曲线（24时段） =====
+    const loadProfile: Array<{ time: string; loadKw: number }> = []
+    const loadRatios = [0.35,0.30,0.28,0.25,0.30,0.50,0.70,0.85,0.90,0.95,1.0,0.95,0.90,0.85,0.80,0.85,0.90,0.95,0.85,0.70,0.60,0.50,0.45,0.40]
+    const maxLoadKw = Math.round(capacityKw * 0.9)
+    for (let h = 0; h < 24; h++) {
+      loadProfile.push({ time: `${String(h).padStart(2, '0')}:00`, loadKw: Math.round(maxLoadKw * loadRatios[h]) })
+    }
+
+    // ===== 3. 净负荷曲线 & 倒送时段识别 =====
+    const netLoadProfile = pvProfile.map((pv, i) => ({
+      time: pv.time,
+      pvKw: pv.outputKw,
+      loadKw: loadProfile[i].loadKw,
+      netKw: loadProfile[i].loadKw - pv.outputKw, // 正=需从电网取电，负=倒送
+    }))
+    const backfeedHours = netLoadProfile.filter(n => n.netKw < 0)
+    const maxBackfeedKw = backfeedHours.length > 0
+      ? Math.max(...backfeedHours.map(n => Math.abs(n.netKw)))
+      : 0
+    const backfeedRisk: 'low' | 'medium' | 'high' =
+      maxBackfeedKw > capacityKw * 0.5 ? 'high'
+      : maxBackfeedKw > capacityKw * 0.2 ? 'medium'
+      : 'low'
+
+    // ===== 4. 电压波动历史分析 =====
+    // 基于接入点电压等级生成典型波动数据
+    const voltageHistory: Array<{ time: string; voltageKv: number; deviationPct: number }> = []
+    const baseVoltage = nominalVoltageKv
+    // 模拟一个月(30天)每日峰值电压偏差
+    for (let d = 0; d < 30; d++) {
+      const date = new Date(2026, 5, d + 1)
+      const dateStr = date.toISOString().slice(0, 10)
+      // 白天光伏出力时段电压偏高
+      const dayDeviation = backfeedRisk === 'high' ? 3.5 + Math.random() * 4
+        : backfeedRisk === 'medium' ? 1.5 + Math.random() * 3
+        : Math.random() * 2
+      // 夜间电压正常
+      const nightDeviation = -1 + Math.random() * 2
+      voltageHistory.push({
+        time: `${dateStr} 12:00`,
+        voltageKv: +(baseVoltage * (1 + dayDeviation / 100)).toFixed(1),
+        deviationPct: +dayDeviation.toFixed(1),
+      })
+      voltageHistory.push({
+        time: `${dateStr} 03:00`,
+        voltageKv: +(baseVoltage * (1 + nightDeviation / 100)).toFixed(1),
+        deviationPct: +nightDeviation.toFixed(1),
+      })
+    }
+    const maxDeviation = Math.max(...voltageHistory.map(v => Math.abs(v.deviationPct)))
+    const violationCount = voltageHistory.filter(v => Math.abs(v.deviationPct) > 5).length
+    const avgDeviation = +(voltageHistory.reduce((s, v) => s + Math.abs(v.deviationPct), 0) / voltageHistory.length).toFixed(1)
+
+    // ===== 5. 送出线路分析 =====
+    const lineDistanceKm = site.distanceToSubstationKm
+
+    // 导线规格与阻抗参数映射
+    const wireSpecs: Record<string, { rPerKm: number; xPerKm: number; ratedMva: number; ratedCurrentA: number }> = {
+      'LGJ-120': { rPerKm: 0.27, xPerKm: 0.38, ratedMva: 30, ratedCurrentA: 380 },
+      'LGJ-185': { rPerKm: 0.17, xPerKm: 0.36, ratedMva: 42, ratedCurrentA: 515 },
+      'LGJ-240': { rPerKm: 0.13, xPerKm: 0.35, ratedMva: 50, ratedCurrentA: 610 },
+      'LGJ-300': { rPerKm: 0.11, xPerKm: 0.34, ratedMva: 58, ratedCurrentA: 710 },
+      'LGJ-400': { rPerKm: 0.08, xPerKm: 0.32, ratedMva: 68, ratedCurrentA: 830 },
+      'LGJ-630': { rPerKm: 0.05, xPerKm: 0.30, ratedMva: 85, ratedCurrentA: 1040 },
+    }
+
+    const currentWire = wireSpecs['LGJ-240']
+    const currentR = +(currentWire.rPerKm * lineDistanceKm).toFixed(3)
+    const currentX = +(currentWire.xPerKm * lineDistanceKm).toFixed(3)
+    const currentImpedance = +Math.sqrt(currentR ** 2 + currentX ** 2).toFixed(3)
+    const lineRatedMva = currentWire.ratedMva
+    const actualMva = Math.round(peakPvKw / 1000 * 1.05)
+    const loadRatePct = +(actualMva / lineRatedMva * 100).toFixed(1)
+    const isOverloaded = loadRatePct > 80
+
+    // 线路压降估算: ΔU ≈ (PR + QX) / U²
+    const pMw = peakPvKw / 1000
+    const qMvar = pMw * 0.3 // 假设功率因数0.95
+    const voltageDropPct = +((pMw * currentR + qMvar * currentX) / (nominalVoltageKv ** 2) * 100).toFixed(2)
+
+    // 推荐升级方案
+    let recommendedWire = 'LGJ-400'
+    if (loadRatePct > 100) recommendedWire = 'LGJ-630'
+    else if (loadRatePct > 70) recommendedWire = 'LGJ-400'
+    else if (loadRatePct > 50) recommendedWire = 'LGJ-300'
+    const recWire = wireSpecs[recommendedWire]
+    const recR = +(recWire.rPerKm * lineDistanceKm).toFixed(3)
+    const recX = +(recWire.xPerKm * lineDistanceKm).toFixed(3)
+
+    const lineAnalysis = {
+      lineLengthKm: lineDistanceKm,
+      currentSpec: 'LGJ-240',
+      currentResistanceOhm: currentR,
+      currentReactanceOhm: currentX,
+      currentImpedanceOhm: currentImpedance,
+      currentRatedMva: lineRatedMva,
+      actualPeakMva: actualMva,
+      loadRatePct,
+      isOverloaded,
+      voltageDropPct,
+      recommendedSpec: recommendedWire,
+      recommendedResistanceOhm: recR,
+      recommendedReactanceOhm: recX,
+      targetRatedMva: recWire.ratedMva,
+      constructionDifficulty: lineDistanceKm <= 5 ? '低' : lineDistanceKm <= 12 ? '中' : '高',
+    }
+
+    // ===== 6. 推荐参数 =====
+    const actualStoragePower = backfeedRisk === 'high' ? Math.round(capacityKw * 0.20 / 100) * 100
+      : backfeedRisk === 'medium' ? Math.round(capacityKw * 0.12 / 100) * 100
+      : Math.round(capacityKw * 0.08 / 100) * 100
+    const storageEnergy = actualStoragePower * 2
+    const reactiveKvar = Math.round(capacityKw * 0.25 / 100) * 100
+
+    // 推荐储能类型
+    const recommendedStorageType = backfeedRisk === 'high' && site.availableCapacityMw > 30
+      ? 'flow' as const
+      : site.distanceToSubstationKm > 12 && site.availableCapacityMw < 20
+        ? 'lead-carbon' as const
+        : 'lithium' as const
+
+    // 推荐布局方案
+    let recommendedLayout = 'centralized_substation'
+    if (site.terrainType === 'hill' || site.terrainType === 'mountain') {
+      recommendedLayout = 'distributed_array'
+    } else if (site.distanceToSubstationKm > 12) {
+      recommendedLayout = 'substation_side'
+    } else if (site.terrainType === 'plain' && site.distanceToSubstationKm <= 5) {
+      recommendedLayout = 'centralized_substation'
+    } else {
+      recommendedLayout = 'modular_container'
+    }
+
+    const recommended = {
+      ratedCapacityKw: capacityKw,
+      storage: {
+        requiredCapacityKwh: storageEnergy,
+        requiredPowerKw: actualStoragePower,
+        storageType: recommendedStorageType,
+        durationHours: 2,
+        estimatedCost: 0,
+        layoutPlan: recommendedLayout,
+        reasoning: backfeedRisk === 'high' ? '倒送风险高，需配置20%储能容量吸收倒送功率'
+          : backfeedRisk === 'medium' ? '存在一定倒送风险，建议配置12%储能容量平抑波动'
+          : '倒送风险低，配置8%基础储能容量即可',
+      },
+      reactive: {
+        compType: 'SVG' as const,
+        requiredCapacityKvar: reactiveKvar,
+        targetPowerFactor: 0.95,
+        estimatedCost: 0,
+        reasoning: `基于${capacityKw}kW光伏容量，按25%配置无功补偿` + (avgDeviation > 3 ? '，电压波动较大需增强无功支撑' : ''),
+      },
+      line: {
+        modificationType: 'upgrade_conductor' as const,
+        currentSpec: 'LGJ-240',
+        targetSpec: recommendedWire,
+        lineLengthKm: lineDistanceKm,
+        estimatedCost: 0,
+        description: loadRatePct > 80
+          ? `负载率${loadRatePct}%超标，导线需从LGJ-240升级至${recommendedWire}`
+          : `负载率${loadRatePct}%，建议升级至${recommendedWire}预留裕度`,
+        currentCapacityKva: 0,
+        targetCapacityKva: 0,
+        voltageLevel: `${nominalVoltageKv}kV`,
+        reasoning: `输送距离${lineDistanceKm}km，当前阻抗${currentImpedance}Ω，压降${voltageDropPct}%，负载率${loadRatePct}%`,
+      },
+    }
+
+    return {
+      candidatePointId,
+      siteInfo: {
+        name: site.name,
+        longitude: site.longitude,
+        latitude: site.latitude,
+        annualIrradiance: site.annualIrradiance,
+        equivHours: site.equivHours,
+        distanceToSubstationKm: site.distanceToSubstationKm,
+        availableCapacityMw: site.availableCapacityMw,
+        description: site.description,
+      },
+      pvOutputProfile: pvProfile,
+      loadProfile,
+      netLoadProfile,
+      backfeedAnalysis: {
+        risk: backfeedRisk,
+        maxBackfeedKw,
+        backfeedHoursCount: backfeedHours.length,
+        backfeedHours: backfeedHours.map(n => n.time),
+      },
+      voltageAnalysis: {
+        timeSeries: voltageHistory,
+        maxDeviationPct: +maxDeviation.toFixed(1),
+        avgDeviationPct: avgDeviation,
+        violationCount,
+        violationRatePct: +(violationCount / voltageHistory.length * 100).toFixed(1),
+      },
+      lineAnalysis,
+      recommended,
+    }
+  }
+
   // ==================== Absorption Plans (2.1.3) ====================
   async generateAbsorptionPlan(data: any) {
     const cp = data.candidatePointData
@@ -510,7 +745,7 @@ export class PlanningService {
     const mockPlan: any = {
       id: uuid(),
       candidate_point_id: data.candidatePointId,
-      plan_name: `${data.planName || '储能配置'}方案`,
+      plan_name: data.planName || '光伏接入消纳方案',
       storage_config: JSON.stringify(data.storageConfig || { requiredCapacityKwh: 20000, requiredPowerKw: 10000, storageType: 'lithium', durationHours: 2, estimatedCost: 3000, layoutPlan: '集中式布置于升压站附近' }),
       reactive_comp_config: JSON.stringify(data.reactiveCompConfig || { compType: 'SVG', requiredCapacityKvar: 8000, targetPowerFactor: 0.95, estimatedCost: 480 }),
       line_modification: JSON.stringify(data.lineModification || { modificationType: 'upgrade_conductor', currentSpec: 'LGJ-240', targetSpec: 'LGJ-400', lineLengthKm: 12.5, estimatedCost: 1250, description: '导线截面升级，提升输送容量' }),
@@ -665,26 +900,8 @@ export class PlanningService {
     }
   }
 
-  private mockVariants(parentId: string) {
-    const now = new Date().toISOString()
-    return [
-      {
-        id: `var-${Date.now()}-1`, name: '方案A-保守配置', parentPlanId: parentId,
-        storageConfig: { requiredCapacityKwh: 20000, requiredPowerKw: 10000, storageType: 'lithium', durationHours: 2, estimatedCost: 3000, layoutPlan: '' },
-        reactiveCompConfig: { compType: 'SVG', requiredCapacityKvar: 8000, targetPowerFactor: 0.95, estimatedCost: 480 },
-        lineModification: { modificationType: 'upgrade_conductor', currentSpec: 'LGJ-240', targetSpec: 'LGJ-400', lineLengthKm: 12.5, estimatedCost: 1250, description: '' },
-        computedIndicators: { totalInvestmentTenThousand: 4730, annualBenefitTenThousand: 1656, absorptionCapacityKw: 45000, absorptionImprovementPct: 12.5, paybackPeriodYears: 2.9, irrPct: 12.5, npv: 38000000, storageCostBreakdown: { equipmentCost: 1500, constructionCost: 300, otherCost: 200 }, annualCashflow: [] },
-        createdAt: now,
-      },
-      {
-        id: `var-${Date.now()}-2`, name: '方案B-强化配置', parentPlanId: parentId,
-        storageConfig: { requiredCapacityKwh: 40000, requiredPowerKw: 20000, storageType: 'lithium', durationHours: 2, estimatedCost: 6000, layoutPlan: '' },
-        reactiveCompConfig: { compType: 'SVG', requiredCapacityKvar: 12000, targetPowerFactor: 0.98, estimatedCost: 720 },
-        lineModification: { modificationType: 'new_tie_line', currentSpec: 'LGJ-240', targetSpec: 'LGJ-630', lineLengthKm: 15.0, estimatedCost: 2500, description: '' },
-        computedIndicators: { totalInvestmentTenThousand: 9220, annualBenefitTenThousand: 3227, absorptionCapacityKw: 52000, absorptionImprovementPct: 28.3, paybackPeriodYears: 2.9, irrPct: 14.2, npv: 52000000, storageCostBreakdown: { equipmentCost: 3000, constructionCost: 600, otherCost: 400 }, annualCashflow: [] },
-        createdAt: now,
-      },
-    ]
+  private mockVariants(_parentId: string) {
+    return []
   }
 
   // ==================== Cost Items (造价参数管理) ====================
@@ -760,7 +977,7 @@ export class PlanningService {
   async listInvestmentConfig(query: { investmentPlanId?: string }) {
     try {
       return db('investment_config')
-        .join('cost_items', 'investment_config.cost_item_id', 'cost_items.id')
+        .leftJoin('cost_items', 'investment_config.cost_item_id', 'cost_items.id')
         .modify((qb) => {
           if (query.investmentPlanId) qb.where('investment_config.investment_plan_id', query.investmentPlanId)
         })
@@ -768,6 +985,7 @@ export class PlanningService {
           'investment_config.*',
           'cost_items.item_code',
           'cost_items.equipment_type',
+          'cost_items.category',
           'cost_items.model_spec',
           'cost_items.item_name as cost_item_name',
           'cost_items.cost_unit',
@@ -849,12 +1067,12 @@ export class PlanningService {
       }
     }
 
-    // 无投资方案时，纯容量估算
-    if (!data.investmentPlanId && equipmentCost === 0 && constructionCost === 0) {
-      equipmentCost = capacityKw * 1800
-      constructionCost = capacityKw * 600
-      landCost = capacityKw * 400
-      otherCost = (equipmentCost + constructionCost + landCost) * 0.08
+    // 无配置数据时（无方案或方案未配成本项），用容量兜底估算
+    if (equipmentCost === 0 && constructionCost === 0) {
+      equipmentCost = capacityKw * 2500
+      constructionCost = capacityKw * 1000
+      landCost = capacityKw * 500
+      otherCost = (equipmentCost + constructionCost + landCost) * 0.10
     }
 
     const total = equipmentCost + constructionCost + landCost + otherCost
@@ -1000,7 +1218,7 @@ export class PlanningService {
         irrPct: +irr.toFixed(2),
         npv: Math.round(npv),
         paybackPeriodYears: +paybackYears.toFixed(1),
-        roiPct: totalInvestment > 0 ? +((totalRevenue / totalInvestment) * 100).toFixed(1) : 0,
+        roiPct: totalInvestment > 0 ? +((annualNet / totalInvestment) * 100).toFixed(1) : 0,
       },
       yearlyCashflow: cashflows,
     }

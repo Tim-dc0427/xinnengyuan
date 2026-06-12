@@ -226,19 +226,6 @@ async function onDrawerHourChange() {
         </template>
         <el-button size="small" type="primary" @click="openEquipmentDrawer" :loading="drawerLoading">设备台账</el-button>
       </div>
-      <!-- 按时段查看 -->
-      <div v-if="availableHours.length" style="display:flex;align-items:center;gap:12px;margin-top:10px;padding-top:10px;border-top:1px solid #ebeef5">
-        <span style="font-size:12px;color:#606266">历史时段：</span>
-        <el-select v-model="selectedStationHour" size="small" style="width:180px" @change="onStationHourChange">
-          <el-option v-for="h in availableHours" :key="h" :label="h.replace('T', ' ').slice(0, 16)" :value="h" />
-        </el-select>
-        <template v-if="stationHourPower">
-          <span>P：<b :style="{ color: stationHourPower.activePowerKw >= 0 ? '#67c23a' : '#f56c6c' }">{{ stationHourPower.activePowerKw.toFixed(1) }} kW</b></span>
-          <span>Q：{{ stationHourPower.reactivePowerKvar.toFixed(1) }} kvar</span>
-          <span>S：{{ stationHourPower.apparentPowerKva.toFixed(1) }} kVA</span>
-          <el-tag :type="stationHourPower.activePowerKw >= 0 ? 'success' : 'danger'" size="small">{{ stationHourPower.activePowerKw >= 0 ? '正向供电' : '反向倒送' }}</el-tag>
-        </template>
-      </div>
     </div>
 
     <!-- 倒送事件明细（极端数据） -->
@@ -266,13 +253,6 @@ async function onDrawerHourChange() {
           <div style="font-weight:600;font-size:15px">{{ activeStation.stationName }}</div>
           <div>装机容量：{{ activeStation.installedCapacityMw }}MW | 并网电压：{{ activeStation.gridConnectionVoltageKv }}kV</div>
         </div>
-        <!-- 时段选择 -->
-        <div v-if="availableHours.length" style="margin-bottom:12px;display:flex;align-items:center;gap:8px">
-          <span style="font-size:12px;color:#606266">数据时段：</span>
-          <el-select v-model="selectedStationHour" size="small" style="width:180px" @change="onDrawerHourChange">
-            <el-option v-for="h in availableHours" :key="h" :label="h.replace('T', ' ').slice(0, 16)" :value="h" />
-          </el-select>
-        </div>
         <!-- 实时运行状态 -->
         <div v-if="activeSnapshot" style="margin-bottom:16px;background:#f5f7fa;padding:10px 12px;border-radius:4px;font-size:13px">
           <div style="font-weight:600;margin-bottom:6px">实时运行状态</div>
@@ -297,7 +277,6 @@ async function onDrawerHourChange() {
           </el-descriptions-item>
           <el-descriptions-item label="额定电压">{{ eq.voltageKv }} kV</el-descriptions-item>
         </el-descriptions>
-        <!-- 设备实时功率（仅功率型设备展示） -->
         <div v-if="hasPowerData(eq)" style="margin-top:6px;font-size:12px;color:#606266">
           <span style="font-weight:600;color:#303133">实时功率：</span>
           <span>P <b :style="{ color: (eq.activePowerKw ?? 0) >= 0 ? '#67c23a' : '#f56c6c' }">{{ (eq.activePowerKw ?? 0).toFixed(1) }} kW</b></span>

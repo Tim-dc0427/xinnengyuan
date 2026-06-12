@@ -54,6 +54,8 @@ export interface PvCostLibraryItem {
   technicalParams: Record<string, number>
   remark: string
   modelTypeId?: string
+  installedCapacityKw?: number
+  comprehensiveCost?: number
   createdAt: string
 }
 
@@ -396,6 +398,7 @@ export interface PvModelTypeField {
   field_options?: string
   is_required: number
   sort_order: number
+  category?: string
   created_at?: string
 }
 

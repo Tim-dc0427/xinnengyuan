@@ -2,46 +2,44 @@
 import { ref, computed, onMounted } from 'vue'
 import ChartContainer from '@/components/common/ChartContainer.vue'
 import { fetchQualificationRate } from '@/api/grid-diagnosis'
+import { fetchDataRanges } from '@/api/system'
 
 const dateRange = ref<[string, string]>(['2026-03-01', '2026-06-02'])
 const voltageLevel = ref('')
 const filterZone = ref('')
 const ledgerPage = ref(1)
 const anomalyPage = ref(1)
-const pageSize = 10
+const pageSize = 15
 const groupBy = ref<'zone' | 'voltageLevel'>('zone')
-const periodType = ref<'summary' | 'monthly'>('monthly')
-const filterMonth = ref('')
+const filterHour = ref('')
 const loading = ref(false)
-const months = ref<string[]>([])
-const ledger = ref<any[]>([])
+const hourlyLedger = ref<any[]>([])
 const trendData = ref<any[]>([])
 const trendKeys = ref<string[]>([])
 const anomalyPoints = ref<any[]>([])
 const rawData = ref<any>(null)
 
-const filteredAnomalies = computed(() => {
-  let list = anomalyPoints.value
-  if (filterZone.value) list = list.filter((a: any) => a.zone === filterZone.value)
-  if (voltageLevel.value) {
-    // 异常点没有voltageLevel，通过zone匹配ledger中的voltageLevel不太准确
-    // 简单过滤：如果选了电压等级，只显示对应区域的异常（region内的电压等级都差不多）
-  }
+const hourSlots = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0') + ':00')
+
+const filteredLedger = computed(() => {
+  let list = hourlyLedger.value
+  if (filterZone.value) list = list.filter((l: any) => l.zone === filterZone.value)
+  if (filterHour.value) list = list.filter((l: any) => l.period === filterHour.value)
   return list
 })
 
-function switchLedger() {
-  if (!rawData.value) return
-  let list = (periodType.value === 'summary' ? rawData.value.summaryLedger : rawData.value.monthlyLedger) || []
-  if (periodType.value === 'monthly') {
-    months.value = [...new Set(list.map((l: any) => l.period))].sort() as string[]
-    if (filterMonth.value) list = list.filter((l: any) => l.period === filterMonth.value)
-  }
-  if (filterZone.value) list = list.filter((l: any) => l.zone === filterZone.value)
-  ledger.value = list
-}
-
-onMounted(() => loadData())
+onMounted(async () => {
+  try {
+    const ranges = await fetchDataRanges()
+    const v = ranges.voltage_measurements
+    if (v?.minTime && v?.maxTime) {
+      const today = new Date().toISOString().slice(0, 10)
+      const endDate = today < v.maxTime.slice(0, 10) ? today : v.maxTime.slice(0, 10)
+      dateRange.value = [v.minTime.slice(0, 10), endDate]
+    }
+  } catch { /* 兜底 */ }
+  loadData()
+})
 
 async function loadData() {
   loading.value = true
@@ -52,7 +50,7 @@ async function loadData() {
   } as any)
   if (data) {
     rawData.value = data
-    switchLedger()
+    hourlyLedger.value = data.hourlyLedger || []
     trendData.value = data.trendData || []
     trendKeys.value = data.trendKeys || []
     anomalyPoints.value = data.anomalyPoints || []
@@ -61,7 +59,6 @@ async function loadData() {
 }
 
 const trendOption = computed(() => {
-  // 按 groupBy 维度聚合：取该维度下所有组合的合格率均值
   const groups = new Map<string, number[]>()
   for (const td of trendData.value) {
     for (const key of trendKeys.value) {
@@ -77,9 +74,6 @@ const trendOption = computed(() => {
     name: dim,
     type: 'line' as const,
     data: trendData.value.map(td => {
-      const vals = groups.get(dim)
-      if (!vals) return null
-      // 该月该维度下的平均值
       let sum = 0, cnt = 0
       for (const key of trendKeys.value) {
         const [zone, vl] = key.split('|')
@@ -92,22 +86,11 @@ const trendOption = computed(() => {
     symbol: 'circle',
     symbolSize: 4,
   }))
-  const dimLabel = groupBy.value === 'zone' ? '区域' : '电压等级'
-  // 在趋势图上标注异常月份（低于98%的点）
-  const anomalyThreshold = 99
-  lines.forEach(line => {
-    const anomalyMonths = line.data
-      .map((v, i) => v != null && v < anomalyThreshold ? { coord: [trendData.value[i].month.slice(0, 7), v] } : null)
-      .filter(Boolean)
-    if (anomalyMonths.length > 0) {
-      ;(line as any).markPoints = {
-        data: anomalyMonths,
-        symbol: 'pin', symbolSize: 24,
-        label: { formatter: '{c}%', fontSize: 10 },
-        itemStyle: { color: '#F56C6C' },
-      }
-    }
-  })
+  // 动态 Y 轴范围：取所有有效值的最小值，向下取整到5的倍数，上限固定100
+  const allVals = lines.flatMap(l => l.data.filter((v: any) => v != null) as number[])
+  const dataMin = allVals.length > 0 ? Math.min(...allVals) : 95
+  const yMin = Math.max(0, Math.floor(dataMin / 5) * 5)
+  const yMax = 100
   return {
     tooltip: { trigger: 'axis' as const, formatter: (p: any) => {
       let s = p[0]?.axisValue || ''
@@ -115,8 +98,8 @@ const trendOption = computed(() => {
       return s
     }},
     legend: { data: dimList, type: 'scroll' as const, bottom: 0 },
-    xAxis: { type: 'category' as const, data: trendData.value.map(d => d.month.slice(0, 7)), axisLabel: { rotate: 45 } },
-    yAxis: { type: 'value' as const, name: '%', min: 95, max: 100.5 },
+    xAxis: { type: 'category' as const, data: trendData.value.map(d => d.hour), axisLabel: { rotate: 45 } },
+    yAxis: { type: 'value' as const, name: '%', min: yMin, max: yMax },
     series: lines,
     grid: { left: 50, right: 16, top: 24, bottom: 50 },
   }
@@ -130,8 +113,8 @@ const trendOption = computed(() => {
     <div class="filter-bar">
       <div class="filter-group">
         <span class="filter-label">区域</span>
-        <el-select v-model="filterZone" size="small" style="width:120px" clearable placeholder="全部" @change="switchLedger">
-          <el-option v-for="z in [...new Set((rawData?.summaryLedger||[]).map((l:any)=>l.zone))].sort()" :key="z" :label="z" :value="z" />
+        <el-select v-model="filterZone" size="small" style="width:120px" clearable placeholder="全部">
+          <el-option v-for="z in [...new Set((hourlyLedger||[]).map((l:any)=>l.zone))].sort()" :key="z" :label="z" :value="z" />
         </el-select>
       </div>
       <div class="filter-group">
@@ -144,6 +127,12 @@ const trendOption = computed(() => {
         </el-select>
       </div>
       <div class="filter-group">
+        <span class="filter-label">时段</span>
+        <el-select v-model="filterHour" size="small" style="width:100px" clearable placeholder="全部">
+          <el-option v-for="h in hourSlots" :key="h" :label="h" :value="h" />
+        </el-select>
+      </div>
+      <div class="filter-group">
         <span class="filter-label">日期范围</span>
         <el-date-picker v-model="dateRange[0]" type="date" value-format="YYYY-MM-DD" placeholder="开始" size="small" @change="loadData" style="width:130px" />
         <span style="color:#909399;margin:0 4px">至</span>
@@ -152,35 +141,24 @@ const trendOption = computed(() => {
     </div>
 
     <div class="chart-panel" style="margin-bottom:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 16px 4px 16px">
-        <span style="font-size:14px;font-weight:600;color:#303133">合格率台账</span>
-        <div style="display:flex;align-items:center;gap:8px">
-          <el-radio-group v-model="periodType" size="small" @change="switchLedger">
-            <el-radio-button value="monthly">按月</el-radio-button>
-            <el-radio-button value="summary">汇总</el-radio-button>
-          </el-radio-group>
-          <el-select v-if="periodType === 'monthly'" v-model="filterMonth" size="small" style="width:120px" clearable placeholder="全部月份" @change="switchLedger">
-            <el-option v-for="m in months" :key="m" :label="m" :value="m" />
-          </el-select>
-        </div>
-      </div>
-      <el-table :data="ledger.slice((ledgerPage-1)*pageSize, ledgerPage*pageSize)" size="small" stripe height="320">
-        <el-table-column prop="period" label="时段" width="100" />
-        <el-table-column prop="zone" label="区域" width="80" />
-        <el-table-column prop="voltageLevel" label="电压等级" width="90" />
-        <el-table-column prop="totalHours" label="总时长(h)" width="90" />
-        <el-table-column prop="qualifiedHours" label="合格时长(h)" width="100" />
-        <el-table-column label="合格率" width="80">
+      <div style="padding:8px 16px 4px 16px;font-size:14px;font-weight:600;color:#303133">分时段合格率台账</div>
+      <el-table :data="filteredLedger.slice((ledgerPage-1)*pageSize, ledgerPage*pageSize)" stripe style="width:100%" max-height="520">
+        <el-table-column prop="period" label="时段" width="80" />
+        <el-table-column prop="zone" label="区域" min-width="100" />
+        <el-table-column prop="voltageLevel" label="电压等级" min-width="100" />
+        <el-table-column prop="totalHours" label="总采样点" min-width="90" />
+        <el-table-column prop="qualifiedHours" label="合格采样点" min-width="100" />
+        <el-table-column label="合格率" min-width="80">
           <template #default="{ row }">{{ row.rate }}%</template>
         </el-table-column>
-        <el-table-column prop="violations" label="越限次数" width="80" />
+        <el-table-column prop="violations" label="越限次数" min-width="80" />
       </el-table>
-      <el-pagination v-if="ledger.length > pageSize" v-model:current-page="ledgerPage" :page-size="pageSize" :total="ledger.length" layout="prev, pager, next" size="small" style="padding:8px 16px;justify-content:flex-end" />
+      <el-pagination v-if="filteredLedger.length > pageSize" v-model:current-page="ledgerPage" :page-size="pageSize" :total="filteredLedger.length" layout="prev, pager, next" size="small" style="padding:8px 16px;justify-content:flex-end" />
     </div>
 
     <div class="chart-panel" style="margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 16px 4px 16px">
-        <span style="font-size:14px;font-weight:600;color:#303133">合格率趋势</span>
+        <span style="font-size:14px;font-weight:600;color:#303133">24小时合格率趋势</span>
         <el-radio-group v-model="groupBy" size="small">
           <el-radio-button value="zone">按区域</el-radio-button>
           <el-radio-button value="voltageLevel">按电压等级</el-radio-button>
@@ -189,9 +167,9 @@ const trendOption = computed(() => {
       <ChartContainer :option="trendOption" height="320px" :loading="loading" />
     </div>
 
-    <div class="chart-panel" v-if="filteredAnomalies.length > 0">
+    <div class="chart-panel" v-if="anomalyPoints.length > 0">
       <div style="font-size:14px;font-weight:600;padding:8px 16px 4px 16px;color:#303133">电压影响因素标注</div>
-      <el-table :data="filteredAnomalies.slice((anomalyPage-1)*pageSize, anomalyPage*pageSize)" size="small" stripe max-height="280">
+      <el-table :data="anomalyPoints.slice((anomalyPage-1)*pageSize, anomalyPage*pageSize)" size="small" stripe max-height="280">
         <el-table-column prop="time" label="异常时段" width="170" />
         <el-table-column prop="zone" label="区域" width="80" />
         <el-table-column label="偏差率" width="80">
@@ -209,7 +187,7 @@ const trendOption = computed(() => {
         <el-table-column prop="pvStatus" label="光伏(kW)" width="100" />
         <el-table-column prop="loadStatus" label="负荷(kW)" width="100" />
       </el-table>
-      <el-pagination v-if="filteredAnomalies.length > pageSize" v-model:current-page="anomalyPage" :page-size="pageSize" :total="filteredAnomalies.length" layout="prev, pager, next" size="small" style="padding:4px 16px 8px;justify-content:flex-end" />
+      <el-pagination v-if="anomalyPoints.length > pageSize" v-model:current-page="anomalyPage" :page-size="pageSize" :total="anomalyPoints.length" layout="prev, pager, next" size="small" style="padding:4px 16px 8px;justify-content:flex-end" />
     </div>
   </div>
 </template>

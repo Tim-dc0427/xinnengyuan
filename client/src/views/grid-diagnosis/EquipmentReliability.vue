@@ -67,12 +67,14 @@ function gradeTagType(grade: string) {
 }
 
 const gradeStats = computed(() => {
-  const list = allEquipment.value
+  const list = selectedStationId.value ? filteredList.value : allEquipment.value
   const a = list.filter((e) => e.reliabilityGrade === 'A').length
   const b = list.filter((e) => e.reliabilityGrade === 'B').length
   const c = list.filter((e) => e.reliabilityGrade === 'C').length
   return { a, b, c, total: list.length }
 })
+
+const activeTab = ref('detail')
 
 const warningList = computed(() => allEquipment.value.filter((e) => e.reliabilityGrade === 'C'))
 </script>
@@ -111,60 +113,66 @@ const warningList = computed(() => allEquipment.value.filter((e) => e.reliabilit
       </div>
     </div>
 
-    <!-- 全局低可靠性预警（始终显示） -->
-    <div v-if="warningList.length" class="chart-panel">
-      <div class="chart-panel-title">低可靠性设备预警（C级）</div>
-      <el-table :data="warningList" stripe size="small" max-height="300">
-        <el-table-column prop="equipmentName" label="设备名称" width="150" />
-        <el-table-column label="类型" width="80">
-          <template #default="{ row }">{{ typeLabelMap[row.equipmentType] || row.equipmentType }}</template>
-        </el-table-column>
-        <el-table-column label="可靠度" width="100">
-          <template #default="{ row }">{{ row.reliability ? (row.reliability * 100).toFixed(2) + '%' : '-' }}</template>
-        </el-table-column>
-        <el-table-column label="故障率(/天)" width="120">
-          <template #default="{ row }">{{ row.failureRate ? row.failureRate.toFixed(5) : '-' }}</template>
-        </el-table-column>
-        <el-table-column label="等级" width="80">
-          <template #default="{ row }"><el-tag :type="gradeTagType(row.reliabilityGrade || '')" size="small">{{ row.reliabilityGrade }}级</el-tag></template>
-        </el-table-column>
-        <el-table-column prop="stationName" label="所属电站" />
-      </el-table>
-    </div>
-
-    <!-- 按电站筛选的明细 -->
-    <div v-if="filteredList.length" class="chart-panel">
-      <div class="chart-panel-title">{{ selectedStation?.stationName || '选中电站' }} — 设备可靠性明细</div>
-      <el-table :data="filteredList" stripe size="small" max-height="500">
-        <el-table-column prop="equipmentName" label="设备名称" width="150" />
-        <el-table-column label="类型" width="100">
-          <template #default="{ row }">{{ typeLabelMap[row.equipmentType] || row.equipmentType }}</template>
-        </el-table-column>
-        <el-table-column prop="stationName" label="所属电站" width="140" />
-        <el-table-column prop="ratedVoltageKv" label="电压等级(kV)" width="110" />
-        <el-table-column label="可靠度" width="110">
-          <template #default="{ row }">
-            <span v-if="row.reliability !== undefined">{{ (row.reliability * 100).toFixed(2) }}%</span>
-            <span v-else style="color:#c0c4cc">评估中...</span>
+    <!-- Tabs: 可靠性明细 / 低可靠性预警 -->
+    <div class="chart-panel">
+      <el-tabs v-model="activeTab">
+        <el-tab-pane label="可靠性明细" name="detail">
+          <template v-if="filteredList.length">
+            <el-table :data="filteredList" stripe size="small" max-height="500">
+              <el-table-column prop="equipmentName" label="设备名称" width="150" />
+              <el-table-column label="类型" width="100">
+                <template #default="{ row }">{{ typeLabelMap[row.equipmentType] || row.equipmentType }}</template>
+              </el-table-column>
+              <el-table-column prop="stationName" label="所属电站" width="140" />
+              <el-table-column prop="ratedVoltageKv" label="电压等级(kV)" width="110" />
+              <el-table-column label="可靠度" width="110">
+                <template #default="{ row }">
+                  <span v-if="row.reliability !== undefined">{{ (row.reliability * 100).toFixed(6) }}%</span>
+                  <span v-else style="color:#c0c4cc">评估中...</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="故障率(/年)" width="110">
+                <template #default="{ row }">{{ row.failureRate?.toFixed(5) || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="可靠性等级" width="110">
+                <template #default="{ row }">
+                  <el-tag :type="gradeTagType(row.reliabilityGrade || '')" size="small">{{ row.reliabilityGrade || '?' }}级</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="设计寿命(年)" width="110">
+                <template #default="{ row }">{{ row.designLifeYears }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="100">
+                <template #default="{ row }">
+                  <el-button size="small" :loading="row.assessing" @click="assessOne(row)">重新评估</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
           </template>
-        </el-table-column>
-        <el-table-column label="故障率(/天)" width="110">
-          <template #default="{ row }">{{ row.failureRate?.toFixed(5) || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="可靠性等级" width="110">
-          <template #default="{ row }">
-            <el-tag :type="gradeTagType(row.reliabilityGrade || '')" size="small">{{ row.reliabilityGrade || '?' }}级</el-tag>
+          <el-empty v-else description="请点击地图选择电站查看设备明细" />
+        </el-tab-pane>
+        <el-tab-pane label="低可靠性预警" name="warning">
+          <template v-if="warningList.length">
+            <el-table :data="warningList" stripe size="small" max-height="400">
+              <el-table-column prop="equipmentName" label="设备名称" width="150" />
+              <el-table-column label="类型" width="80">
+                <template #default="{ row }">{{ typeLabelMap[row.equipmentType] || row.equipmentType }}</template>
+              </el-table-column>
+              <el-table-column label="可靠度" width="100">
+                <template #default="{ row }">{{ row.reliability ? (row.reliability * 100).toFixed(6) + '%' : '-' }}</template>
+              </el-table-column>
+              <el-table-column label="故障率(/年)" width="120">
+                <template #default="{ row }">{{ row.failureRate ? row.failureRate.toFixed(5) : '-' }}</template>
+              </el-table-column>
+              <el-table-column label="等级" width="80">
+                <template #default="{ row }"><el-tag :type="gradeTagType(row.reliabilityGrade || '')" size="small">{{ row.reliabilityGrade }}级</el-tag></template>
+              </el-table-column>
+              <el-table-column prop="stationName" label="所属电站" />
+            </el-table>
           </template>
-        </el-table-column>
-        <el-table-column label="设计寿命(年)" width="110">
-          <template #default="{ row }">{{ row.designLifeYears }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="100">
-          <template #default="{ row }">
-            <el-button size="small" :loading="row.assessing" @click="assessOne(row)">重新评估</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+          <el-empty v-else description="暂无低可靠性设备" />
+        </el-tab-pane>
+      </el-tabs>
     </div>
   </div>
 </template>

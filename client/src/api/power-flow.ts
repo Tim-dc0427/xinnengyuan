@@ -10,6 +10,7 @@ export interface NodeStabilityItem {
   angleDeg: number
   stabilityMargin: number
   isWeakNode: boolean
+  connectedDevices?: string[]
 }
 
 export interface ThreePhaseItem {
@@ -19,23 +20,39 @@ export interface ThreePhaseItem {
   zone?: string
   voltageLevel?: string
   baseKv?: number
+  physicalRole?: string
   imbalancePct: number
   phaseA?: number
   phaseB?: number
   phaseC?: number
+  angleA?: number
+  angleB?: number
+  angleC?: number
+  vuf?: number
+  cuf?: number
+  phaseACurrent?: number
+  phaseBCurrent?: number
+  phaseCCurrent?: number
   pvRelated?: boolean
   plantName?: string
+  installedCapacity?: number | null
+  transformerArea?: string
+  loadType?: string
 }
 
 export interface ThresholdItem {
+  id?: string
   indicatorName: string
   indicatorLabel: string
   warningThreshold: number
   criticalThreshold: number
   unit: string
+  voltageLevel: string | null
+  region: string | null
+  enabled: boolean
   isCustom: boolean
-  applicableVoltageLevel: string | null
-  applicableRegion: string | null
+  createdAt?: string
+  updatedAt?: string
 }
 
 // ==================== 指标数据 ====================
@@ -61,15 +78,54 @@ export async function fetchThreePhase(params?: { voltageLevel?: string; region?:
   return res.data?.data as ThreePhaseItem[]
 }
 
+export interface ThreePhaseTrendNode {
+  info: {
+    busId: string
+    name: string
+    zone: string
+    voltageLevel: string
+    physicalRole: string
+    pvRelated: boolean
+    plantName: string
+  }
+  series: {
+    time: string
+    imbalancePct: number
+    vuf: number
+    cuf: number
+    phaseA: number
+    phaseB: number
+    phaseC: number
+    phaseACurrent: number
+    phaseBCurrent: number
+    phaseCCurrent: number
+  }[]
+}
+
+export interface ThreePhaseTrendResult {
+  dates: string[]
+  nodes: ThreePhaseTrendNode[]
+}
+
+export async function fetchThreePhaseTrend(params: { startDate: string; endDate: string; busIds?: string }) {
+  const res = await apiClient.get('/api/v1/power-flow/indicators/three-phase/trend', { params })
+  return res.data?.data as ThreePhaseTrendResult
+}
+
 // ==================== 阈值配置 ====================
-export async function fetchThresholds() {
-  const res = await apiClient.get('/api/v1/power-flow/thresholds')
+export async function fetchThresholds(params?: { voltageLevel?: string; region?: string }) {
+  const res = await apiClient.get('/api/v1/power-flow/thresholds', { params })
   return res.data?.data as ThresholdItem[]
 }
 
 export async function updateThresholds(data: ThresholdItem[]) {
   const res = await apiClient.put('/api/v1/power-flow/thresholds', data)
-  return res.data?.data
+  return res.data?.data as ThresholdItem[]
+}
+
+export async function deleteThreshold(id: string) {
+  const res = await apiClient.delete(`/api/v1/power-flow/thresholds/${id}`)
+  return res.data?.data as { id: string; deleted: boolean }
 }
 
 // ==================== 电网拓扑数据 ====================
