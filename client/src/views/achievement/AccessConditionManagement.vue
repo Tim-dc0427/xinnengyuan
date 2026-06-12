@@ -6,7 +6,7 @@ import {
   fetchConditionPlans, createConditionPlan, updateConditionPlan, deleteConditionPlan,
 } from '@/api/achievement'
 import type { AccessPointResource, ConditionPlan } from '@/api/achievement'
-import * as XLSX from 'xlsx'
+import ExcelJS from 'exceljs'
 
 // ==================== Tab ====================
 const activeTab = ref('list')
@@ -146,8 +146,33 @@ function handleImport() {
   const input = document.createElement('input'); input.type = 'file'; input.accept = '.xlsx,.xls,.csv'
   input.onchange = async (e: any) => { const file = e.target?.files?.[0]; if (!file) return; try { const arr = await parseFile(file); const result = await importAccessPoints(arr); ElMessage.success(`导入 ${result.inserted} 条`); await loadResources() } catch { ElMessage.error('导入失败') } }; input.click()
 }
-function parseFile(file: File): Promise<any[]> {
-  return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = (e) => { try { const wb = XLSX.read(e.target?.result, { type: 'array' }); resolve(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]) as any[]) } catch { reject(new Error('解析失败')) } }; reader.onerror = () => reject(new Error('读取失败')); reader.readAsArrayBuffer(file) })
+async function parseFile(file: File): Promise<any[]> {
+  const buffer = await file.arrayBuffer()
+  const workbook = new ExcelJS.Workbook()
+  await workbook.xlsx.load(buffer)
+  const worksheet = workbook.worksheets[0]
+  if (!worksheet) return []
+  // 第一行作为表头
+  const headers: string[] = []
+  const headerRow = worksheet.getRow(1)
+  headerRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+    headers[colNumber] = cell.value?.toString()?.trim() || `列${colNumber}`
+  })
+  // 从第2行开始读取数据行
+  const rows: any[] = []
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber <= 1) return
+    // 跳过全空行
+    const values = row.values as any[]
+    if (!values || values.every(v => v === undefined || v === null || v === '')) return
+    const obj: Record<string, any> = {}
+    for (let col = 1; col <= headers.length; col++) {
+      const key = headers[col]
+      if (key) obj[key] = values[col] ?? ''
+    }
+    if (Object.keys(obj).length > 0) rows.push(obj)
+  })
+  return rows
 }
 
 // ==================== 计划管理弹窗（仅Tab3优质方案用） ====================

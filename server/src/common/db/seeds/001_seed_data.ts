@@ -106,7 +106,7 @@ export async function seed(knex: Knex): Promise<void> {
 
   const newUsers = defaultUsers.filter(u => !existingUsernames.has(u.username))
   if (newUsers.length > 0) {
-    const passwordHash = await bcrypt.hash('password123', 10)
+    const passwordHash = await bcrypt.hash('NewEnergy@2024!Grid#Admin', 10)
     await knex('users').insert(
       newUsers.map(u => ({ id: uuid(), username: u.username, password_hash: passwordHash, display_name: u.display_name, role_id: u.role_id, department: u.department, department_id: u.department_id })),
     )
