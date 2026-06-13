@@ -109,6 +109,41 @@ async function handleDelete() {
   } catch { /* 用户取消 */ }
 }
 
+const failedItems = computed(() => items.value.filter((i: any) => i.status === 'failed'))
+
+const solutions = computed(() => {
+  if (!hasAnomalies.value) return []
+  const suggests: Array<{ target: string; reason: string; fix: string }> = []
+  for (const item of failedItems.value) {
+    const err = (item.errorMessage || '').toLowerCase()
+    let fix = ''
+    if (err.includes('奇异') || err.includes('singular') || err.includes('jacobian')) {
+      fix = '存在孤立母线或网络孤岛，请检查该对象关联的拓扑连通性'
+    } else if (err.includes('收敛') || err.includes('converge')) {
+      fix = '潮流计算未收敛，建议增大最大迭代次数或放宽收敛精度'
+    } else if (err.includes('数据') || err.includes('参数') || err.includes('缺失') || err.includes('missing')) {
+      fix = '设备参数不完整，请补充相关母线或线路的额定参数'
+    } else if (err.includes('取消') || err.includes('cancel')) {
+      fix = '批次被手动取消，无需处理'
+    } else {
+      fix = '错误原因未知，建议查看完整日志或联系技术人员'
+    }
+    suggests.push({ target: item.itemLabel, reason: item.errorMessage || '未知错误', fix })
+  }
+  return suggests
+})
+
+function handleSolution() {
+  if (!hasAnomalies.value) {
+    ElMessageBox.alert('当前没有异常，暂无方案', '解决方案', { confirmButtonText: '知道了', type: 'info' })
+    return
+  }
+  const lines = solutions.value.map((s, i) =>
+    `${i + 1}. ${s.target}\n   错误：${s.reason}\n   方案：${s.fix}`
+  )
+  ElMessageBox.alert(lines.join('\n\n'), '解决方案', { confirmButtonText: '知道了', type: 'warning', dangerouslyUseHTMLString: false })
+}
+
 function goResults() {
   router.push({ name: 'BatchResultAnalysis', query: { groupId: activeGroupId.value } })
 }
@@ -162,22 +197,23 @@ onUnmounted(() => stopPoll())
             </div>
             <el-progress :percentage="progressPct" :status="failedTasks > 0 && isFinished ? 'exception' : isFinished ? 'success' : ''" />
 
-            <div v-if="hasAnomalies && isFinished" class="anomaly-banner">
+            <div v-if="hasAnomalies" class="anomaly-banner">
               {{ failedTasks }} 个子任务执行失败
             </div>
 
             <div class="action-row">
               <el-button v-if="!isFinished" type="danger" size="small" @click="handleCancel">取消批次</el-button>
               <el-button v-if="isFinished" type="primary" size="small" @click="goResults">查看结果</el-button>
+              <el-button size="small" :type="hasAnomalies ? 'warning' : 'info'" plain @click="handleSolution">解决方案</el-button>
               <el-button type="danger" size="small" plain @click="handleDelete">删除批次</el-button>
             </div>
           </div>
 
           <el-table :data="items" size="small" max-height="320" stripe style="margin-top:12px">
-            <el-table-column prop="itemLabel" label="设备" min-width="140" show-overflow-tooltip />
+            <el-table-column prop="itemLabel" label="对象" min-width="140" show-overflow-tooltip />
             <el-table-column prop="itemType" label="类型" width="60">
               <template #default="{ row }">
-                {{ row.itemType === 'node' ? '节点' : '支路' }}
+                {{ row.itemType === 'node' ? '母线' : '线路' }}
               </template>
             </el-table-column>
             <el-table-column label="进度" width="140">

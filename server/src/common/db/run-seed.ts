@@ -44,6 +44,8 @@ async function main() {
   const path = await import('node:path')
   const seedFiles = fs.readdirSync(seedDir).filter((f: string) => f.endsWith('.ts') || f.endsWith('.js')).sort()
 
+  const { pathToFileURL } = await import('node:url')
+
   for (const file of seedFiles) {
     const seedName = file.replace(/\.(ts|js)$/, '')
     if (executed.has(seedName)) {
@@ -52,7 +54,7 @@ async function main() {
     }
     try {
       console.log(`  ▶ 运行种子: ${seedName}`)
-      const mod = await import(path.join(seedDir, file))
+      const mod = await import(pathToFileURL(path.join(seedDir, file)).href)
       if (typeof mod.seed === 'function') {
         await mod.seed(db)
       }

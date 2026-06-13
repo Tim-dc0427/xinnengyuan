@@ -3,10 +3,11 @@ import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   fetchHistory, compareHistoryVersions, reuseHistoryParams,
-  lockHistory, deleteHistory, cleanupExpiredHistory,
+  lockHistory, deleteHistory, cleanupExpiredHistory, fetchHistoryRetentionDays,
 } from '@/api/power-flow'
 import type { HistoryListItem, VersionCompareResult } from '@/api/power-flow'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { formatDateTime } from '@/utils/time'
 
 const router = useRouter()
 
@@ -173,10 +174,20 @@ async function doDelete(row: HistoryListItem) {
 // ==================== 清理过期 ====================
 const cleanupVisible = ref(false)
 const cleanupDays = ref(30)
+const savedRetentionDays = ref(30)
+
+async function openCleanup() {
+  try {
+    savedRetentionDays.value = await fetchHistoryRetentionDays()
+    cleanupDays.value = savedRetentionDays.value
+  } catch { savedRetentionDays.value = 30; cleanupDays.value = 30 }
+  cleanupVisible.value = true
+}
 
 async function doCleanup() {
   try {
     const res = await cleanupExpiredHistory(cleanupDays.value)
+    savedRetentionDays.value = res.retentionDays || cleanupDays.value
     ElMessage.success(`已清理 ${res.deletedCount} 条过期记录`)
     cleanupVisible.value = false
     loadData()
@@ -205,8 +216,8 @@ function taskTypeLabel(type: string) {
   return m[type] || type
 }
 
-function diffColor(v: number) {
-  if (Math.abs(v) < 0.001) return '#909399'
+function diffColor(v: number | null) {
+  if (v == null || Math.abs(v) < 0.001) return '#909399'
   return v > 0 ? '#F56C6C' : '#67C23A'
 }
 
@@ -227,9 +238,9 @@ onMounted(() => { loadData() })
         <el-option v-for="s in statusOptions" :key="s.value" :label="s.label" :value="s.value" />
       </el-select>
       <el-date-picker v-model="filters.dateRange" type="daterange" size="small" style="width:240px"
-        start-placeholder="开始日期" end-placeholder="结束日期" value-format="YYYY-MM-DDTHH:mm:ss.SSS[Z]"
+        start-placeholder="开始日期" end-placeholder="结束日期" value-format="YYYY-MM-DD"
         @change="handleSearch" />
-      <el-input v-model="filters.keyword" placeholder="搜索任务ID" size="small" style="width:200px" clearable
+      <el-input v-model="filters.keyword" placeholder="搜索任务ID/操作人" size="small" style="width:200px" clearable
         @keyup.enter="handleSearch" @clear="handleSearch" />
       <el-button size="small" type="primary" @click="handleSearch" :loading="loading">查询</el-button>
       <el-button size="small" @click="handleReset">重置</el-button>
@@ -258,7 +269,9 @@ onMounted(() => { loadData() })
           </template>
         </el-table-column>
         <el-table-column prop="operator" label="操作人" width="90" />
-        <el-table-column prop="created_at" label="时间" width="160" />
+        <el-table-column label="时间" width="160">
+            <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
+          </el-table-column>
         <el-table-column label="数据来源" width="80">
           <template #default="{ row }">
             <span style="font-size:12px;color:#909399">{{ row.data_source === 'feeder' ? '馈线' : row.data_source === 'batch' ? '批量' : '手动' }}</span>
@@ -287,7 +300,7 @@ onMounted(() => { loadData() })
           <el-button size="small" :disabled="selectedIds.length !== 2" @click="doCompare" :loading="compareLoading">
             版本对比（{{ selectedIds.length }}/2）
           </el-button>
-          <el-button size="small" type="danger" @click="cleanupVisible = true">清理过期记录</el-button>
+          <el-button size="small" type="danger" @click="openCleanup">清理过期记录</el-button>
         </div>
         <el-pagination
           v-model:current-page="page"
@@ -310,74 +323,99 @@ onMounted(() => { loadData() })
             <div style="font-size:13px;font-weight:600;margin-bottom:6px">版本A</div>
             <div style="font-size:12px;color:#909399">任务ID: {{ compareResult.versionA.taskId?.substring(0, 12) }}...</div>
             <div style="font-size:12px;color:#909399">类型: {{ taskTypeLabel(compareResult.versionA.taskType) }}</div>
-            <div style="font-size:12px;color:#909399">时间: {{ compareResult.versionA.createdAt }}</div>
+            <div style="font-size:12px;color:#909399">时间: {{ formatDateTime(compareResult.versionA.createdAt) }}</div>
           </div>
           <div style="flex:1;background:#fafafa;padding:12px;border-radius:4px">
             <div style="font-size:13px;font-weight:600;margin-bottom:6px">版本B</div>
             <div style="font-size:12px;color:#909399">任务ID: {{ compareResult.versionB.taskId?.substring(0, 12) }}...</div>
             <div style="font-size:12px;color:#909399">类型: {{ taskTypeLabel(compareResult.versionB.taskType) }}</div>
-            <div style="font-size:12px;color:#909399">时间: {{ compareResult.versionB.createdAt }}</div>
+            <div style="font-size:12px;color:#909399">时间: {{ formatDateTime(compareResult.versionB.createdAt) }}</div>
           </div>
         </div>
         <div style="font-size:14px;font-weight:600;margin-bottom:8px">节点电压差异 (A版本 - B版本)</div>
         <el-table :data="compareResult.nodeDiff" stripe size="small" max-height="200" style="margin-bottom:16px">
           <el-table-column prop="name" label="节点" width="100" />
           <el-table-column prop="voltageLevel" label="电压等级" width="80" />
-          <el-table-column label="A相Δ(pu)" width="100">
+          <el-table-column label="ΔV(pu)" width="90">
             <template #default="{ row }">
-              <span :style="{ color: diffColor(row.phaseADiff), fontWeight: 'bold' }">{{ (row.phaseADiff * 100).toFixed(3) }}%</span>
+              <span :style="{ color: diffColor(row.voltagePuDiff), fontWeight: 'bold' }">{{ Number(row.voltagePuDiff).toFixed(4) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="B相Δ(pu)" width="100">
+          <el-table-column label="Δ角度(°)" width="90">
             <template #default="{ row }">
-              <span :style="{ color: diffColor(row.phaseBDiff), fontWeight: 'bold' }">{{ (row.phaseBDiff * 100).toFixed(3) }}%</span>
+              <span :style="{ color: diffColor(row.angleDegDiff), fontWeight: 'bold' }">{{ Number(row.angleDegDiff).toFixed(2) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="C相Δ(pu)" width="100">
+          <el-table-column label="裕度Δ(%)" width="90">
             <template #default="{ row }">
-              <span :style="{ color: diffColor(row.phaseCDiff), fontWeight: 'bold' }">{{ (row.phaseCDiff * 100).toFixed(3) }}%</span>
+              <span :style="{ color: diffColor(row.marginDiff), fontWeight: 'bold' }">{{ (row.marginDiff * 100).toFixed(1) }}%</span>
             </template>
           </el-table-column>
-          <el-table-column label="VUFΔ" width="90">
-            <template #default="{ row }">
-              <span :style="{ color: diffColor(row.vufDiff), fontWeight: 'bold' }">{{ Number(row.vufDiff).toFixed(3) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="note" label="备注" width="120" />
+          <template v-if="compareResult.isThreePhase">
+            <el-table-column label="A相Δ" width="80">
+              <template #default="{ row }">
+                <span :style="{ color: diffColor(row.phaseADiff), fontWeight: 'bold' }">{{ Number(row.phaseADiff).toFixed(4) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="B相Δ" width="80">
+              <template #default="{ row }">
+                <span :style="{ color: diffColor(row.phaseBDiff), fontWeight: 'bold' }">{{ Number(row.phaseBDiff).toFixed(4) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="C相Δ" width="80">
+              <template #default="{ row }">
+                <span :style="{ color: diffColor(row.phaseCDiff), fontWeight: 'bold' }">{{ Number(row.phaseCDiff).toFixed(4) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="VUFΔ" width="80">
+              <template #default="{ row }">
+                <span :style="{ color: diffColor(row.vufDiff), fontWeight: 'bold' }">{{ Number(row.vufDiff).toFixed(3) }}</span>
+              </template>
+            </el-table-column>
+          </template>
+          <el-table-column prop="note" label="备注" width="110" />
         </el-table>
 
         <div style="font-size:14px;font-weight:600;margin-bottom:8px">支路功率差异 (A版本 - B版本)</div>
         <el-table :data="compareResult.branchDiff" stripe size="small" max-height="200">
-          <el-table-column label="支路" width="180">
+          <el-table-column label="支路" width="160">
             <template #default="{ row }">{{ row.fromBusName }} → {{ row.toBusName }}</template>
           </el-table-column>
           <el-table-column prop="voltageLevel" label="电压等级" width="80" />
-          <el-table-column label="A相ΔP(MW)" width="110">
+          <el-table-column label="ΔP(MW)" width="90">
             <template #default="{ row }">
-              <span :style="{ color: diffColor(row.phaseAPDiff), fontWeight: 'bold' }">{{ Number(row.phaseAPDiff).toFixed(3) }}</span>
+              <span :style="{ color: diffColor(row.pFromMwDiff), fontWeight: 'bold' }">{{ Number(row.pFromMwDiff).toFixed(3) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="B相ΔP(MW)" width="110">
+          <el-table-column label="ΔQ(Mvar)" width="90">
             <template #default="{ row }">
-              <span :style="{ color: diffColor(row.phaseBPDiff), fontWeight: 'bold' }">{{ Number(row.phaseBPDiff).toFixed(3) }}</span>
+              <span :style="{ color: diffColor(row.qFromMvarDiff), fontWeight: 'bold' }">{{ Number(row.qFromMvarDiff).toFixed(3) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="C相ΔP(MW)" width="110">
+          <el-table-column label="Δ负载率(%)" width="100">
             <template #default="{ row }">
-              <span :style="{ color: diffColor(row.phaseCPDiff), fontWeight: 'bold' }">{{ Number(row.phaseCPDiff).toFixed(3) }}</span>
+              <span :style="{ color: diffColor(row.loadingPctDiff), fontWeight: 'bold' }">{{ Number(row.loadingPctDiff).toFixed(1) }}%</span>
             </template>
           </el-table-column>
-          <el-table-column prop="note" label="备注" width="120" />
+          <el-table-column label="Δ损耗(MW)" width="90">
+            <template #default="{ row }">
+              <span :style="{ color: diffColor(row.lossMwDiff), fontWeight: 'bold' }">{{ Number(row.lossMwDiff).toFixed(3) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="note" label="备注" width="110" />
         </el-table>
       </template>
     </el-dialog>
 
     <!-- 清理过期弹窗 -->
-    <el-dialog v-model="cleanupVisible" title="清理过期记录" width="400px">
-      <div style="display:flex;align-items:center;gap:10px">
+    <el-dialog v-model="cleanupVisible" title="清理过期记录" width="420px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
         <span style="font-size:13px;color:#606266">删除</span>
         <el-input-number v-model="cleanupDays" :min="1" :max="365" size="small" style="width:100px" />
         <span style="font-size:13px;color:#606266">天前的未锁定历史记录</span>
+      </div>
+      <div style="font-size:12px;color:#909399;line-height:1.6">
+        系统每天凌晨自动清理超过 {{ savedRetentionDays }} 天的未锁定记录，已锁定的记录不受影响。修改天数并执行清理后将同步更新自动清理阈值。
       </div>
       <template #footer>
         <el-button size="small" @click="cleanupVisible = false">取消</el-button>

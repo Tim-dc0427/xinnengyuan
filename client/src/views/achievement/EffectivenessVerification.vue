@@ -8,6 +8,7 @@ import {
   fetchLessons, createLesson, deleteLesson,
 } from '@/api/achievement'
 import type { OperationProject, AvailableStation, RunningStats, CompletionComparison, EvaluationReport, LessonItem } from '@/api/achievement'
+import { todayStr } from '@/utils/time'
 
 // ==================== 项目 ====================
 const projects = ref<OperationProject[]>([])
@@ -41,7 +42,7 @@ const saving = ref(false)
 async function fetchStats() {
   if (!selectedProjectId.value) return
   statsLoading.value = true
-  const end = new Date().toISOString().slice(0, 10)
+  const end = todayStr()
   const start = '2024-01-01' // 后端会取 actual_completion_date 和此值的较大者
   try { runningStats.value = await fetchRunningStats(selectedProjectId.value, start, end) } catch { runningStats.value = null } finally { statsLoading.value = false }
 }
@@ -57,7 +58,7 @@ async function saveCorrection() {
   if (!selectedProjectId.value) return; saving.value = true
   try {
     await createVerification(selectedProjectId.value, {
-      periodStart: '2024-01-01', periodEnd: new Date().toISOString().slice(0, 10),
+      periodStart: '2024-01-01', periodEnd: todayStr(),
       finalOutputKwh: correction.value.outputMwh != null ? correction.value.outputMwh * 10000 : undefined,
       finalEquivalentHours: correction.value.equivalentHours ?? undefined,
       finalVoltageCompliancePct: correction.value.voltageCompliancePct ?? undefined,

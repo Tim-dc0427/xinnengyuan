@@ -2,6 +2,7 @@
 import { inject } from 'vue'
 import { Warning, CircleCheck, CircleClose } from '@element-plus/icons-vue'
 import { COMPLETENESS_KEY } from './pv-completeness-key'
+import { formatDateTime } from '@/utils/time'
 
 const shared = inject(COMPLETENESS_KEY)!
 
@@ -41,8 +42,12 @@ const severityMap: Record<string, string> = {
         <el-table-column label="类型" width="100">
           <template #default="{ row }"><el-tag size="small">{{ row.type === 'time_gap' ? '时间间断' : row.type }}</el-tag></template>
         </el-table-column>
-        <el-table-column prop="startTime" label="起始时间" width="180" />
-        <el-table-column prop="endTime" label="结束时间" width="180" />
+        <el-table-column label="起始时间" width="180">
+          <template #default="{ row }">{{ formatDateTime(row.startTime) }}</template>
+        </el-table-column>
+        <el-table-column label="结束时间" width="180">
+          <template #default="{ row }">{{ formatDateTime(row.endTime) }}</template>
+        </el-table-column>
         <el-table-column label="间断时长" width="100">
           <template #default="{ row }">{{ row.gapMinutes }} 分钟</template>
         </el-table-column>

@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { fetchNodeStability } from '@/api/power-flow'
 import { useThresholds } from '@/composables/useThresholds'
+import { todayStr } from '@/utils/time'
 
 const { load: loadThresholds, getStatus } = useThresholds()
 
@@ -88,7 +89,7 @@ function handleExport() {
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
-  a.href = url; a.download = `voltage-stability-${new Date().toISOString().slice(0, 10)}.csv`
+  a.href = url; a.download = `voltage-stability-${todayStr()}.csv`
   a.click(); URL.revokeObjectURL(url)
 }
 

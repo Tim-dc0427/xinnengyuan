@@ -8,6 +8,7 @@ import {
   compareStationModelVersions,
   type CurveTemplate, type ConfidenceSetting, type StationModelParam,
 } from '@/api/model-params'
+import { formatDateTime } from '@/utils/time'
 
 type ParamType = 'station' | 'curve' | 'confidence'
 
@@ -213,7 +214,7 @@ onMounted(() => {
             <span class="group-arrow">{{ expandedStation === group.rootId ? '▾' : '▸' }}</span>
             <span class="group-name">{{ group.name }}</span>
             <el-tag size="small" type="info">v{{ group.activeVersion || '?' }} 当前</el-tag>
-            <span class="group-meta">共 {{ group.totalVersions }} 个版本 · 最近修改 {{ group.lastModifier }} · {{ group.lastModified }}</span>
+            <span class="group-meta">共 {{ group.totalVersions }} 个版本 · 最近修改 {{ group.lastModifier }} · {{ formatDateTime(group.lastModified) }}</span>
           </div>
           <template v-if="expandedStation === group.rootId">
             <el-table :data="stationVersions" size="small" stripe class="version-table">
@@ -230,7 +231,7 @@ onMounted(() => {
                 <template #default="{ row }">{{ row.change_summary || '-' }}</template>
               </el-table-column>
               <el-table-column label="时间" width="170">
-                <template #default="{ row }">{{ row.created_at }}</template>
+                <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
               </el-table-column>
               <el-table-column label="操作" width="160" fixed="right">
                 <template #default="{ row }">
@@ -255,7 +256,7 @@ onMounted(() => {
             <span class="group-arrow">{{ expandedCurve === group.rootId ? '▾' : '▸' }}</span>
             <span class="group-name">{{ group.name }}</span>
             <el-tag size="small" type="info">v{{ group.activeVersion || '?' }} 当前</el-tag>
-            <span class="group-meta">共 {{ group.totalVersions }} 个版本 · 最近修改 {{ group.lastModifier }} · {{ group.lastModified }}</span>
+            <span class="group-meta">共 {{ group.totalVersions }} 个版本 · 最近修改 {{ group.lastModifier }} · {{ formatDateTime(group.lastModified) }}</span>
           </div>
           <template v-if="expandedCurve === group.rootId">
             <el-table :data="curveVersions" size="small" stripe class="version-table">
@@ -272,7 +273,7 @@ onMounted(() => {
                 <template #default="{ row }">{{ row.change_summary || '-' }}</template>
               </el-table-column>
               <el-table-column label="时间" width="170">
-                <template #default="{ row }">{{ row.created_at }}</template>
+                <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
               </el-table-column>
               <el-table-column label="操作" width="80" fixed="right">
                 <template #default="{ row }">
@@ -294,7 +295,7 @@ onMounted(() => {
             <span class="group-arrow">{{ expandedConfidence === group.rootId ? '▾' : '▸' }}</span>
             <span class="group-name">{{ group.name }}</span>
             <el-tag size="small" type="info">v{{ group.activeVersion || '?' }} 当前</el-tag>
-            <span class="group-meta">共 {{ group.totalVersions }} 个版本 · 最近修改 {{ group.lastModifier }} · {{ group.lastModified }}</span>
+            <span class="group-meta">共 {{ group.totalVersions }} 个版本 · 最近修改 {{ group.lastModifier }} · {{ formatDateTime(group.lastModified) }}</span>
           </div>
           <template v-if="expandedConfidence === group.rootId">
             <el-table :data="confidenceVersions" size="small" stripe class="version-table">
@@ -311,7 +312,7 @@ onMounted(() => {
                 <template #default="{ row }">{{ row.change_summary || '-' }}</template>
               </el-table-column>
               <el-table-column label="时间" width="170">
-                <template #default="{ row }">{{ row.created_at }}</template>
+                <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
               </el-table-column>
               <el-table-column label="操作" width="80" fixed="right">
                 <template #default="{ row }">

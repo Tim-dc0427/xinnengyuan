@@ -7,7 +7,7 @@ import { ElMessage } from 'element-plus'
 const router = useRouter()
 const authStore = useAuthStore()
 
-const form = ref({ username: 'admin', password: 'password123' })
+const form = ref({ username: 'admin', password: 'Xinnengyuan@123' })
 const loading = ref(false)
 
 async function handleLogin() {
@@ -40,7 +40,7 @@ async function handleLogin() {
             登录
           </el-button>
         </el-form-item>
-        <div class="login-hint">测试账号: admin / password123</div>
+        <div class="login-hint">测试账号: admin / Xinnengyuan@123</div>
       </el-form>
     </div>
   </div>

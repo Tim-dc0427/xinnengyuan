@@ -104,10 +104,28 @@ export class ScenarioService {
       updated_at: now,
     }
     await db('interactive_scenarios').insert(row)
+
+    // 创建初始版本
+    await db('scenario_versions').insert({
+      id: uuidv4(),
+      scenario_id: id,
+      version_number: 1,
+      config_snapshot: row.config,
+      control_logic_snapshot: row.control_logic,
+      name: row.name,
+      type: row.type,
+      tags: row.tags,
+      description: row.description,
+      status: row.status,
+      changelog: '初始创建',
+      created_by: userId,
+      created_at: now,
+    })
+
     return this.getScenario(id)
   }
 
-  async updateScenario(id: string, data: any) {
+  async updateScenario(id: string, data: any, userId?: string) {
     const now = new Date().toISOString()
     const update: any = { updated_at: now }
     if (data.name !== undefined) update.name = data.name
@@ -119,22 +137,29 @@ export class ScenarioService {
     if (data.status !== undefined) update.status = data.status
     if (data.scenario_condition !== undefined) update.scenario_condition = data.scenario_condition
     if (data.version_limit !== undefined) update.version_limit = data.version_limit
+    if (userId) update.updated_by = userId
 
     const old = await db('interactive_scenarios').where('id', id).first()
     if (!old) return null
 
     await db('interactive_scenarios').where('id', id).update(update)
 
-    // 创建版本历史
+    // 重读更新后的完整数据作为版本快照
+    const current = await db('interactive_scenarios').where('id', id).first()
     const versionCount = await db('scenario_versions').where('scenario_id', id).count('* as total').first()
     await db('scenario_versions').insert({
       id: uuidv4(),
       scenario_id: id,
       version_number: (Number((versionCount as any).total) || 0) + 1,
-      config_snapshot: old.config,
-      control_logic_snapshot: old.control_logic,
+      config_snapshot: current.config,
+      control_logic_snapshot: current.control_logic,
+      name: current.name,
+      type: current.type,
+      tags: current.tags,
+      description: current.description,
+      status: current.status,
       changelog: data.changelog || '更新场景配置',
-      created_by: data.updated_by || old.created_by,
+      created_by: userId || old.created_by,
       created_at: now,
     })
 
@@ -198,15 +223,23 @@ export class ScenarioService {
       .orderBy('version_number', 'desc')
   }
 
-  async restoreVersion(scenarioId: string, versionId: string) {
+  async restoreVersion(scenarioId: string, versionId: string, userId?: string) {
     const version = await db('scenario_versions').where('id', versionId).first()
     if (!version || version.scenario_id !== scenarioId) return null
     const now = new Date().toISOString()
-    await db('interactive_scenarios').where('id', scenarioId).update({
+    const update: any = {
       config: version.config_snapshot,
       control_logic: version.control_logic_snapshot,
       updated_at: now,
-    })
+      updated_by: userId || version.created_by,
+    }
+    // 旧版本快照可能缺少这些字段(null)，只更新非空值避免 NOT NULL 约束冲突
+    if (version.name != null) update.name = version.name
+    if (version.type != null) update.type = version.type
+    if (version.tags != null) update.tags = version.tags
+    if (version.description != null) update.description = version.description
+    if (version.status != null) update.status = version.status
+    await db('interactive_scenarios').where('id', scenarioId).update(update)
     return this.getScenario(scenarioId)
   }
 
@@ -372,12 +405,13 @@ export class ScenarioService {
 
   async generateStrategy(scenarioId: string) {
     const scenario = await this.getScenario(scenarioId)
-    if (!scenario) throw new Error('场景不存在')
+    if (!scenario) { const err = new Error('场景不存在'); (err as any).statusCode = 404; throw err }
 
     const config = scenario?.config || {}
     const accessPoints = config.accessPoints || []
     const topology = config.topology || { nodes: [], edges: [] }
     const pvAps = accessPoints.filter((ap: any) => ap.nodeType === 'SOURCE')
+    const gridAps = accessPoints.filter((ap: any) => ap.nodeType === 'GRID')
     const storageAps = accessPoints.filter((ap: any) => ap.nodeType === 'STORAGE')
     const loadAps = accessPoints.filter((ap: any) => ap.nodeType === 'LOAD')
 
@@ -389,13 +423,14 @@ export class ScenarioService {
     const gridAp = accessPoints.find((ap: any) => ap.nodeType === 'GRID')
     const baseKV = gridAp?.voltageLevel || 220
 
-    // 安全约束 (kV)
+    // 安全约束
     const constraints = {
-      voltageUpperLimit: baseKV * 1.07,
-      voltageLowerLimit: baseKV * 0.93,
+      voltageUpperLimit: Math.round(baseKV * 1.07),
+      voltageLowerLimit: Math.round(baseKV * 0.93),
       frequencyUpperLimit: 50.5,
       frequencyLowerLimit: 49.5,
       lineLoadRateLimit: 0.9,
+      devicePowerLimitPct: 100,
     }
     const economicTargets = {
       optimizationMode: 'cost_first',
@@ -526,6 +561,38 @@ export class ScenarioService {
           reason: `负荷高峰时段(负荷因子${(loadFactor * 100).toFixed(0)}%)，削减10%可中断负荷`,
         })
       }
+
+      // 电网侧调度指令
+      const afterStorageNet = netPower - (storageAction === '充电' ? storageTarget : -storageTarget)
+      let gridAction: string
+      let gridTarget: number
+      let gridReason: string
+      if (afterStorageNet > 0) {
+        gridAction = '售电'
+        gridTarget = afterStorageNet
+        gridReason = '本地电源出力大于负荷+储能，余电上网'
+      } else {
+        gridAction = '购电'
+        gridTarget = Math.abs(afterStorageNet)
+        gridReason = '本地电源出力不足，从电网购电补充'
+      }
+      // 电压越限时电网侧无功调节
+      if (estVoltageKV > constraints.voltageUpperLimit) {
+        gridAction = '吸收无功'
+        gridReason = '电压偏高，电网侧吸收无功以降压'
+      } else if (estVoltageKV < constraints.voltageLowerLimit) {
+        gridAction = '发出无功'
+        gridReason = '电压偏低，电网侧发出无功以支撑电压'
+      }
+      schedule.push({
+        timeRange: segments[i],
+        deviceType: 'grid',
+        deviceName: gridAps[0]?.nodeName || '电网接入点',
+        action: gridAction,
+        targetValue: Math.round(gridTarget),
+        unit: 'kW',
+        reason: gridReason,
+      })
     }
 
     const strategyConfig = {
@@ -556,10 +623,12 @@ export class ScenarioService {
   // ==================== 模拟与验证 ====================
 
   async listSimulations(query: { scenario_id?: string; status?: string }) {
-    let q = db('scenario_simulations').select('*')
-    if (query.scenario_id) q = q.where('scenario_id', query.scenario_id)
-    if (query.status) q = q.where('status', query.status)
-    return q.orderBy('started_at', 'desc')
+    let q = db('scenario_simulations')
+      .leftJoin('interactive_scenarios', 'scenario_simulations.scenario_id', 'interactive_scenarios.id')
+      .select('scenario_simulations.*', 'interactive_scenarios.name as scenario_name')
+    if (query.scenario_id) q = q.where('scenario_simulations.scenario_id', query.scenario_id)
+    if (query.status) q = q.where('scenario_simulations.status', query.status)
+    return q.orderBy('scenario_simulations.started_at', 'desc')
   }
 
   async startSimulation(data: {
@@ -869,13 +938,7 @@ export class ScenarioService {
         )
       }
 
-      // 策略事件指标
-      for (const ev of stepEvents) {
-        metricsBatch.push(
-          { id: uuidv4(), simulation_id: simulationId, timestamp: stepTimeStr, metric_type: 'strategy_event', unit: ev.description, value: 0, threshold: 0, is_violation: ev.level },
-        )
-      }
-
+      // 自动检测事件仅记录到内存日志，不写入 strategy_event 指标（只有人工干预才写 strategy_event）
       await db('simulation_metrics').insert(metricsBatch)
       await db('scenario_simulations').where('id', simulationId).update({ progress, current_step: step + 1 })
     }
@@ -903,16 +966,31 @@ export class ScenarioService {
     return this.getSimulation(id)
   }
 
+  async deleteSimulation(id: string) {
+    const sim = await db('scenario_simulations').where('id', id).first()
+    if (!sim) { const err = new Error('模拟不存在'); (err as any).statusCode = 404; throw err }
+    if (sim.status === 'running') { const err = new Error('运行中的模拟无法删除，请先停止'); (err as any).statusCode = 400; throw err }
+    await db('simulation_metrics').where('simulation_id', id).del()
+    await db('scenario_interventions').where('simulation_id', id).del()
+    await db('scenario_evaluations').where('simulation_id', id).del()
+    await db('scenario_simulations').where('id', id).del()
+    return { id, deleted: true }
+  }
+
   async pauseSimulation(id: string) {
     const sim = await db('scenario_simulations').where('id', id).first()
-    if (!sim || sim.status !== 'running') throw new Error('模拟未运行，无法暂停')
+    if (!sim || sim.status !== 'running') {
+      const err = new Error('模拟未运行，无法暂停'); (err as any).statusCode = 400; throw err
+    }
     await db('scenario_simulations').where('id', id).update({ status: 'paused' })
     return this.getSimulation(id)
   }
 
   async resumeSimulation(id: string) {
     const sim = await db('scenario_simulations').where('id', id).first()
-    if (!sim || sim.status !== 'paused') throw new Error('模拟未暂停，无法恢复')
+    if (!sim || sim.status !== 'paused') {
+      const err = new Error('模拟未暂停，无法恢复'); (err as any).statusCode = 400; throw err
+    }
     await db('scenario_simulations').where('id', id).update({ status: 'running' })
     // 后台恢复循环
     this.simulateProgress(id).catch((err) => {
@@ -927,8 +1005,10 @@ export class ScenarioService {
 
   async updateSimulationParams(id: string, params: any) {
     const sim = await db('scenario_simulations').where('id', id).first()
-    if (!sim) throw new Error('模拟不存在')
-    if (sim.status !== 'paused' && sim.status !== 'running') throw new Error('只能在运行或暂停状态下修改参数')
+    if (!sim) { const err = new Error('模拟不存在'); (err as any).statusCode = 404; throw err }
+    if (sim.status !== 'paused' && sim.status !== 'running') {
+      const err = new Error('只能在运行或暂停状态下修改参数'); (err as any).statusCode = 400; throw err
+    }
     await db('scenario_simulations').where('id', id).update({
       paused_params: JSON.stringify(params),
     })
@@ -950,12 +1030,95 @@ export class ScenarioService {
     return { metrics, grouped, violations }
   }
 
+  // ==================== 执行数据记录 ====================
+
+  async getExecutionData(simulationId: string) {
+    const sim = await this.getSimulation(simulationId)
+    if (!sim) { const err = new Error('模拟记录不存在'); (err as any).statusCode = 404; throw err }
+
+    const results = await this.getSimulationResults(simulationId)
+    const allMetrics = (results.metrics || []) as any[]
+    const getSeries = (type: string) => allMetrics.filter((m: any) => m.metric_type === type)
+
+    const pvOut = getSeries('pv_output')
+    const loadDmd = getSeries('load_demand')
+    const storageSoc = getSeries('storage_soc')
+    const consumptionRate = getSeries('consumption_rate')
+    const voltage = getSeries('voltage')
+    const frequency = getSeries('frequency')
+    const loadRate = getSeries('load_rate')
+    const cost = getSeries('operation_cost')
+    const strategyEvents = getSeries('strategy_event')
+
+    // 策略执行日志（从 strategy_event 指标 + 模拟状态变化生成）
+    const executionLog: Array<{ time: string; event: string; level: string }> = []
+    if (sim.started_at) executionLog.push({ time: sim.started_at, event: '模拟开始执行', level: 'info' })
+    for (const ev of strategyEvents) {
+      executionLog.push({ time: ev.timestamp, event: ev.description || `策略事件 @ step ${ev.step}`, level: ev.value > 0.5 ? 'warning' : 'info' })
+    }
+    if (sim.completed_at) executionLog.push({ time: sim.completed_at, event: `模拟${sim.status === 'completed' ? '正常完成' : sim.status === 'stopped' ? '被终止' : sim.status === 'failed' ? '异常失败' : '结束'}`, level: sim.status === 'completed' ? 'info' : sim.status === 'failed' ? 'error' : 'warning' })
+
+    // 各单元调节量
+    const unitAdjustments = [
+      { unit: '光伏出力', type: '源', initial: pvOut[0]?.value ?? 0, final: pvOut[pvOut.length - 1]?.value ?? pvOut[0]?.value ?? 0, unit_: 'kW' },
+      { unit: '负荷需求', type: '荷', initial: loadDmd[0]?.value ?? 0, final: loadDmd[loadDmd.length - 1]?.value ?? loadDmd[0]?.value ?? 0, unit_: 'kW' },
+      { unit: '储能SOC',  type: '储', initial: storageSoc[0]?.value ?? 0, final: storageSoc[storageSoc.length - 1]?.value ?? storageSoc[0]?.value ?? 0, unit_: '%' },
+      { unit: '策略动作', type: '控', initial: 0, final: strategyEvents.length, unit_: '次' },
+    ].map(u => ({
+      ...u,
+      initial: typeof u.initial === 'number' ? Math.round(u.initial * 100) / 100 : u.initial,
+      final: typeof u.final === 'number' ? Math.round(u.final * 100) / 100 : u.final,
+      adjustment: typeof u.final === 'number' && typeof u.initial === 'number' ? Math.round((u.final - (u.initial as number)) * 100) / 100 : 0,
+    }))
+
+    // 电网指标变化
+    const gridIndicators = {
+      voltage: voltage.length > 0 ? {
+        avg: Math.round(voltage.reduce((s: number, m: any) => s + m.value, 0) / voltage.length * 1000) / 1000,
+        min: Math.round(Math.min(...voltage.map((m: any) => m.value)) * 1000) / 1000,
+        max: Math.round(Math.max(...voltage.map((m: any) => m.value)) * 1000) / 1000,
+      } : null,
+      frequency: frequency.length > 0 ? {
+        avg: Math.round(frequency.reduce((s: number, m: any) => s + m.value, 0) / frequency.length * 100) / 100,
+        min: Math.round(Math.min(...frequency.map((m: any) => m.value)) * 100) / 100,
+        max: Math.round(Math.max(...frequency.map((m: any) => m.value)) * 100) / 100,
+      } : null,
+      loadRate: loadRate.length > 0 ? {
+        avg: Math.round(loadRate.reduce((s: number, m: any) => s + m.value, 0) / loadRate.length * 10) / 10,
+        max: Math.round(Math.max(...loadRate.map((m: any) => m.value)) * 10) / 10,
+      } : null,
+      consumptionRate: consumptionRate.length > 0 ? {
+        avg: Math.round(consumptionRate.reduce((s: number, m: any) => s + m.value, 0) / consumptionRate.length * 10) / 10,
+        min: Math.round(Math.min(...consumptionRate.map((m: any) => m.value)) * 10) / 10,
+      } : null,
+      operationCost: cost.length > 0 ? {
+        avg: Math.round(cost.reduce((s: number, m: any) => s + m.value, 0) / cost.length * 1000) / 1000,
+        max: Math.round(Math.max(...cost.map((m: any) => m.value)) * 1000) / 1000,
+      } : null,
+    }
+
+    return {
+      simulationId,
+      status: sim.status,
+      startedAt: sim.started_at,
+      completedAt: sim.completed_at,
+      metricsCount: allMetrics.length,
+      violationsCount: results.violations.length,
+      executionLog,
+      unitAdjustments,
+      gridIndicators,
+    }
+  }
+
   // ==================== 执行效果评估 ====================
 
   async listEvaluations(query: { simulation_id?: string }) {
-    let q = db('scenario_evaluations').select('*')
-    if (query.simulation_id) q = q.where('simulation_id', query.simulation_id)
-    const list = await q.orderBy('created_at', 'desc')
+    let q = db('scenario_evaluations')
+      .leftJoin('scenario_simulations', 'scenario_evaluations.simulation_id', 'scenario_simulations.id')
+      .leftJoin('interactive_scenarios', 'scenario_simulations.scenario_id', 'interactive_scenarios.id')
+      .select('scenario_evaluations.*', 'interactive_scenarios.name as scenario_name')
+    if (query.simulation_id) q = q.where('scenario_evaluations.simulation_id', query.simulation_id)
+    const list = await q.orderBy('scenario_evaluations.created_at', 'desc')
     return list.map((r: any) => ({
       ...r,
       execution_log: r.execution_log ? JSON.parse(r.execution_log) : null,
@@ -977,7 +1140,7 @@ export class ScenarioService {
 
   async generateEvaluation(simulationId: string) {
     const sim = await this.getSimulation(simulationId)
-    if (!sim) throw new Error('模拟记录不存在')
+    if (!sim) { const err = new Error('模拟记录不存在'); (err as any).statusCode = 404; throw err }
 
     const results = await this.getSimulationResults(simulationId)
     const strategy = sim.strategy_id ? await db('scenario_strategies').where('id', sim.strategy_id).first() : null
@@ -995,6 +1158,22 @@ export class ScenarioService {
     const operationCostSeries = getSeries('operation_cost')
     const pvOutputSeries = getSeries('pv_output')
     const loadDemandSeries = getSeries('load_demand')
+    const storageSocSeries = getSeries('storage_soc')
+    const strategyEvents = getSeries('strategy_event')
+
+    // 各单元调节量
+    const pvInit = pvOutputSeries.length > 0 ? pvOutputSeries[0].value : 0
+    const pvFinal = pvOutputSeries.length > 0 ? pvOutputSeries[pvOutputSeries.length - 1].value : 0
+    const loadInit = loadDemandSeries.length > 0 ? loadDemandSeries[0].value : 0
+    const loadFinal = loadDemandSeries.length > 0 ? loadDemandSeries[loadDemandSeries.length - 1].value : 0
+    const socInit = storageSocSeries.length > 0 ? storageSocSeries[0].value : 0
+    const socFinal = storageSocSeries.length > 0 ? storageSocSeries[storageSocSeries.length - 1].value : 0
+    const unitAdjustments = [
+      { unit: '光伏出力', type: '源', initial: Math.round(pvInit), final: Math.round(pvFinal), adjustment: Math.round(pvFinal - pvInit), unit_: 'kW' },
+      { unit: '负荷需求', type: '荷', initial: Math.round(loadInit), final: Math.round(loadFinal), adjustment: Math.round(loadFinal - loadInit), unit_: 'kW' },
+      { unit: '储能SOC', type: '储', initial: socInit.toFixed(1) + '%', final: socFinal.toFixed(1) + '%', adjustment: (socFinal - socInit).toFixed(1) + '%', unit_: '%' },
+      { unit: '策略动作', type: '控', initial: 0, final: strategyEvents.length, adjustment: strategyEvents.length, unit_: '次' },
+    ]
 
     const avgVoltage = voltageSeries.length > 0 ? voltageSeries.reduce((s: number, m: any) => s + m.value, 0) / voltageSeries.length : 0
     const avgLoadRate = loadRateSeries.length > 0 ? loadRateSeries.reduce((s: number, m: any) => s + m.value, 0) / loadRateSeries.length : 0
@@ -1101,6 +1280,7 @@ export class ScenarioService {
         loadRate: Math.round(avgLoadRate * 10) / 10,
         consumptionRate: Math.round(avgConsumptionRate * 10) / 10,
       },
+      unitAdjustments,
     }
 
     const row = {
@@ -1120,23 +1300,22 @@ export class ScenarioService {
 
   async exportEvaluation(evaluationId: string, format: 'word' | 'pdf' = 'word') {
     const evaluation = await this.getEvaluation(evaluationId)
-    if (!evaluation) throw new Error('评估记录不存在')
+    if (!evaluation) { const err = new Error('评估记录不存在'); (err as any).statusCode = 404; throw err }
 
     const report = evaluation.evaluation_report || {}
     const issues = evaluation.issues || []
 
     if (format === 'word') {
-      const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, HeadingLevel } = await import('docx')
+      const { Document, Packer, Paragraph, Table, TableRow, TableCell, HeadingLevel } = await import('docx')
       const doc = new Document({
         sections: [{
           children: [
             new Paragraph({ text: '场景执行效果评估报告', heading: HeadingLevel.HEADING_1 }),
             new Paragraph({ text: `评估时间: ${evaluation.created_at}`, spacing: { after: 200 } }),
             new Paragraph({ text: `综合评分: ${evaluation.effectiveness_score}分`, heading: HeadingLevel.HEADING_2 }),
-            new Paragraph({ text: `安全性评估: ${report.securityAssessment}` }),
-            new Paragraph({ text: `经济性评估: ${report.economicAssessment}` }),
+            new Paragraph({ text: `安全性评估: ${report.securityAssessment || '-'}` }),
+            new Paragraph({ text: `经济性评估: ${report.economicAssessment || '-'}` }),
             new Paragraph({ text: `安全通过率: ${report.passRate}%` }),
-            new Paragraph({ text: `越限项数: ${report.violationCount}` }),
             new Paragraph({ text: '', spacing: { after: 200 } }),
             new Paragraph({ text: '经济明细', heading: HeadingLevel.HEADING_2 }),
             new Paragraph({ text: `总购电成本: ¥${report.economicDetails?.totalBuyCost || 0}` }),
@@ -1146,10 +1325,6 @@ export class ScenarioService {
             new Paragraph({ text: `平均运营成本: ¥${report.economicDetails?.avgCostPerKwh || 0}/kWh` }),
             new Paragraph({ text: '', spacing: { after: 200 } }),
             new Paragraph({ text: `改进建议: ${evaluation.suggestions || '无'}` }),
-            ...(issues.length > 0 ? [
-              new Paragraph({ text: '越限详情', heading: HeadingLevel.HEADING_2 }),
-              ...issues.map((v: any) => new Paragraph({ text: `${v.timestamp}: ${v.description} — 原因: ${v.cause}` })),
-            ] : []),
           ],
         }],
       })
@@ -1157,7 +1332,25 @@ export class ScenarioService {
       return { buffer, contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', filename: `评估报告_${evaluationId.slice(0, 8)}.docx` }
     } else {
       const PDFDocument = (await import('pdfkit')).default
+      const fs = await import('fs')
+
+      // 注册中文字体，解决中文乱码
+      const fontPaths = [
+        'C:\\Windows\\Fonts\\simhei.ttf',
+        '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttf',
+        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+      ]
+      let chineseFont: Buffer | null = null
+      for (const fp of fontPaths) {
+        try { chineseFont = fs.readFileSync(fp); break } catch {}
+      }
+
       const doc = new PDFDocument({ size: 'A4', margin: 50 })
+      if (chineseFont) {
+        doc.registerFont('cjk', chineseFont)
+        doc.font('cjk')
+      }
+
       const buffers: Buffer[] = []
       doc.on('data', (chunk: Buffer) => buffers.push(chunk))
       const endPromise = new Promise<Buffer>((resolve) => {
@@ -1166,24 +1359,20 @@ export class ScenarioService {
       doc.fontSize(20).text('场景执行效果评估报告', { align: 'center' })
       doc.moveDown()
       doc.fontSize(12).text(`评估时间: ${evaluation.created_at}`)
-      doc.text(`综合评分: ${evaluation.effectiveness_score}分 (${report.securityAssessment})`)
-      doc.text(`安全通过率: ${report.passRate}%  |  越限项数: ${report.violationCount}`)
+      doc.text(`综合评分: ${evaluation.effectiveness_score}分`)
+      doc.text(`安全性: ${report.securityAssessment || '-'}`)
+      doc.text(`经济性: ${report.economicAssessment || '-'}`)
+      doc.text(`安全通过率: ${report.passRate}%`)
       doc.moveDown()
       doc.fontSize(14).text('经济明细')
       doc.fontSize(11).text(`总购电成本: ¥${report.economicDetails?.totalBuyCost || 0}`)
       doc.text(`总售电收入: ¥${report.economicDetails?.totalSellIncome || 0}`)
       doc.text(`储能损耗: ¥${report.economicDetails?.storageLoss || 0}`)
       doc.text(`净收益: ¥${report.economicDetails?.netBenefit || 0}`)
+      doc.text(`平均运营成本: ¥${report.economicDetails?.avgCostPerKwh || 0}/kWh`)
       doc.moveDown()
       doc.fontSize(14).text('改进建议')
       doc.fontSize(11).text(evaluation.suggestions || '无')
-      if (issues.length > 0) {
-        doc.moveDown()
-        doc.fontSize(14).text('越限详情')
-        for (const v of issues) {
-          doc.fontSize(10).text(`${v.timestamp}: ${v.description}`)
-        }
-      }
       doc.end()
       const buffer = await endPromise
       return { buffer, contentType: 'application/pdf', filename: `评估报告_${evaluationId.slice(0, 8)}.pdf` }
@@ -1192,10 +1381,11 @@ export class ScenarioService {
 
   // ==================== 人工干预 ====================
 
-  async listInterventions(query: { scenario_id?: string; operation_type?: string; start_date?: string; end_date?: string }) {
+  async listInterventions(query: { scenario_id?: string; operation_type?: string; operator?: string; start_date?: string; end_date?: string }) {
     let q = db('scenario_interventions').select('*')
     if (query.scenario_id) q = q.where('scenario_id', query.scenario_id)
     if (query.operation_type) q = q.where('operation_type', query.operation_type)
+    if (query.operator) q = q.where('operator', 'like', `%${query.operator}%`)
     if (query.start_date) q = q.where('operated_at', '>=', query.start_date)
     if (query.end_date) q = q.where('operated_at', '<=', query.end_date)
     const list = await q.orderBy('operated_at', 'desc')
@@ -1211,7 +1401,7 @@ export class ScenarioService {
     operation_type: string
     operation_params?: any
     reason?: string
-  }, userId: string) {
+  }, operatorName: string) {
     const id = uuidv4()
     const now = new Date().toISOString()
 
@@ -1220,6 +1410,10 @@ export class ScenarioService {
     if (!scenarioId && data.simulation_id) {
       const sim = await db('scenario_simulations').where('id', data.simulation_id).first()
       scenarioId = sim?.scenario_id || ''
+    }
+    // 必须有 scenario_id，无法确定所属场景则拒绝
+    if (!scenarioId) {
+      const err = new Error('缺少 scenario_id 或 simulation_id，无法确定所属场景'); (err as any).statusCode = 400; throw err
     }
 
     // 获取修改前的参数快照
@@ -1245,7 +1439,7 @@ export class ScenarioService {
       operation_params: data.operation_params ? JSON.stringify(data.operation_params) : null,
       params_before: paramsBefore ? JSON.stringify(paramsBefore) : null,
       params_after: paramsAfter ? JSON.stringify(paramsAfter) : null,
-      operator: userId,
+      operator: operatorName,
       reason: data.reason || '',
       operated_at: now,
     }
@@ -1289,14 +1483,14 @@ export class ScenarioService {
       // 写入事件指标 (level=2 红色高亮)
       const descParts: string[] = []
       if (data.operation_params?.pvOutputLimit !== undefined) descParts.push(`光伏上限→${data.operation_params.pvOutputLimit}%`)
-      if (data.operation_params?.chargePower !== undefined) descParts.push(`储能充电→${data.operation_params.chargePower}kW`)
+      if (data.operation_params?.chargePower !== undefined) descParts.push(`储能功率→${data.operation_params.chargePower}kW`)
       if (data.operation_params?.loadShedRatio !== undefined) descParts.push(`负荷切除→${data.operation_params.loadShedRatio}%`)
       const eventId = uuidv4()
       await db('simulation_metrics').insert({
         id: eventId, simulation_id: data.simulation_id, timestamp: now,
         metric_type: 'strategy_event', unit: `[紧急干预] 强制控制 | ${descParts.join('，')}`, value: 1, threshold: 0, is_violation: 2,
       })
-      console.log(`[Intervention] force_control done, status=${after?.status || prevStatus}`)
+      console.log(`[Intervention] force_control done, status=${prevStatus}`)
     }
 
     return {
@@ -1346,7 +1540,7 @@ export class ScenarioService {
       .where('simulation_id', simulationId)
       .orderBy('timestamp', 'asc')
 
-    // 按 step 分组 (通过 timestamp 去重+排序推断 step)
+    // 按 timestamp 去重分组推断 step
     const seenTimestamps = new Set<string>()
     let stepIndex = -1
     const stepMap = new Map<number, any[]>()
@@ -1359,23 +1553,31 @@ export class ScenarioService {
       stepMap.get(stepIndex)!.push(m)
     }
 
-    // 提取 sinceStep 之后的新数据
+    // 按 step 增量返回新指标
     const newMetrics: any[] = []
-    const events: { step: number; time: string; description: string; level: number }[] = []
     const latestStep = stepIndex
-
     for (let s = sinceStep + 1; s <= stepIndex; s++) {
       const stepMetrics = stepMap.get(s) || []
       for (const m of stepMetrics) {
-        newMetrics.push(m)
-        if (m.metric_type === 'strategy_event') {
-          events.push({ step: s, time: m.timestamp, description: m.unit, level: m.is_violation })
-        }
+        if (m.metric_type !== 'strategy_event') newMetrics.push(m)
       }
     }
 
-    // 最新快照
-    const latestMetrics = stepMap.get(stepIndex) || []
+    // 干预事件单独提取，不受 step 限制（时间戳可能与模拟时间不同步）
+    const events: any[] = []
+    const allStrategyEvents = allMetrics.filter((m: any) => m.metric_type === 'strategy_event')
+    for (const m of allStrategyEvents) {
+      events.push({ id: m.id, time: m.timestamp, description: m.unit, level: m.is_violation })
+    }
+
+    // 最新快照 — 跳过纯 strategy_event 的步，取最后有真实指标的步
+    let dataStepIdx = stepIndex
+    while (dataStepIdx >= 0) {
+      const metrics = stepMap.get(dataStepIdx) || []
+      if (metrics.some((m: any) => m.metric_type !== 'strategy_event')) break
+      dataStepIdx--
+    }
+    const latestMetrics = stepMap.get(Math.max(0, dataStepIdx)) || []
     const getLatest = (type: string) => {
       const m = latestMetrics.find((x: any) => x.metric_type === type)
       return m ? m.value : 0

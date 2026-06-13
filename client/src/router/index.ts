@@ -427,7 +427,7 @@ const routes: RouteRecordRaw[] = [
             path: 'simulation',
             name: 'SimulationVerification',
             component: () => import('@/views/scenario/SimulationVerification.vue'),
-            meta: { title: '场景模拟与验证', roles: ['admin', 'planner', 'operator'] },
+            meta: { title: '场景模拟验证', roles: ['admin', 'planner', 'operator'] },
           },
           {
             path: 'evaluation',

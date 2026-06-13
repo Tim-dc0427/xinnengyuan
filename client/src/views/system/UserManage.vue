@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { getUsers, createUser, updateUser, deleteUser } from '@/api/system'
 import { getRoles, getDepartments } from '@/api/system'
 import type { UserManageItem, RoleItem, Department } from '@new-energy/shared'
+import { formatDateTime } from '@/utils/time'
 
 const list = ref<UserManageItem[]>([])
 const total = ref(0)
@@ -107,7 +108,9 @@ onMounted(() => { loadOptions(); load() })
         </template>
       </el-table-column>
       <el-table-column prop="lastLoginAt" label="最后登录" width="180" />
-      <el-table-column prop="createdAt" label="创建时间" width="180" />
+      <el-table-column label="创建时间" width="180">
+        <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="160">
         <template #default="{ row }">
           <el-button size="small" text type="primary" @click="openEdit(row)">编辑</el-button>

@@ -12,6 +12,7 @@ import {
 } from '@/api/planning'
 import { fetchPowerPlants } from '@/api/resource'
 import type { EquipmentLedgerItem, EquipmentLifecycleRecord } from '@new-energy/shared'
+import { todayStr } from '@/utils/time'
 import {
   equipmentTypeOptions,
   equipmentTypeLabels,
@@ -284,7 +285,7 @@ function openNewRecord() {
     equipmentId: currentRecord.value?.id || '',
     eventType: 'maintenance',
     eventTypeLabel: '检修维护',
-    eventTime: new Date().toISOString().slice(0, 10),
+    eventTime: todayStr(),
     operator: '',
     description: '',
     attachments: [],

@@ -10,6 +10,14 @@ interface BusPoint {
   baseKv: number
   longitude: number
   latitude: number
+  physicalRole: string
+}
+
+const roleLabels: Record<string, string> = {
+  PV: '光伏并网',
+  GENERATION: '等值电源',
+  SUBSTATION: '变电站',
+  DISTRIBUTION: '配网节点',
 }
 
 const props = defineProps<{
@@ -111,7 +119,8 @@ function createMarkers() {
   for (const bus of props.buses) {
     const marker = L.circleMarker([bus.latitude, bus.longitude], getNormalStyle(bus))
 
-    marker.bindTooltip(`${bus.name} (${bus.voltageLevel})<br/>${bus.zone}`, {
+    const roleLabel = roleLabels[bus.physicalRole] || bus.physicalRole || '未知'
+    marker.bindTooltip(`${bus.name} (${bus.voltageLevel})<br/>${roleLabel} · ${bus.zone}`, {
       direction: 'top',
       offset: [0, -getRadius(bus.baseKv || 10) - 4],
     })
@@ -156,6 +165,9 @@ function initMap() {
   // 初始选中状态
   selectedIdSet = new Set(props.selectedIds)
   refreshAllMarkers()
+
+  // 默认适应数据范围
+  if (props.buses.length > 0) fitToData()
 
   // ---- 框选 ----
   map.on('mousedown', (e) => {
@@ -240,18 +252,16 @@ watch(() => props.buses, () => {
   createMarkers()
   selectedIdSet = new Set(props.selectedIds)
   refreshAllMarkers()
+  if (props.buses.length > 0) fitToData()
 })
 
 watch(() => props.selectedIds, (newIds) => {
   const newSet = new Set(newIds)
-  // 找出变化并更新
-  for (const id of selectedIdSet) {
-    if (!newSet.has(id)) updateMarkerStyle(id)
-  }
-  for (const id of newSet) {
-    if (!selectedIdSet.has(id)) updateMarkerStyle(id)
-  }
+  const removed = [...selectedIdSet].filter(id => !newSet.has(id))
+  const added = [...newSet].filter(id => !selectedIdSet.has(id))
   selectedIdSet = newSet
+  for (const id of removed) updateMarkerStyle(id)
+  for (const id of added) updateMarkerStyle(id)
 })
 
 onMounted(() => { nextTick(() => initMap()) })

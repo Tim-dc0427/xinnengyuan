@@ -42,6 +42,7 @@ powerFlowRoutes.get('/history/compare', auth(['admin', 'planner', 'operator', 'v
 powerFlowRoutes.post('/history/reuse/:id', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.reuseHistory)
 powerFlowRoutes.post('/history/:taskId/lock', auth(['admin', 'planner', 'operator']), ctrl.lockHistory)
 powerFlowRoutes.delete('/history/:taskId', auth(['admin', 'planner']), ctrl.deleteHistory)
+powerFlowRoutes.get('/history/retention-days', auth(['admin', 'engineer', 'viewer']), ctrl.getHistoryRetentionDays)
 powerFlowRoutes.post('/history/cleanup', auth(['admin', 'planner']), ctrl.cleanupExpired)
 
 // Curve Templates (version controlled)

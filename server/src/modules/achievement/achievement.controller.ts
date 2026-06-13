@@ -1,5 +1,6 @@
 import { Request, Response } from 'express'
 import { AchievementService } from './achievement.service.js'
+import { audit } from '../../common/audit.service.js'
 
 export class AchievementController {
   private service = new AchievementService()
@@ -11,12 +12,14 @@ export class AchievementController {
 
   createProject = async (req: Request, res: Response) => {
     const data = await this.service.createProject(req.body, req.user!.id)
+    audit(req, 'CREATE', 'project', data.id, `创建项目「${req.body.name || data.id}」`, null, req.body)
     res.json({ code: 200, message: 'ok', data })
   }
 
   updateProject = async (req: Request, res: Response) => {
     const data = await this.service.updateProject(req.params.id, req.body, req.user!.id)
     if (!data) return res.status(404).json({ code: 404, message: '项目不存在' })
+    audit(req, 'UPDATE', 'project', req.params.id, '修改项目', null, req.body)
     res.json({ code: 200, message: 'ok', data })
   }
 

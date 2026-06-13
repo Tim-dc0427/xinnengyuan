@@ -143,6 +143,10 @@ export async function startSimulation(data: SimulationForm) {
   return res.data.data
 }
 
+export async function deleteSimulation(id: string) {
+  return (await apiClient.delete(`/api/v1/scenario/simulations/${id}`)).data.data
+}
+
 export async function stopSimulation(id: string) {
   const res = await apiClient.put(`/api/v1/scenario/simulations/${id}/stop`)
   return res.data.data
@@ -170,6 +174,11 @@ export async function fetchSimulationResults(id: string) {
 
 export async function fetchSimulationLive(id: string, sinceStep: number = 0) {
   const res = await apiClient.get(`/api/v1/scenario/simulations/${id}/live`, { params: { since_step: sinceStep } })
+  return res.data.data
+}
+
+export async function fetchExecutionData(id: string) {
+  const res = await apiClient.get(`/api/v1/scenario/simulations/${id}/execution-data`)
   return res.data.data
 }
 

@@ -16,8 +16,6 @@ const result: any = ref(null)
 const phaseDataDetail = ref<PhaseDataDetail | null>(null)
 const showPhaseDetailExpanded = ref(false)
 
-const weatherScenario = ref<'actual' | 'sunny' | 'cloudy' | 'rainy'>('actual')
-
 const feeder = useFeederSelection()
 
 watch(() => feeder.selectedFeederIds.value, async (newIds) => {
@@ -41,7 +39,6 @@ onMounted(async () => {
   if (reuseId) {
     try {
       const { parameters: p } = await reuseHistoryParams(reuseId)
-      if (p.weatherScenario) weatherScenario.value = p.weatherScenario
       if (p.feederIds?.length) feeder.selectedFeederIds.value = p.feederIds
     } catch (_) {}
   }
@@ -57,7 +54,6 @@ async function startCalculation() {
   try {
     const params: any = {
       useDBPhaseData: true,
-      weatherScenario: weatherScenario.value,
       feederIds: feeder.selectedFeederIds.value,
       pvBusIds: feeder.feederPVBusIds.value,
     }
@@ -125,18 +121,6 @@ function overloadedPhases(branch: any): string[] {
         @select-all="feeder.selectAllFeeders()"
         @deselect-all="feeder.deselectAllFeeders()"
       />
-
-      <div v-if="feeder.selectedFeederIds.value.length > 0" class="filter-group">
-        <el-tooltip content="光伏出力计算的基准天气条件" placement="top">
-          <span class="filter-label">天气场景：</span>
-        </el-tooltip>
-        <el-select v-model="weatherScenario" size="small" style="width:130px">
-          <el-option value="actual" label="实际测量值" />
-          <el-option value="sunny" label="典型晴天" />
-          <el-option value="cloudy" label="多云天气" />
-          <el-option value="rainy" label="阴雨天气" />
-        </el-select>
-      </div>
       <el-button type="primary" :loading="loading" @click="startCalculation">
         {{ result ? '重新计算' : '开始三相潮流计算' }}
       </el-button>

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, watch, onBeforeUnmount, computed } from 'vue'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchSimulationLive, pauseSimulation, resumeSimulation, stopSimulation, createIntervention } from '@/api/scenario'
+import dayjs from 'dayjs'
 import ChartContainer from '@/components/common/ChartContainer.vue'
 import PreviewTopology from './PreviewTopology.vue'
 
@@ -90,7 +91,7 @@ async function poll() {
       allMetrics.value.push(m)
     }
     for (const m of data.newMetrics || []) {
-      const ts = m.timestamp?.slice(11, 19) || ''
+      const ts = dayjs(m.timestamp).format('HH:mm:ss') || ''
       switch (m.metric_type) {
         case 'voltage': voltageSeries.value.push([ts, m.value]); break
         case 'frequency': frequencySeries.value.push([ts, m.value]); break
@@ -102,9 +103,10 @@ async function poll() {
         case 'operation_cost': operationCostSeries.value.push([ts, m.value]); break
       }
     }
-    // 追加事件
+    // 追加事件（按 id 去重）
+    const seenIds = new Set(events.value.map((e: any) => e.id))
     for (const ev of data.events || []) {
-      events.value.push(ev)
+      if (!seenIds.has(ev.id)) events.value.push(ev)
     }
 
     if (data.step !== undefined) lastStep.value = data.step
@@ -143,15 +145,14 @@ async function quickIntervene() {
       loadShedRatio: interveneLoadShed.value,
     }
     await createIntervention({
-      scenario_id: '',
       simulation_id: props.simulationId,
       operation_type: 'force_control',
       operation_params: params,
       reason: '实时监控快捷干预',
     })
-    // createIntervention 已写入 paused_params，模拟继续运行并在下一步自动生效
-  } catch (e) {
-    console.error('快捷干预失败', e)
+    ElMessage.success('快捷干预已生效')
+  } catch (e: any) {
+    ElMessage.error('快捷干预失败: ' + (e?.response?.data?.message || e.message))
   } finally {
     interveneSubmitting.value = false
   }

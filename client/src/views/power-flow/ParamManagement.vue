@@ -8,6 +8,7 @@ import {
   type CurveTemplate, type ConfidenceSetting, type StationModelParam,
 } from '@/api/model-params'
 import * as echarts from 'echarts'
+import { formatDateTime } from '@/utils/time'
 
 // ==================== 出力曲线模板 ====================
 const templates = ref<CurveTemplate[]>([])
@@ -557,7 +558,7 @@ onMounted(() => {
           <template #default="{ row }">{{ row.change_summary || '-' }}</template>
         </el-table-column>
         <el-table-column label="时间" width="170">
-          <template #default="{ row }">{{ row.created_at }}</template>
+          <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
         </el-table-column>
         <el-table-column label="状态" width="70">
           <template #default="{ row }">

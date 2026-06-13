@@ -106,9 +106,11 @@ export interface AuditLogItem {
   id: number
   userId: string
   username: string
+  displayName?: string
   action: string
   resourceType: string
   resourceId: string | null
+  detail?: string
   oldValue: string | null
   newValue: string | null
   ipAddress: string | null

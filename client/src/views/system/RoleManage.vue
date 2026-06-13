@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getRoles, createRole, updateRole, deleteRole } from '@/api/system'
 import type { RoleItem } from '@new-energy/shared'
+import { formatDateTime } from '@/utils/time'
 
 const list = ref<RoleItem[]>([])
 const dialogVisible = ref(false)
@@ -81,7 +82,9 @@ onMounted(load)
         </template>
       </el-table-column>
       <el-table-column prop="userCount" label="用户数" width="80" />
-      <el-table-column prop="createdAt" label="创建时间" width="180" />
+      <el-table-column label="创建时间" width="180">
+        <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="160">
         <template #default="{ row }">
           <el-button size="small" text type="primary" @click="openEdit(row)">编辑</el-button>

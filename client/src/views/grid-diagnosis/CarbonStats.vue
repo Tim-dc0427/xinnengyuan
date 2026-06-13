@@ -4,6 +4,7 @@ import ChartContainer from '@/components/common/ChartContainer.vue'
 import { fetchCarbonStats, fetchCarbonDynamic, fetchStations } from '@/api/grid-diagnosis'
 import { fetchDataRanges } from '@/api/system'
 import type { StationOption } from '@new-energy/shared'
+import { todayStr } from '@/utils/time'
 
 const stations = ref<StationOption[]>([])
 const groupBy = ref<'station' | 'zone'>('station')
@@ -145,7 +146,7 @@ onMounted(async () => {
     const ranges = await fetchDataRanges()
     const pv = ranges.pv_output_measurements
     if (pv?.minTime && pv?.maxTime) {
-      const today = new Date().toISOString().slice(0, 10)
+      const today = todayStr()
       const endDate = today < pv.maxTime.slice(0, 10) ? today : pv.maxTime.slice(0, 10)
       dateRange.value = [pv.minTime.slice(0, 10), endDate]
       dynamicDate.value = endDate

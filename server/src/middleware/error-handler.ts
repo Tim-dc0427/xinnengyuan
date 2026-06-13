@@ -21,6 +21,16 @@ export function errorHandler(err: any, _req: Request, res: Response, _next: Next
     return res.status(401).json({ code: 401, message: '认证失败', data: null })
   }
 
+  // SQLite 约束违反 → 400 Bad Request（输入数据不满足数据完整性约束）
+  if (err.message && (
+    err.message.includes('FOREIGN KEY constraint failed') ||
+    err.message.includes('NOT NULL constraint failed') ||
+    err.message.includes('UNIQUE constraint failed') ||
+    err.message.includes('CHECK constraint failed')
+  )) {
+    return res.status(400).json({ code: 400, message: err.message, data: null })
+  }
+
   const message = process.env.NODE_ENV !== 'production' ? err.message : '服务器内部错误'
   res.status(500).json({ code: 500, message, data: null })
 }

@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
+import { formatDateTime, formatDate, todayStr } from '@/utils/time'
 import {
   fetchScenarios, createScenario, updateScenario, deleteScenario,
   batchDeleteScenarios, copyScenario, fetchScenarioVersions, restoreVersion, exportScenarios,
@@ -106,7 +108,7 @@ function defaultDeviceParams(nodeType: string) {
   switch (nodeType) {
     case 'SOURCE': return { outputUpperLimit: 95, outputLowerLimit: 10, powerFactor: 0.95, regulationDelay: 30 }
     case 'GRID': return { tapRegulation: true, reactiveCompensation: true }
-    case 'LOAD': return { peakClippingRate: 15, valleyFillingRate: 12, interruptibleLoadRatio: 5 }
+    case 'LOAD': return { peakClippingRate: 15, valleyFillingRate: 12, interruptibleLoadRatio: 5, loadCurveType: 'typical_industrial', loadCurveValues: '' }
     case 'STORAGE': return { chargeSchedule: '00:00-06:00', dischargeSchedule: '10:00-12:00,18:00-21:00', socUpper: 90, socLower: 20, ratedPowerKw: 5000, ratedCapacityKwh: 10000 }
     default: return {}
   }
@@ -318,7 +320,7 @@ async function batchExport() {
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
-  a.href = url; a.download = `场景导出_${new Date().toISOString().slice(0, 10)}.csv`
+  a.href = url; a.download = `场景导出_${todayStr()}.csv`
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -336,9 +338,14 @@ async function showVersions(row: any) {
 }
 
 async function restore(scenarioId: string, versionId: string) {
-  await restoreVersion(scenarioId, versionId)
-  await loadData()
-  versions.value = await fetchScenarioVersions(scenarioId)
+  try {
+    await restoreVersion(scenarioId, versionId)
+    ElMessage.success('版本已恢复，配置和控制逻辑已还原')
+    versionsVisible.value = false
+    await loadData()
+  } catch (e: any) {
+    ElMessage.error('版本恢复失败: ' + (e.message || '未知错误'))
+  }
 }
 
 function resetSearch() {
@@ -392,7 +399,7 @@ onMounted(() => {
           <el-option label="已发布" value="active" />
           <el-option label="已归档" value="archived" />
         </el-select>
-        <el-input v-model="filterDevice" placeholder="关联节点名称" clearable style="width:150px" size="small" @clear="loadData" @keyup.enter="loadData" />
+        <el-input v-model="filterDevice" placeholder="设备" clearable style="width:150px" size="small" @clear="loadData" @keyup.enter="loadData" />
         <el-input v-model="filterTag" placeholder="标签" clearable style="width:100px" size="small" @clear="loadData" @keyup.enter="loadData" />
         <el-date-picker v-model="filterDateStart" type="date" placeholder="开始日期" size="small" style="width:130px" value-format="YYYY-MM-DD" @change="loadData" />
         <el-date-picker v-model="filterDateEnd" type="date" placeholder="结束日期" size="small" style="width:130px" value-format="YYYY-MM-DD" @change="loadData" />
@@ -402,7 +409,7 @@ onMounted(() => {
         <el-button v-if="selectedIds.length" size="small" @click="batchExport">导出({{ selectedIds.length }})</el-button>
         <el-button v-if="selectedIds.length" size="small" @click="batchCopy">批量复制({{ selectedIds.length }})</el-button>
         <el-button v-if="selectedIds.length" size="small" type="danger" @click="batchDelete">批量删除({{ selectedIds.length }})</el-button>
-        <el-button type="primary" size="small" @click="openCreate">创建场景</el-button>
+        <el-button type="primary" size="small" @click="openCreate">搭建互动场景</el-button>
       </div>
     </div>
 
@@ -428,7 +435,9 @@ onMounted(() => {
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="created_at" label="创建时间" width="150" />
+      <el-table-column label="创建时间" width="160">
+                <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
+              </el-table-column>
       <el-table-column label="操作" width="320" fixed="right">
         <template #default="{ row }">
           <el-button size="small" link type="primary" @click="showDetail(row)">详情</el-button>
@@ -536,9 +545,10 @@ onMounted(() => {
                   <el-col :span="12"><span style="font-size:11px;color:#909399">无功补偿</span><el-switch v-model="ap.params.reactiveCompensation" size="small" /></el-col>
                 </template>
                 <template v-if="ap.nodeType === 'LOAD'">
-                  <el-col :span="8"><span style="font-size:11px;color:#909399">削峰比例(%)</span><el-input-number v-model="ap.params.peakClippingRate" :min="0" :max="50" size="small" style="width:100%" /></el-col>
-                  <el-col :span="8"><span style="font-size:11px;color:#909399">填谷比例(%)</span><el-input-number v-model="ap.params.valleyFillingRate" :min="0" :max="50" size="small" style="width:100%" /></el-col>
-                  <el-col :span="8"><span style="font-size:11px;color:#909399">可中断比例(%)</span><el-input-number v-model="ap.params.interruptibleLoadRatio" :min="0" :max="30" size="small" style="width:100%" /></el-col>
+                  <el-col :span="6"><span style="font-size:11px;color:#909399">削峰比例(%)</span><el-input-number v-model="ap.params.peakClippingRate" :min="0" :max="50" size="small" style="width:100%" /></el-col>
+                  <el-col :span="6"><span style="font-size:11px;color:#909399">填谷比例(%)</span><el-input-number v-model="ap.params.valleyFillingRate" :min="0" :max="50" size="small" style="width:100%" /></el-col>
+                  <el-col :span="6"><span style="font-size:11px;color:#909399">可中断比例(%)</span><el-input-number v-model="ap.params.interruptibleLoadRatio" :min="0" :max="30" size="small" style="width:100%" /></el-col>
+                  <el-col :span="6"><span style="font-size:11px;color:#909399">负荷曲线</span><el-select v-model="ap.params.loadCurveType" size="small" style="width:100%"><el-option label="典型工业" value="typical_industrial" /><el-option label="典型商业" value="typical_commercial" /><el-option label="典型居民" value="typical_residential" /><el-option label="自定义" value="custom" /></el-select></el-col>
                 </template>
                 <template v-if="ap.nodeType === 'STORAGE'">
                   <el-col :span="4"><span style="font-size:11px;color:#909399">额定功率(kW)</span><el-input-number v-model="ap.params.ratedPowerKw" :min="0" size="small" style="width:100%" /></el-col>
@@ -720,7 +730,7 @@ onMounted(() => {
         <!-- 仿真结果 -->
         <div v-loading="previewing" style="min-height:80px">
           <div v-if="!previewData && !previewing" style="text-align:center;padding:20px;color:#909399">
-            <el-button type="primary" size="small" @click="runPreview">开始仿真预览</el-button>
+            <el-button type="primary" size="small" @click="runPreview">运行效果预览</el-button>
           </div>
           <template v-if="previewData && !previewing">
             <div style="margin-bottom:10px;display:flex;align-items:center;gap:8px">
@@ -783,7 +793,9 @@ onMounted(() => {
         <el-table-column prop="version_number" label="版本号" width="80" />
         <el-table-column label="变更说明" min-width="160"><template #default="{ row }">{{ row.changelog }}</template></el-table-column>
         <el-table-column prop="created_by" label="操作人" width="120" />
-        <el-table-column prop="created_at" label="操作时间" width="155" />
+        <el-table-column label="操作时间" width="160">
+          <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
+        </el-table-column>
         <el-table-column label="操作" width="80">
           <template #default="{ row }">
             <el-button size="small" link type="primary" @click="restore(versionsScenarioId, row.id)">恢复</el-button>

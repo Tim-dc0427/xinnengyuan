@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import ChartContainer from '@/components/common/ChartContainer.vue'
 import { fetchQualificationRate } from '@/api/grid-diagnosis'
 import { fetchDataRanges } from '@/api/system'
+import { todayStr } from '@/utils/time'
 
 const dateRange = ref<[string, string]>(['2026-03-01', '2026-06-02'])
 const voltageLevel = ref('')
@@ -33,7 +34,7 @@ onMounted(async () => {
     const ranges = await fetchDataRanges()
     const v = ranges.voltage_measurements
     if (v?.minTime && v?.maxTime) {
-      const today = new Date().toISOString().slice(0, 10)
+      const today = todayStr()
       const endDate = today < v.maxTime.slice(0, 10) ? today : v.maxTime.slice(0, 10)
       dateRange.value = [v.minTime.slice(0, 10), endDate]
     }

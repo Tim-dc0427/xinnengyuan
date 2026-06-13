@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getDepartments, createDepartment, updateDepartment, deleteDepartment } from '@/api/system'
 import type { Department } from '@new-energy/shared'
+import { formatDateTime } from '@/utils/time'
 
 const list = ref<Department[]>([])
 const dialogVisible = ref(false)
@@ -82,7 +83,9 @@ onMounted(load)
     <el-table :data="list" row-key="id" default-expand-all border style="width: 100%">
       <el-table-column prop="name" label="部门名称" />
       <el-table-column prop="sortOrder" label="排序" width="80" />
-      <el-table-column prop="createdAt" label="创建时间" width="180" />
+      <el-table-column label="创建时间" width="180">
+        <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="220">
         <template #default="{ row }">
           <el-button size="small" text type="primary" @click="openCreate(row.id)">新增子部门</el-button>

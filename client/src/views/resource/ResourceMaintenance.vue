@@ -2,8 +2,10 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchPowerPlants, fetchPowerPlant, createPowerPlant, deletePowerPlant, batchImportPowerPlants, updatePowerPlant, fetchEquipment, createEquipment, updateEquipment, fetchModels, bindModelsToPlant, fetchPowerPlantVersions } from '@/api/resource'
+import { fetchEquipmentReliability, predictLife, generateReplacementPlan } from '@/api/grid-diagnosis'
 import type { CreatePowerPlantPayload } from '@/api/resource'
-import { apiClient } from '@/api/client'
+import { formatDateTime, formatRelativeTime, todayStr } from '@/utils/time'
+import dayjs from 'dayjs'
 
 // ==================== 数据状态 ====================
 const plants = ref<any[]>([])
@@ -25,10 +27,10 @@ async function openEquipDialog(plant: any) {
       const eqs = await fetchEquipment({ stationId: plant.id })
       equipmentMap.value[plant.id] = eqs
       const results = await Promise.allSettled(
-        eqs.map((eq: any) => apiClient.get(`/grid-diagnosis/equipment/reliability/${eq.id}`))
+        eqs.map((eq: any) => fetchEquipmentReliability(eq.id))
       )
       results.forEach((r, i) => {
-        if (r.status === 'fulfilled') reliabilityMap.value[eqs[i].id] = r.value.data?.data
+        if (r.status === 'fulfilled') reliabilityMap.value[eqs[i].id] = r.value
       })
     } catch { /* ignore */ }
   }
@@ -37,8 +39,7 @@ async function openEquipDialog(plant: any) {
     for (const eq of (equipmentMap.value[plant.id] || [])) {
       if (!lifePredictMap.value[eq.id]) {
         try {
-          const res = await apiClient.post('/grid-diagnosis/equipment/lifecycle/predict', { equipmentId: eq.id })
-          lifePredictMap.value[eq.id] = res.data?.data
+          lifePredictMap.value[eq.id] = await predictLife({ equipmentId: eq.id })
         } catch { /* ignore */ }
       }
     }
@@ -128,7 +129,7 @@ function generateVirtualLife(eq: any) {
     estimatedRemainingCycles: Math.round((sohPct - 80) / 0.15 * monthlyCycles),
     avgDodPct: 50 + (hash % 25),
     avgTempC: 22 + (hash % 10),
-    replacementDate: new Date(Date.now() + (designLife - currentAge) * 365.25 * 86400000).toISOString().split('T')[0],
+    replacementDate: dayjs(Date.now() + (designLife - currentAge) * 365.25 * 86400000).format('YYYY-MM-DD'),
   }
 }
 
@@ -148,11 +149,11 @@ async function loadAll() {
     equipmentMap.value = eqByPlant
     // 并行获取可靠性评分（失败则用虚拟数据）
     const relResults = await Promise.allSettled(
-      allEqs.map((eq: any) => apiClient.get(`/grid-diagnosis/equipment/reliability/${eq.id}`))
+      allEqs.map((eq: any) => fetchEquipmentReliability(eq.id))
     )
     relResults.forEach((r, i) => {
-      if (r.status === 'fulfilled' && r.value.data?.data) {
-        reliabilityMap.value[allEqs[i].id] = r.value.data.data
+      if (r.status === 'fulfilled' && r.value) {
+        reliabilityMap.value[allEqs[i].id] = r.value
       } else {
         reliabilityMap.value[allEqs[i].id] = generateVirtualReliability(allEqs[i])
       }
@@ -161,19 +162,13 @@ async function loadAll() {
     const storageEqs = allEqs.filter((eq: any) => eq.equipment_type === 'BATTERY')
     storageEqs.forEach((eq: any) => {
       if (!lifePredictMap.value[eq.id]) {
-        try {
-          apiClient.post('/grid-diagnosis/equipment/lifecycle/predict', { equipmentId: eq.id })
-            .then(res => { if (res.data?.data) lifePredictMap.value[eq.id] = res.data.data })
-            .catch(() => { lifePredictMap.value[eq.id] = generateVirtualLife(eq) })
-        } catch {
-          lifePredictMap.value[eq.id] = generateVirtualLife(eq)
-        }
+        predictLife({ equipmentId: eq.id })
+          .then(data => { if (data) lifePredictMap.value[eq.id] = data })
+          .catch(() => { lifePredictMap.value[eq.id] = generateVirtualLife(eq) })
       }
     })
   } catch { /* ignore */ }
   finally { loading.value = false }
-
-  loadReplacementPlan()
 }
 
 function getPlantEquipment(stationId: string) {
@@ -246,13 +241,6 @@ const anomalyPlantOptions = computed(() => {
 const anomalyRefreshKey = ref(0)
 let anomalyTimer: ReturnType<typeof setInterval> | null = null
 
-function formatRelativeTime(ms: number): string {
-  if (ms < 60000) return `${Math.floor(ms / 1000)} 秒前`
-  if (ms < 3600000) return `${Math.floor(ms / 60000)} 分钟前`
-  if (ms < 86400000) return `${Math.floor(ms / 3600000)} 小时前`
-  return `${Math.floor(ms / 86400000)} 天前`
-}
-
 const anomalyList = computed(() => {
   void anomalyRefreshKey.value // 依赖刷新键
   const now = Date.now()
@@ -314,9 +302,10 @@ const storageLifeItems = computed(() => {
 
 async function loadReplacementPlan(stationId?: string) {
   try {
-    const res = await apiClient.post('/grid-diagnosis/equipment/lifecycle/replacement-plan', { stationId })
-    replacementPlan.value = res.data?.data || []
-  } catch { replacementPlan.value = [] }
+    const data = await generateReplacementPlan({ stationId })
+    replacementPlan.value = data || []
+    ElMessage.success(`已生成 ${replacementPlan.value.length} 条更换计划`)
+  } catch { replacementPlan.value = []; ElMessage.error('生成更换计划失败') }
 }
 
 async function refreshHealthData() {
@@ -324,11 +313,11 @@ async function refreshHealthData() {
   try {
     const allEqs = Object.values(equipmentMap.value).flat()
     const results = await Promise.allSettled(
-      allEqs.map((eq: any) => apiClient.get(`/grid-diagnosis/equipment/reliability/${eq.id}`))
+      allEqs.map((eq: any) => fetchEquipmentReliability(eq.id))
     )
     results.forEach((r, i) => {
-      if (r.status === 'fulfilled' && r.value.data?.data) {
-        reliabilityMap.value[allEqs[i].id] = r.value.data.data
+      if (r.status === 'fulfilled' && r.value) {
+        reliabilityMap.value[allEqs[i].id] = r.value
       }
     })
     // 同时刷新异常时间基准
@@ -436,8 +425,19 @@ async function handleFileImport(event: Event) {
   if (!file) return
   try {
     const text = await file.text()
-    const plants: CreatePowerPlantPayload[] = JSON.parse(text)
-    if (!Array.isArray(plants) || !plants.length) { ElMessage.warning('文件格式错误：应为电站数组'); return }
+    const raw: any[] = JSON.parse(text)
+    if (!Array.isArray(raw) || !raw.length) { ElMessage.warning('文件格式错误：应为电站数组'); return }
+    // 兼容导出格式（snake_case）和手动格式（camelCase）
+    const plants: CreatePowerPlantPayload[] = raw.map((item: any) => ({
+      name: item.name || item.station_name || '',
+      plantType: item.plantType || item.plant_type || 'PV',
+      capacityKw: item.capacityKw ?? item.capacity_kw ?? 0,
+      installedDate: item.installedDate || item.installed_date || '',
+      longitude: item.longitude ?? 0,
+      latitude: item.latitude ?? 0,
+      address: item.address || '',
+      status: item.status || 'active',
+    }))
     await ElMessageBox.confirm(
       `确认导入 ${plants.length} 个电站？`,
       '批量导入',
@@ -586,7 +586,7 @@ function handleExport() {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `power-plants-${new Date().toISOString().slice(0, 10)}.json`
+  a.download = `power-plants-${todayStr()}.json`
   a.click()
   URL.revokeObjectURL(url)
   ElMessage.success(`已导出 ${data.length} 个电站数据`)
@@ -609,13 +609,13 @@ onUnmounted(() => {
     <div class="chart-panel-title">资源维护</div>
     <el-tabs v-model="activeTab">
       <!-- ========== Tab 1：电站维护 ========== -->
-      <el-tab-pane label="电站维护" name="plant">
+      <el-tab-pane label="资源属性维护" name="plant">
         <div style="margin-bottom: 12px; display: flex; gap: 12px; align-items: center;">
           <el-button type="primary" @click="openCreatePlant">新增电站</el-button>
           <input ref="importFileInput" type="file" accept=".json" style="display:none" @change="handleFileImport" />
           <div style="flex:1" />
-          <el-button @click="handleImportClick">批量导入 JSON</el-button>
-          <el-button @click="handleExport">批量导出 JSON</el-button>
+          <el-button @click="handleImportClick">批量导入</el-button>
+          <el-button @click="handleExport">批量导出</el-button>
         </div>
 
         <el-table :data="plants" stripe v-loading="loading" max-height="400">
@@ -625,7 +625,7 @@ onUnmounted(() => {
               <span style="font-weight:600">{{ (row.capacity_kw / 1000).toFixed(1) }} MW</span>
             </template>
           </el-table-column>
-          <el-table-column label="接入点坐标" width="150">
+          <el-table-column label="接入点位置" width="150">
             <template #default="{ row }">
               <span v-if="row.longitude && row.latitude" style="font-size:12px;color:#606266">
                 {{ row.longitude.toFixed(2) }}, {{ row.latitude.toFixed(2) }}
@@ -667,7 +667,7 @@ onUnmounted(() => {
       </el-tab-pane>
 
       <!-- ========== Tab 2：健康监测（含异常清单） ========== -->
-      <el-tab-pane label="健康监测" name="health">
+      <el-tab-pane label="资源健康状态监测" name="health">
         <div style="margin-bottom:8px;display:flex;gap:8px;align-items:center">
           <el-select v-model="healthFilterPlant" placeholder="电站" clearable size="small" style="width:160px">
             <el-option v-for="o in healthPlantOptions" :key="o.value" :label="o.label" :value="o.value" />
@@ -689,7 +689,7 @@ onUnmounted(() => {
           <el-table-column label="设备名称" min-width="140">
             <template #default="{ row: { eq } }">{{ eq.name || eq.model_number || '-' }}</template>
           </el-table-column>
-          <el-table-column label="可靠评分" width="100">
+          <el-table-column label="健康度评分" width="100">
             <template #default="{ row: { eq } }">
               <span class="health-dot" :class="getReliabilityStatus(reliabilityMap[eq.id])" />
               <span style="font-weight:600">{{ reliabilityMap[eq.id] ? (reliabilityMap[eq.id].reliability * 100).toFixed(1) : '-' }}</span>
@@ -725,7 +725,7 @@ onUnmounted(() => {
             <el-table-column prop="metric" label="指标" width="110" />
             <el-table-column label="异常时间" width="90">
               <template #default="{ row }">
-                <el-tooltip :content="new Date(row.timeMs).toLocaleString()" placement="top">
+                <el-tooltip :content="dayjs(row.timeMs).format('YYYY-MM-DD HH:mm:ss')" placement="top">
                   <span style="color:#909399;font-size:12px;cursor:default">{{ row.time }}</span>
                 </el-tooltip>
               </template>
@@ -745,8 +745,9 @@ onUnmounted(() => {
       </el-tab-pane>
 
       <!-- ========== Tab 3：电池寿命预测 ========== -->
-      <el-tab-pane label="电池寿命预测" name="battery-life">
+      <el-tab-pane label="储能电池寿命预测" name="battery-life">
         <div v-if="storagePlants.length">
+          <div style="font-size:12px;color:#909399;margin-bottom:10px">基于充放电循环次数、深度、温度等历史数据，结合电化学模型预测电池剩余循环寿命，生成个性化更换计划。</div>
           <div style="margin-bottom:8px;display:flex;gap:8px">
             <el-select v-model="storageLifeFilterPlant" placeholder="电站" clearable size="small" style="width:180px" @change="loadReplacementPlan(storageLifeFilterPlant || undefined)">
               <el-option v-for="o in storagePlantOptions" :key="o.value" :label="o.label" :value="o.value" />
@@ -759,10 +760,10 @@ onUnmounted(() => {
             <el-table-column label="设备名称" min-width="120">
               <template #default="{ row }">{{ row.eq.name || row.eq.model_number || '-' }}</template>
             </el-table-column>
-            <el-table-column label="累计循环" width="90">
+            <el-table-column label="充放电循环次数" width="90">
               <template #default="{ row }">{{ row.life.cumulativeCycles || '-' }} 次</template>
             </el-table-column>
-            <el-table-column label="DOD" width="70">
+            <el-table-column label="深度" width="70">
               <template #default="{ row }">{{ row.life.avgDodPct || '-' }}%</template>
             </el-table-column>
             <el-table-column label="温度" width="70">
@@ -773,7 +774,7 @@ onUnmounted(() => {
                 <span :style="{ color: row.life.sohPct < 82 ? '#F56C6C' : row.life.sohPct < 85 ? '#E6A23C' : '#67C23A', fontWeight: 600 }">{{ row.life.sohPct || '-' }}%</span>
               </template>
             </el-table-column>
-            <el-table-column label="剩余循环" width="90">
+            <el-table-column label="剩余循环寿命" width="90">
               <template #default="{ row }">{{ row.life.estimatedRemainingCycles ? row.life.estimatedRemainingCycles + ' 次' : '-' }}</template>
             </el-table-column>
             <el-table-column label="预计更换" width="110">
@@ -781,8 +782,11 @@ onUnmounted(() => {
             </el-table-column>
           </el-table>
 
-          <div v-if="replacementPlan.length" style="margin-top:20px">
-            <div style="font-size:14px;font-weight:600;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid #ebeef5">电池更换计划</div>
+          <div style="margin-top:16px;display:flex;align-items:center;gap:12px">
+            <span style="font-size:14px;font-weight:600">个性化更换计划</span>
+            <el-button size="small" type="primary" @click="loadReplacementPlan(storageLifeFilterPlant || undefined)">生成更换计划</el-button>
+          </div>
+          <div v-if="replacementPlan.length" style="margin-top:12px">
             <el-table :data="replacementPlan" stripe size="small" max-height="250">
               <el-table-column prop="equipmentName" label="设备" min-width="120" />
               <el-table-column prop="plantName" label="所属电站" width="140" />
@@ -791,7 +795,7 @@ onUnmounted(() => {
                   <span :style="{ color: row.currentSoh < 82 ? '#F56C6C' : '#E6A23C', fontWeight: 600 }">{{ row.currentSoh }}%</span>
                 </template>
               </el-table-column>
-              <el-table-column prop="cumulativeCycles" label="累计循环" width="90" />
+              <el-table-column prop="cumulativeCycles" label="充放电循环次数" width="90" />
               <el-table-column label="建议时间" width="110">
                 <template #default="{ row }">{{ row.suggestedDate }}</template>
               </el-table-column>
@@ -844,7 +848,7 @@ onUnmounted(() => {
           </template>
         </el-table-column>
         <el-table-column label="快照时间" width="170">
-          <template #default="{ row }">{{ row.created_at?.slice(0, 16).replace('T', ' ') || '-' }}</template>
+          <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
         </el-table-column>
       </el-table>
       <div v-if="!versionList.length && !versionLoading" style="text-align:center;padding:30px;color:#909399">
@@ -1054,15 +1058,16 @@ onUnmounted(() => {
 
       <!-- 储能寿命预测 -->
       <div v-if="getPlantEquipment(equipDialogPlantId).some((e: any) => lifePredictMap[e.id])" style="margin-top:20px">
-        <div class="chart-panel-title" style="margin-bottom:12px">储能设备寿命预测</div>
+        <div class="chart-panel-title" style="margin-bottom:12px">储能电池寿命预测</div>
+        <div style="font-size:12px;color:#909399;margin-bottom:10px">基于充放电循环次数、深度、温度等历史数据，结合电化学模型预测。</div>
         <el-table :data="getPlantEquipment(equipDialogPlantId).filter((e: any) => lifePredictMap[e.id])" stripe size="small" max-height="200">
           <el-table-column label="设备名称" min-width="120">
             <template #default="{ row: eq }">{{ eq.name || eq.model_number || '-' }}</template>
           </el-table-column>
-          <el-table-column label="累计循环" width="85">
+          <el-table-column label="充放电循环次数" width="85">
             <template #default="{ row: eq }">{{ lifePredictMap[eq.id].cumulativeCycles || '-' }} 次</template>
           </el-table-column>
-          <el-table-column label="DOD" width="65">
+          <el-table-column label="深度" width="65">
             <template #default="{ row: eq }">{{ lifePredictMap[eq.id].avgDodPct || '-' }}%</template>
           </el-table-column>
           <el-table-column label="SOH" width="75">
@@ -1070,7 +1075,7 @@ onUnmounted(() => {
               <span :style="{ color: lifePredictMap[eq.id].sohPct < 82 ? '#F56C6C' : lifePredictMap[eq.id].sohPct < 85 ? '#E6A23C' : '#67C23A', fontWeight: 600 }">{{ lifePredictMap[eq.id].sohPct || '-' }}%</span>
             </template>
           </el-table-column>
-          <el-table-column label="剩余循环" width="85">
+          <el-table-column label="剩余循环寿命" width="85">
             <template #default="{ row: eq }">{{ lifePredictMap[eq.id].estimatedRemainingCycles ? lifePredictMap[eq.id].estimatedRemainingCycles + ' 次' : '-' }}</template>
           </el-table-column>
           <el-table-column label="预计更换" width="105">

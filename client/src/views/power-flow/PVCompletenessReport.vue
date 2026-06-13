@@ -2,6 +2,8 @@
 import { inject } from 'vue'
 import { CircleCheck, CircleClose } from '@element-plus/icons-vue'
 import { COMPLETENESS_KEY } from './pv-completeness-key'
+import dayjs from 'dayjs'
+import { formatDateTime } from '@/utils/time'
 
 const shared = inject(COMPLETENESS_KEY)!
 
@@ -51,7 +53,7 @@ function allIssues() {
           <div class="metric-card">
             <div class="metric-label">报告生成时间</div>
             <div class="metric-value" style="font-size:12px;color:#909399">
-              {{ new Date(shared.state.result.report.generatedAt).toLocaleString() }}
+              {{ dayjs(shared.state.result.report.generatedAt).format('YYYY-MM-DD HH:mm:ss') }}
             </div>
           </div>
         </div>
@@ -98,12 +100,12 @@ function allIssues() {
           <el-table v-if="allIssues().length" :data="allIssues()" stripe size="small" max-height="350">
             <el-table-column prop="dimension" label="校验维度" width="160" />
             <el-table-column label="问题时间" width="180">
-              <template #default="{ row }">{{ row.time || row.startTime || '-' }}</template>
+              <template #default="{ row }">{{ formatDateTime(row.time || row.startTime) }}</template>
             </el-table-column>
             <el-table-column label="问题描述" min-width="200">
               <template #default="{ row }">
                 <template v-if="row.type === 'time_gap'">
-                  时段 {{ row.startTime }} ~ {{ row.endTime }}，间断 {{ row.gapMinutes }} 分钟
+                  时段 {{ formatDateTime(row.startTime) }} ~ {{ formatDateTime(row.endTime) }}，间断 {{ row.gapMinutes }} 分钟
                 </template>
                 <template v-else-if="row.dimension === '置信因素合理性'">
                   置信因素值 {{ row.factorValue }}，低于阈值 {{ row.threshold }}

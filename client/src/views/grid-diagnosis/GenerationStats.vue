@@ -4,6 +4,7 @@ import ChartContainer from '@/components/common/ChartContainer.vue'
 import { fetchPvOutputStats } from '@/api/grid-diagnosis'
 import { fetchDataRanges } from '@/api/system'
 import type { AggregatedOutputStats } from '@new-energy/shared'
+import { todayStr } from '@/utils/time'
 
 const dateRange = ref<[string, string]>(['2026-06-01', '2026-07-31'])
 const activeTab = ref<'zone' | 'voltage_level'>('zone')
@@ -110,7 +111,7 @@ onMounted(async () => {
     const ranges = await fetchDataRanges()
     const pv = ranges.pv_output_measurements
     if (pv?.minTime && pv?.maxTime) {
-      const today = new Date().toISOString().slice(0, 10)
+      const today = todayStr()
       const endDate = today < pv.maxTime.slice(0, 10) ? today : pv.maxTime.slice(0, 10)
       dateRange.value = [pv.minTime.slice(0, 10), endDate]
     }

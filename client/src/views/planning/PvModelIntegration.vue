@@ -9,6 +9,7 @@ import {
   fetchFieldLibrary, createFieldLibraryItem, deleteFieldLibraryItem,
 } from '@/api/planning'
 import type { PvModelType, PvModelTypeField } from '@new-energy/shared'
+import { formatDate } from '@/utils/time'
 
 const loading = ref(false)
 const stations = ref<any[]>([])
@@ -412,7 +413,7 @@ onMounted(async () => {
           <template #default="{ row }">{{ renderCustomFieldValue(row, 'project_status') }}</template>
         </el-table-column>
         <el-table-column label="创建时间" width="110">
-          <template #default="{ row }">{{ row.created_at?.slice(0, 10) || '-' }}</template>
+          <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
         </el-table-column>
         <el-table-column label="操作" width="140" fixed="right">
           <template #default="{ row }">

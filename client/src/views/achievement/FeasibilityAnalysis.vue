@@ -5,6 +5,7 @@ import ChartContainer from '@/components/common/ChartContainer.vue'
 import AssessmentModelMgmt from './AssessmentModelMgmt.vue'
 import { fetchProjects, runFeasibility } from '@/api/achievement'
 import type { ProjectItem, FeasibilityResult } from '@/api/achievement'
+import dayjs from 'dayjs'
 
 // ==================== Tab 状态 ====================
 const activeTab = ref('model')
@@ -287,7 +288,7 @@ td,th{padding:4px 8px;border:1px solid #e4e7ed}th{background:#f5f7fa;text-align:
             <div id="feasibility-report" style="font-size:13px;color:#303133;line-height:1.8">
               <div style="text-align:center;margin-bottom:20px">
                 <h2 style="margin:0 0 4px">光伏项目并网可行性评估报告</h2>
-                <div style="color:#909399">报告生成时间：{{ new Date().toLocaleString('zh-CN') }}</div>
+                <div style="color:#909399">报告生成时间：{{ dayjs().format('YYYY-MM-DD HH:mm:ss') }}</div>
               </div>
 
               <h4 style="border-bottom:2px solid #267F7B;padding-bottom:4px;margin-bottom:8px">一、项目基本信息</h4>

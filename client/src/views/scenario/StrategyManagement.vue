@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { fetchScenarios, fetchStrategies, createStrategy, updateStrategy, deleteStrategy, generateStrategy } from '@/api/scenario'
+import { fetchScenarios, fetchStrategies, fetchStrategy, createStrategy, updateStrategy, deleteStrategy, generateStrategy } from '@/api/scenario'
+import { formatDateTime } from '@/utils/time'
 
 const route = useRoute()
 const strategies = ref<any[]>([])
@@ -19,12 +20,33 @@ const form = ref<any>({
   scenario_id: '', name: '', strategy_type: 'comprehensive', status: 'draft',
   control_rules: [] as RuleItem[],
   schedule: [] as ScheduleItem[],
-  constraints: { voltageUpperLimit: 235, voltageLowerLimit: 205, lineLoadRateLimit: 0.9, devicePowerLimitPct: 100 },
+  constraints: { voltageUpperLimit: 235, voltageLowerLimit: 205, frequencyUpperLimit: 50.5, frequencyLowerLimit: 49.5, lineLoadRateLimit: 0.9, devicePowerLimitPct: 100 },
   economic_targets: { optimizationMode: 'cost_first', targetConsumptionRate: 0.95, maxOperationCostPerKwh: 0.42 },
 })
 const generating = ref(false)
 const detailVisible = ref(false)
 const detail = ref<any>(null)
+
+const deviceTypeLabel: Record<string, string> = {
+  source: '电源侧',
+  grid: '电网侧',
+  load: '负荷侧',
+  storage: '储能侧',
+}
+
+const scheduleGroups = computed(() => {
+  if (!detail.value?.config?.schedule || !Array.isArray(detail.value.config.schedule)) return []
+  const groups: Record<string, { key: string; label: string; items: any[] }> = {}
+  const order = ['source', 'grid', 'storage', 'load']
+  for (const item of detail.value.config.schedule) {
+    const key = item.deviceType || 'unknown'
+    if (!groups[key]) {
+      groups[key] = { key, label: deviceTypeLabel[key] || key, items: [] }
+    }
+    groups[key].items.push(item)
+  }
+  return order.filter(k => groups[k]).map(k => groups[k])
+})
 
 const strategyTypes = [
   { value: 'comprehensive', label: '综合策略' },
@@ -57,7 +79,7 @@ function openCreate() {
     scenario_id: '', name: '', strategy_type: 'comprehensive', status: 'draft',
     control_rules: [],
     schedule: [],
-    constraints: { voltageUpperLimit: 235, voltageLowerLimit: 205, lineLoadRateLimit: 0.9, devicePowerLimitPct: 100 },
+    constraints: { voltageUpperLimit: 235, voltageLowerLimit: 205, frequencyUpperLimit: 50.5, frequencyLowerLimit: 49.5, lineLoadRateLimit: 0.9, devicePowerLimitPct: 100 },
     economic_targets: { optimizationMode: 'cost_first', targetConsumptionRate: 0.95, maxOperationCostPerKwh: 0.42 },
   }
   dialogVisible.value = true
@@ -73,8 +95,8 @@ function openEdit(row: any) {
     status: row.status,
     control_rules: c.control_rules || [],
     schedule: c.schedule || [],
-    constraints: c.constraints || { voltageUpperLimit: 235, voltageLowerLimit: 205, lineLoadRateLimit: 0.9, devicePowerLimitPct: 100 },
-    economic_targets: c.economic_targets || { optimizationMode: 'cost_first', targetConsumptionRate: 0.95, maxOperationCostPerKwh: 0.42 },
+    constraints: row.constraints || c.constraints || { voltageUpperLimit: 235, voltageLowerLimit: 205, frequencyUpperLimit: 50.5, frequencyLowerLimit: 49.5, lineLoadRateLimit: 0.9, devicePowerLimitPct: 100 },
+    economic_targets: row.economic_targets || c.economic_targets || { optimizationMode: 'cost_first', targetConsumptionRate: 0.95, maxOperationCostPerKwh: 0.42 },
   }
   dialogVisible.value = true
 }
@@ -83,8 +105,6 @@ function buildConfig() {
   return {
     control_rules: form.value.control_rules,
     schedule: form.value.schedule,
-    constraints: form.value.constraints,
-    economic_targets: form.value.economic_targets,
   }
 }
 
@@ -96,6 +116,8 @@ async function save() {
     strategy_type: form.value.strategy_type,
     status: form.value.status,
     config: buildConfig(),
+    constraints: form.value.constraints,
+    economic_targets: form.value.economic_targets,
   }
   if (editingId.value) {
     await updateStrategy(editingId.value, payload)
@@ -131,8 +153,10 @@ async function autoGenerate() {
   try {
     const result = await generateStrategy(sid)
     await loadData()
-    const scheduleCount = result?.config?.schedule?.length || 0
-    ElMessage.success(`策略已自动生成，包含 ${scheduleCount} 条调度指令`)
+    const schedule: any[] = result?.config?.schedule || []
+    const counts = { source: 0, grid: 0, load: 0, storage: 0 }
+    schedule.forEach((s: any) => { const t = s.deviceType as keyof typeof counts; if (t in counts) counts[t]++ })
+    ElMessage.success(`策略已自动生成 — 源${counts.source} 网${counts.grid} 荷${counts.load} 储${counts.storage}`)
   } finally {
     generating.value = false
   }
@@ -143,12 +167,20 @@ function showDetail(row: any) {
   detailVisible.value = true
 }
 
-onMounted(() => {
+onMounted(async () => {
   if (route.query.scenario_id) {
     filterScenarioId.value = route.query.scenario_id as string
   }
-  loadScenarios()
-  loadData()
+  await loadScenarios()
+  await loadData()
+  // 从干预页跳转过来 → 直接打开对应策略的编辑弹窗
+  const sid = route.query.strategy_id as string
+  if (sid) {
+    try {
+      const strategy = await fetchStrategy(sid)
+      if (strategy) openEdit(strategy)
+    } catch {}
+  }
 })
 </script>
 
@@ -186,6 +218,11 @@ onMounted(() => {
           {{ row.generated_by_algorithm === '1' ? '是' : '否' }}
         </template>
       </el-table-column>
+      <el-table-column label="优化模式" width="90">
+        <template #default="{ row }">
+          {{ row.economic_targets?.optimizationMode === 'cost_first' ? '成本优先' : row.economic_targets?.optimizationMode === 'consumption_first' ? '消纳优先' : row.economic_targets?.optimizationMode === 'balanced' ? '平衡模式' : '-' }}
+        </template>
+      </el-table-column>
       <el-table-column label="状态" width="80">
         <template #default="{ row }">
           <el-tag :type="row.status === 'active' ? 'success' : 'warning'" size="small">
@@ -193,7 +230,9 @@ onMounted(() => {
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="created_at" label="创建时间" width="150" />
+      <el-table-column label="创建时间" width="170">
+        <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="200" fixed="right">
         <template #default="{ row }">
           <el-button size="small" link type="primary" @click="showDetail(row)">详情</el-button>
@@ -274,7 +313,7 @@ onMounted(() => {
             <el-col :span="5"><span style="font-size:11px;color:#909399">设备类型</span>
               <el-select v-model="s.deviceType" size="small" style="width:100%">
                 <el-option label="储能" value="storage" />
-                <el-option label="光伏" value="pv" />
+                <el-option label="光伏" value="source" />
                 <el-option label="负荷" value="load" />
                 <el-option label="电网" value="grid" />
               </el-select>
@@ -298,7 +337,11 @@ onMounted(() => {
         <el-row :gutter="12">
           <el-col :span="6"><span style="font-size:11px;color:#909399">电压上限(kV)</span><el-input-number v-model="form.constraints.voltageUpperLimit" :min="200" :max="264" :step="1" size="small" style="width:100%" /></el-col>
           <el-col :span="6"><span style="font-size:11px;color:#909399">电压下限(kV)</span><el-input-number v-model="form.constraints.voltageLowerLimit" :min="176" :max="242" :step="1" size="small" style="width:100%" /></el-col>
-          <el-col :span="6"><span style="font-size:11px;color:#909399">线路负载率上限(%)</span><el-input-number v-model="form.constraints.lineLoadRateLimit" :min="0" :max="1" :step="0.05" size="small" style="width:100%" /></el-col>
+          <el-col :span="6"><span style="font-size:11px;color:#909399">频率上限(Hz)</span><el-input-number v-model="form.constraints.frequencyUpperLimit" :min="50" :max="51" :step="0.1" size="small" style="width:100%" /></el-col>
+          <el-col :span="6"><span style="font-size:11px;color:#909399">频率下限(Hz)</span><el-input-number v-model="form.constraints.frequencyLowerLimit" :min="49" :max="50" :step="0.1" size="small" style="width:100%" /></el-col>
+        </el-row>
+        <el-row :gutter="12" style="margin-top:8px">
+          <el-col :span="6"><span style="font-size:11px;color:#909399">线路负载率上限</span><el-input-number v-model="form.constraints.lineLoadRateLimit" :min="0" :max="1" :step="0.05" size="small" style="width:100%" /></el-col>
           <el-col :span="6"><span style="font-size:11px;color:#909399">设备功率上限(%)</span><el-input-number v-model="form.constraints.devicePowerLimitPct" :min="0" :max="100" size="small" style="width:100%" /></el-col>
         </el-row>
 
@@ -324,7 +367,7 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="detailVisible" title="策略详情" width="600px">
+    <el-dialog v-model="detailVisible" title="策略详情" width="720px">
       <template v-if="detail">
         <el-descriptions :column="1" border size="small">
           <el-descriptions-item label="策略名称">{{ detail.name }}</el-descriptions-item>
@@ -333,36 +376,42 @@ onMounted(() => {
           <el-descriptions-item label="状态">{{ detail.status === 'active' ? '启用' : '草稿' }}</el-descriptions-item>
         </el-descriptions>
         <div style="margin-top:16px;font-weight:600;font-size:13px">安全约束</div>
-        <el-descriptions :column="1" border size="small" style="margin-top:8px">
-          <el-descriptions-item label="电压上限">{{ detail.constraints?.voltageUpperLimit }} kV</el-descriptions-item>
-          <el-descriptions-item label="电压下限">{{ detail.constraints?.voltageLowerLimit }} kV</el-descriptions-item>
-          <el-descriptions-item label="负载率上限">{{ detail.constraints?.lineLoadRateLimit ? (detail.constraints.lineLoadRateLimit * 100) + '%' : '-' }}</el-descriptions-item>
+        <el-descriptions :column="2" border size="small" style="margin-top:8px">
+          <el-descriptions-item label="电压上限">{{ detail.constraints?.voltageUpperLimit ?? '-' }} kV</el-descriptions-item>
+          <el-descriptions-item label="电压下限">{{ detail.constraints?.voltageLowerLimit ?? '-' }} kV</el-descriptions-item>
+          <el-descriptions-item label="频率上限">{{ detail.constraints?.frequencyUpperLimit ?? '-' }} Hz</el-descriptions-item>
+          <el-descriptions-item label="频率下限">{{ detail.constraints?.frequencyLowerLimit ?? '-' }} Hz</el-descriptions-item>
+          <el-descriptions-item label="线路负载率上限">{{ detail.constraints?.lineLoadRateLimit ? (detail.constraints.lineLoadRateLimit * 100).toFixed(0) + '%' : '-' }}</el-descriptions-item>
+          <el-descriptions-item label="设备功率上限">{{ detail.constraints?.devicePowerLimitPct ? detail.constraints.devicePowerLimitPct + '%' : '-' }}</el-descriptions-item>
         </el-descriptions>
         <div style="margin-top:16px;font-weight:600;font-size:13px">经济性目标</div>
-        <el-descriptions :column="1" border size="small" style="margin-top:8px">
-          <el-descriptions-item label="目标消纳率">{{ detail.economic_targets?.targetConsumptionRate ? (detail.economic_targets.targetConsumptionRate * 100) + '%' : '-' }}</el-descriptions-item>
+        <el-descriptions :column="2" border size="small" style="margin-top:8px">
+          <el-descriptions-item label="优化模式">{{ detail.economic_targets?.optimizationMode === 'cost_first' ? '成本优先' : detail.economic_targets?.optimizationMode === 'consumption_first' ? '消纳优先' : detail.economic_targets?.optimizationMode === 'balanced' ? '平衡模式' : '-' }}</el-descriptions-item>
+          <el-descriptions-item label="目标消纳率">{{ detail.economic_targets?.targetConsumptionRate ? (detail.economic_targets.targetConsumptionRate * 100).toFixed(0) + '%' : '-' }}</el-descriptions-item>
           <el-descriptions-item label="最大运营成本">{{ detail.economic_targets?.maxOperationCostPerKwh ? '¥' + detail.economic_targets.maxOperationCostPerKwh + '/kWh' : '-' }}</el-descriptions-item>
         </el-descriptions>
-        <template v-if="detail.config?.schedule && Array.isArray(detail.config.schedule) && detail.config.schedule.length">
-          <div style="margin-top:16px;font-weight:600;font-size:13px">按时间展示（共 {{ detail.config.schedule.length }} 条）</div>
-          <div style="max-height:300px;overflow-y:auto;margin-top:8px">
-            <el-timeline>
-              <el-timeline-item
-                v-for="(item, idx) in detail.config.schedule"
-                :key="idx"
-                :timestamp="item.timeRange"
-                placement="top"
-                size="small"
-              >
-                <div style="font-size:12px;line-height:1.6">
-                  <span style="font-weight:600">{{ item.deviceName || item.deviceType }}</span>
-                  <span style="color:#909399;margin-left:8px">{{ item.deviceType }}</span>
-                  <el-tag size="small" style="margin-left:8px">{{ item.action }}</el-tag>
-                  <span style="margin-left:8px">{{ item.targetValue }} {{ item.unit }}</span>
-                  <div v-if="item.reason" style="color:#909399;margin-top:2px">{{ item.reason }}</div>
-                </div>
-              </el-timeline-item>
-            </el-timeline>
+        <template v-if="scheduleGroups.length">
+          <div style="margin-top:16px;font-weight:600;font-size:13px">调度方案（共 {{ detail.config.schedule.length }} 条）</div>
+          <div style="max-height:360px;overflow-y:auto;margin-top:8px">
+            <template v-for="group in scheduleGroups" :key="group.key">
+              <div style="font-size:12px;font-weight:600;color:#267F7B;margin:8px 0 4px;padding-left:4px;border-left:3px solid #267F7B">{{ group.label }}</div>
+              <el-timeline>
+                <el-timeline-item
+                  v-for="(item, idx) in group.items"
+                  :key="idx"
+                  :timestamp="item.timeRange"
+                  placement="top"
+                  size="small"
+                >
+                  <div style="font-size:12px;line-height:1.6">
+                    <span style="font-weight:600">{{ item.deviceName || item.deviceType }}</span>
+                    <el-tag size="small" style="margin-left:8px">{{ item.action }}</el-tag>
+                    <span style="margin-left:8px">{{ item.targetValue }} {{ item.unit }}</span>
+                    <div v-if="item.reason" style="color:#909399;margin-top:2px">{{ item.reason }}</div>
+                  </div>
+                </el-timeline-item>
+              </el-timeline>
+            </template>
           </div>
         </template>
       </template>

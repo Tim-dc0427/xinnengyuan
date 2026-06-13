@@ -174,7 +174,7 @@ export async function predictLife(params: { equipmentId: string }) {
   }
 }
 
-export async function generateReplacementPlan(params: { plantId?: string }) {
+export async function generateReplacementPlan(params: { plantId?: string; stationId?: string }) {
   const res = await apiClient.post('/api/v1/grid-diagnosis/equipment/lifecycle/replacement-plan', params)
   return res.data?.data as ReplacementPlan[]
 }
@@ -213,6 +213,13 @@ export async function fetchHotspotDistribution(query: { startDate: string; endDa
 export async function fetchComplaintTickets(query?: { isVoltageRelated?: string; industry?: string; zone?: string }) {
   const res = await apiClient.get('/api/v1/grid-diagnosis/power-quality/complaint-tickets', { params: query })
   return res.data?.data as ComplaintTicketItem[]
+}
+
+export async function fetchEquipmentEvents(equipmentId: string) {
+  const res = await apiClient.get('/api/v1/grid-diagnosis/power-quality/equipment-events', {
+    params: { equipmentId },
+  })
+  return res.data?.data as { events: any[]; typeAvgRise: number; isWeak: boolean; noData: boolean }
 }
 
 export async function fetchAlerts(query?: { level?: string; limit?: number }) {

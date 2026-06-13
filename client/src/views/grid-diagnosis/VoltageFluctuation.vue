@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, shallowRef } from 'vue'
 import ChartContainer from '@/components/common/ChartContainer.vue'
 import { fetchStations, fetchVoltageFluctuation } from '@/api/grid-diagnosis'
 import type { VoltageFluctuation } from '@new-energy/shared'
+import dayjs from 'dayjs'
 
 const selectedPoint = ref('')
 const selectedDate = ref('')
@@ -106,10 +107,10 @@ onMounted(async () => {
     const list = await fetchStations(); stations.value = list || []
     if (list?.length) {
       selectedPoint.value = list[0].id
-      const d = new Date(); d.setDate(d.getDate()-1); selectedDate.value = d.toISOString().slice(0,10)
+      const d = dayjs().subtract(1, 'day'); selectedDate.value = d.format('YYYY-MM-DD')
       await loadData()
       if (!result.value?.timeSeries?.length) {
-        d.setDate(d.getDate()-1); selectedDate.value = d.toISOString().slice(0,10); await loadData()
+        const d2 = d.subtract(1, 'day'); selectedDate.value = d2.format('YYYY-MM-DD'); await loadData()
       }
     }
   } catch { noData.value = true }
@@ -117,7 +118,7 @@ onMounted(async () => {
 
 onUnmounted(stopPolling)
 
-function endDateStr(ds: string) { const d = new Date(ds); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10) }
+function endDateStr(ds: string) { return dayjs(ds).add(1, 'day').format('YYYY-MM-DD') }
 
 async function loadData() {
   if (!selectedPoint.value) return

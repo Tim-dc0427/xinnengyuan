@@ -355,10 +355,20 @@ export interface HistoryListResult {
 }
 
 export interface VersionCompareResult {
+  isThreePhase: boolean
   versionA: { taskId: string; taskType: string; createdAt: string; operator: string; summary: any }
   versionB: { taskId: string; taskType: string; createdAt: string; operator: string; summary: any }
-  nodeDiff: Array<{ name: string; voltageLevel: string; phaseADiff: number; phaseBDiff: number; phaseCDiff: number; vufDiff: number; note?: string }>
-  branchDiff: Array<{ fromBusName: string; toBusName: string; voltageLevel: string; phaseAPDiff: number; phaseBPDiff: number; phaseCPDiff: number; note?: string }>
+  nodeDiff: Array<{
+    name: string; voltageLevel: string
+    voltagePuDiff: number; angleDegDiff: number; marginDiff: number
+    phaseADiff: number | null; phaseBDiff: number | null; phaseCDiff: number | null; vufDiff: number | null
+    note?: string
+  }>
+  branchDiff: Array<{
+    fromBusName: string; toBusName: string; voltageLevel: string
+    pFromMwDiff: number; qFromMvarDiff: number; loadingPctDiff: number; lossMwDiff: number
+    note?: string
+  }>
 }
 
 export async function fetchHistory(params?: {
@@ -391,6 +401,9 @@ export async function deleteHistory(taskId: string) {
 }
 
 export async function cleanupExpiredHistory(days: number) {
-  const res = await apiClient.post('/api/v1/power-flow/history/cleanup', { days })
-  return res.data?.data as { deletedCount: number; cutoffBefore: string }
+  return (await apiClient.post('/api/v1/power-flow/history/cleanup', { days })).data?.data as { deletedCount: number; cutoffBefore: string; retentionDays: number }
+}
+
+export async function fetchHistoryRetentionDays() {
+  return (await apiClient.get('/api/v1/power-flow/history/retention-days')).data?.data as number
 }

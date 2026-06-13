@@ -1,5 +1,6 @@
 import { Request, Response } from 'express'
 import { GridDiagnosisService } from './grid-diagnosis.service.js'
+import { audit } from '../../common/audit.service.js'
 
 export class GridDiagnosisController {
   private service = new GridDiagnosisService()
@@ -26,6 +27,7 @@ export class GridDiagnosisController {
 
   simulateExtreme = async (req: Request, res: Response) => {
     const data = await this.service.simulateExtreme(req.body)
+    audit(req, 'EXECUTE', 'extreme_scenario', null, '执行极端场景模拟', null, req.body)
     res.json({ code: 200, message: 'ok', data })
   }
 
@@ -115,6 +117,7 @@ export class GridDiagnosisController {
 
   acknowledgeAlert = async (req: Request, res: Response) => {
     const data = await this.service.acknowledgeAlert(req.params.id, req.user!.id)
+    audit(req, 'UPDATE', 'alert', req.params.id, '确认告警', null, null)
     res.json({ code: 200, message: 'ok', data })
   }
 

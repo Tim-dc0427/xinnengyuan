@@ -2,6 +2,28 @@ import { db } from '../../config/database.js'
 import { v4 as uuid } from 'uuid'
 
 export class ResourceService {
+  /** 确保存在有效母线ID，无则创建默认母线 */
+  private async ensureBusId(busId?: string | null): Promise<string> {
+    if (busId) {
+      const exists = await db('grid_buses').where('id', busId).select('id').first()
+      if (exists) return busId
+    }
+    // 查找第一个已有母线
+    const first = await db('grid_buses').select('id').first()
+    if (first) return first.id
+    // 创建默认母线
+    const id = uuid()
+    await db('grid_buses').insert({
+      id,
+      name: '默认母线',
+      zone: '',
+      voltage_level: '10',
+      bus_type: 'pq',
+      base_kv: 10,
+    })
+    return id
+  }
+
   // ==================== Models ====================
   async listModels(query: any) {
     return db('resource_models').modify((qb) => {
@@ -136,9 +158,11 @@ export class ResourceService {
   async createPowerPlant(data: any) {
     const id = uuid()
     const now = new Date().toISOString()
+    const busId = await this.ensureBusId(data.busId)
     await db('solar_pv_stations').insert({
       id,
       station_name: data.name,
+      bus_id: busId,
       installed_capacity_mw: data.capacityKw ? data.capacityKw / 1000 : 0,
       grid_connection_voltage_kv: data.voltageLevel ? parseFloat(data.voltageLevel) : null,
       installed_date: data.installedDate || null,
@@ -167,9 +191,11 @@ export class ResourceService {
 
   async batchImportPowerPlants(plants: any[]) {
     const now = new Date().toISOString()
+    const defaultBusId = await this.ensureBusId()
     const rows = plants.map((p) => ({
       id: uuid(),
       station_name: p.name,
+      bus_id: p.busId ? p.busId : defaultBusId,
       installed_capacity_mw: p.capacityKw ? p.capacityKw / 1000 : 0,
       grid_connection_voltage_kv: p.voltageLevel ? parseFloat(p.voltageLevel) : null,
       installed_date: p.installedDate || null,

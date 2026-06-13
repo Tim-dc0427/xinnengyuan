@@ -62,33 +62,9 @@ async function loadTasks() {
   try {
     tasks.value = await fetchTasks({ limit: 100 })
   } catch { /* ignore */ }
-  // 模拟一条异常中断的断点续算演示数据
-  const mockId = 'demo-checkpoint-001'
-  if (!tasks.value.find(t => t.id === mockId)) {
-    tasks.value.unshift({
-      id: mockId,
-      task_type: 'PROBABILISTIC',
-      status: 'paused',
-      progress_pct: 67,
-      progress_message: '已完成第134/200次蒙特卡洛采样，进程异常中断',
-      eta_ms: 18000,
-      error_message: null,
-      created_at: new Date(Date.now() - 120000).toISOString(),
-      started_at: new Date(Date.now() - 110000).toISOString(),
-      completed_at: null,
-      elapsedSec: 52,
-      checkpointAvailable: true,
-    })
-  }
 }
 
 async function handlePause(id: string) {
-  if (id === 'demo-checkpoint-001') {
-    const t = tasks.value.find(t => t.id === id)
-    if (t) { t.status = 'paused'; t.checkpointAvailable = true }
-    ElMessage.success('任务已暂停，中间结果已保存')
-    return
-  }
   try {
     await pauseTask(id)
     ElMessage.success('任务已暂停')
@@ -97,32 +73,6 @@ async function handlePause(id: string) {
 }
 
 async function handleResume(id: string) {
-  if (id === 'demo-checkpoint-001') {
-    const t = tasks.value.find(t => t.id === id)
-    if (!t) return
-    t.status = 'running'
-    t.checkpointAvailable = false
-    t.progress_message = '正在从断点恢复，继续第135/200次蒙特卡洛采样...'
-    ElMessage.success('断点续算已启动，从第134次采样继续')
-    // 模拟计算进度推进
-    let step = 135
-    const timer = setInterval(() => {
-      if (!t || t.status !== 'running') { clearInterval(timer); return }
-      step++
-      t.progress_pct = Math.round((step / 200) * 100)
-      t.progress_message = `已完成第${step}/200次蒙特卡洛采样`
-      t.elapsedSec = 52 + Math.round((step - 134) * 0.4)
-      if (step >= 200) {
-        clearInterval(timer)
-        t.status = 'completed'
-        t.progress_pct = 100
-        t.progress_message = '计算完成'
-        t.completed_at = new Date().toISOString()
-        ElMessage.success('断点续算完成')
-      }
-    }, 300)
-    return
-  }
   try {
     await resumeTask(id)
     ElMessage.success('任务已恢复')

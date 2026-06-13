@@ -3,10 +3,11 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import 'echarts-gl'
 import ChartContainer from '@/components/common/ChartContainer.vue'
-import { fetchEquipmentImpact, fetchComplaintStats, fetchHotspotDistribution, fetchStations, fetchComplaintTickets } from '@/api/grid-diagnosis'
+import { fetchEquipmentImpact, fetchComplaintStats, fetchHotspotDistribution, fetchStations, fetchComplaintTickets, fetchEquipmentEvents } from '@/api/grid-diagnosis'
 import { fetchDataRanges } from '@/api/system'
 import type { ComplaintTicketItem } from '@new-energy/shared'
-import { apiClient } from '@/api/client'
+import { todayStr } from '@/utils/time'
+
 
 const dateRange = ref<[string, string]>(['2026-01-01', '2026-06-02'])
 const selectedEquip = ref('')
@@ -69,7 +70,7 @@ onMounted(async () => {
     const ranges = await fetchDataRanges()
     const v = ranges.voltage_measurements
     if (v?.minTime && v?.maxTime) {
-      const today = new Date().toISOString().slice(0, 10)
+      const today = todayStr()
       const endDate = today < v.maxTime.slice(0, 10) ? today : v.maxTime.slice(0, 10)
       dateRange.value = [v.minTime.slice(0, 10), endDate]
     }
@@ -97,10 +98,7 @@ async function loadData() {
 
 async function loadEquipEvents() {
   if (!selectedEquip.value) return
-  const res = await apiClient.get('/api/v1/grid-diagnosis/power-quality/equipment-events', {
-    params: { equipmentId: selectedEquip.value }
-  })
-  const data = res.data?.data || {}
+  const data = await fetchEquipmentEvents(selectedEquip.value) || {}
   equipEvents.value = data.events || []
   typeAvgRise.value = data.typeAvgRise || 0
   isWeak.value = data.isWeak || false

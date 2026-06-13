@@ -194,21 +194,32 @@ export class SystemService {
     const pageSize = query.pageSize || 15
     const offset = (page - 1) * pageSize
 
+    // 检查 detail 列是否存在（兼容未运行迁移的情况）
+    let hasDetail = false
+    try {
+      const colCheck = await db.raw("SELECT COUNT(*) as cnt FROM pragma_table_info('audit_logs') WHERE name='detail'")
+      hasDetail = (colCheck[0]?.cnt ?? 0) > 0
+    } catch { /* 忽略 */ }
+
+    const baseColumns = [
+      'audit_logs.id',
+      'audit_logs.user_id',
+      'users.username',
+      'users.display_name',
+      'audit_logs.action',
+      'audit_logs.resource_type',
+      'audit_logs.resource_id',
+      'audit_logs.old_value',
+      'audit_logs.new_value',
+      'audit_logs.ip_address',
+      'audit_logs.user_agent',
+      'audit_logs.created_at',
+    ]
+    if (hasDetail) baseColumns.push('audit_logs.detail')
+
     let q = db('audit_logs')
       .leftJoin('users', 'audit_logs.user_id', 'users.id')
-      .select(
-        'audit_logs.id',
-        'audit_logs.user_id',
-        'users.username',
-        'audit_logs.action',
-        'audit_logs.resource_type',
-        'audit_logs.resource_id',
-        'audit_logs.old_value',
-        'audit_logs.new_value',
-        'audit_logs.ip_address',
-        'audit_logs.user_agent',
-        'audit_logs.created_at',
-      )
+      .select(baseColumns)
 
     if (query.userId) q = q.where('audit_logs.user_id', query.userId)
     if (query.action) q = q.where('audit_logs.action', query.action)
@@ -228,9 +239,11 @@ export class SystemService {
         id: r.id,
         userId: r.user_id,
         username: r.username || '未知',
+        displayName: r.display_name || '',
         action: r.action,
         resourceType: r.resource_type,
         resourceId: r.resource_id,
+        detail: r.detail || '',
         oldValue: r.old_value,
         newValue: r.new_value,
         ipAddress: r.ip_address,

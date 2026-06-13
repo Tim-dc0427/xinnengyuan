@@ -3,6 +3,7 @@ import { ref, reactive, computed } from 'vue'
 import ChartContainer from '@/components/common/ChartContainer.vue'
 import { simulateExtremeScenario, exportExtremeReport, fetchStations } from '@/api/grid-diagnosis'
 import type { StationOption, ExtremeScenarioResult, HighTempParams, RainstormParams } from '@new-energy/shared'
+import { todayStr } from '@/utils/time'
 
 const stations = ref<StationOption[]>([])
 const selectedStation = ref('')
@@ -99,7 +100,7 @@ async function downloadReport(format: 'word' | 'pdf') {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `极端场景应对方案报告_${new Date().toISOString().slice(0, 10)}.${format === 'word' ? 'docx' : 'pdf'}`
+    a.download = `极端场景应对方案报告_${todayStr()}.${format === 'word' ? 'docx' : 'pdf'}`
     a.click()
     URL.revokeObjectURL(url)
   } finally {

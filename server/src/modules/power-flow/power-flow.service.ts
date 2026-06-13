@@ -1182,6 +1182,10 @@ export class PowerFlowService {
     const items = await db('batch_group_items').where('group_id', groupId)
     const taskIds = items.map((i: any) => i.task_id)
 
+    const group = await db('batch_calc_groups').where('id', groupId).first()
+    const selectedBusIds = new Set<string>(group?.selected_bus_ids ? JSON.parse(group.selected_bus_ids) : [])
+    const selectedBranchIds = new Set<string>(group?.selected_branch_ids ? JSON.parse(group.selected_branch_ids) : [])
+
     const results = await db('calc_results')
       .whereIn('task_id', taskIds)
       .where('is_latest', true)
@@ -1193,18 +1197,33 @@ export class PowerFlowService {
     const voltageCritical = 5 // voltage_deviation critical_threshold (%)
     const loadWarning = 80    // equipment_load_rate warning_threshold (%)
 
+    // 收集所有支路 ID，查询所属区域
+    const allBranchIds = new Set<string>()
+    for (const result of results) {
+      const branches = JSON.parse(result.branch_results || '[]')
+      for (const b of branches) {
+        if (b.branchId) allBranchIds.add(b.branchId)
+      }
+    }
+    const branchZoneMap = new Map<string, string>()
+    if (allBranchIds.size > 0) {
+      const zoneRows = await db('grid_branches').whereIn('id', [...allBranchIds]).select('id', 'zone')
+      zoneRows.forEach((r: any) => branchZoneMap.set(r.id, r.zone || ''))
+    }
+
     for (const result of results) {
       const nodes = JSON.parse(result.node_results || '[]')
       const branches = JSON.parse(result.branch_results || '[]')
 
-      // 支路数据 → regionStats（负载率是支路属性）
+      // 支路数据 → regionStats（负载率是支路属性，仅选中支路）
       for (const branch of branches) {
+        if (selectedBranchIds.size > 0 && !selectedBranchIds.has(branch.branchId)) continue
         const loadingPct = branch.loadingPct || 0
         const isOverloaded = loadingPct > loadWarning
         const regionEntry: any = {
           busId: branch.branchId,
           name: `${branch.fromBusName || branch.fromBus} → ${branch.toBusName || branch.toBus}`,
-          zone: '', // 支路的 zone 从 fromBus 名称推断
+          zone: branchZoneMap.get(branch.branchId) || '',
           voltageLevel: branch.voltageLevel || '',
           loadRate: loadingPct / 100, // 转为 0-1 小数，前端乘 100 显示
           voltageDeviationPct: 0,
@@ -1228,8 +1247,10 @@ export class PowerFlowService {
         regionStats.push(regionEntry)
       }
 
-      // 节点电压越限检测
+      // 节点电压越限检测（仅选中母线）
       for (const node of nodes) {
+        const nodeId = node.busId || node.nodeId
+        if (selectedBusIds.size > 0 && !selectedBusIds.has(nodeId)) continue
         const voltageDeviationPct = Math.abs(node.voltagePu - 1) * 100
         if (voltageDeviationPct > voltageCritical) {
           anomalyItems.push({
@@ -1268,11 +1289,13 @@ export class PowerFlowService {
       }
     }
 
-    // 承载能力排名：从支路负载率排序
-    const ranking = regionStats
-      .filter((r: any) => r.loadRate > 0)
-      .sort((a: any, b: any) => b.loadRate - a.loadRate)
-      .slice(0, 50)
+    // 承载能力排名：负载率越低越靠前（剩余容量越大承载能力越强）
+    const ranking = [...regionStats]
+      .sort((a: any, b: any) => {
+        const d = a.loadRate - b.loadRate
+        if (d !== 0) return d
+        return (a.busId || '').localeCompare(b.busId || '')
+      })
       .map((item: any, i: number) => ({
         equipmentId: item.busId,
         equipmentName: item.name,
@@ -1411,11 +1434,29 @@ export class PowerFlowService {
 
     const anomalies = await db('batch_anomaly_items').where('group_id', groupId)
 
-    // regionStats 从支路数据构建（负载率是支路属性）
+    const selBusIds = new Set<string>(group?.selected_bus_ids ? JSON.parse(group.selected_bus_ids) : [])
+    const selBranchIds = new Set<string>(group?.selected_branch_ids ? JSON.parse(group.selected_branch_ids) : [])
+
+    // 查询支路所属区域
+    const allBranchIds = new Set<string>()
+    for (const result of results) {
+      const branches = JSON.parse(result.branch_results || '[]')
+      for (const b of branches) {
+        if (b.branchId) allBranchIds.add(b.branchId)
+      }
+    }
+    const branchZoneMap = new Map<string, string>()
+    if (allBranchIds.size > 0) {
+      const zoneRows = await db('grid_branches').whereIn('id', [...allBranchIds]).select('id', 'zone')
+      zoneRows.forEach((r: any) => branchZoneMap.set(r.id, r.zone || ''))
+    }
+
+    // regionStats 从支路数据构建（负载率是支路属性，仅选中支路）
     const regionStats: any[] = []
     for (const result of results) {
       const branches = JSON.parse(result.branch_results || '[]')
       for (const branch of branches) {
+        if (selBranchIds.size > 0 && !selBranchIds.has(branch.branchId)) continue
         const loadingPct = branch.loadingPct || 0
         const branchName = `${branch.fromBusName || branch.fromBus} → ${branch.toBusName || branch.toBus}`
         const branchAnomalies = anomalies.filter((a: any) =>
@@ -1423,7 +1464,7 @@ export class PowerFlowService {
         regionStats.push({
           busId: branch.branchId,
           name: branchName,
-          zone: '',
+          zone: branchZoneMap.get(branch.branchId) || '',
           voltageLevel: branch.voltageLevel || '',
           loadRate: loadingPct / 100, // 转为 0-1 小数，前端乘 100 显示
           voltageDeviationPct: 0,
@@ -1434,7 +1475,19 @@ export class PowerFlowService {
     }
 
     const summary = group.result_summary ? JSON.parse(group.result_summary) : null
-    const capacityRanking = summary?.ranking || []
+    // 承载能力排名从当前 regionStats 实时计算，保证与显示数据一致
+    const capacityRanking = [...regionStats]
+      .sort((a: any, b: any) => {
+        const d = a.loadRate - b.loadRate
+        if (d !== 0) return d
+        return (a.busId || '').localeCompare(b.busId || '') // 相同负载率按ID稳定排序
+      })
+      .map((item: any, i: number) => ({
+        equipmentId: item.busId,
+        equipmentName: item.name,
+        loadRate: item.loadRate,
+        rank: i + 1,
+      }))
 
     return {
       group: {
@@ -1516,7 +1569,7 @@ export class PowerFlowService {
     if (query.keyword) {
       qb.where(function () {
         this.where('calc_tasks.id', 'like', `%${query.keyword}%`)
-          .orWhere('calc_tasks.task_type', 'like', `%${query.keyword}%`)
+          .orWhere('users.username', 'like', `%${query.keyword}%`)
       })
     }
     if (query.dateFrom) qb.where('calc_tasks.created_at', '>=', query.dateFrom)
@@ -1556,49 +1609,61 @@ export class PowerFlowService {
     const branchesA: any[] = parseJson(resultA.branch_results) || []
     const branchesB: any[] = parseJson(resultB.branch_results) || []
 
+    const isThreePhase = taskA?.task_type === 'THREE_PHASE' || taskB?.task_type === 'THREE_PHASE'
+
+    // 节点电压对比
     const nodeMap = new Map<string, any>()
-    for (const n of nodesB) nodeMap.set(n.busId || n.id || n.name, n)
+    for (const n of nodesB) nodeMap.set(n.busId || n.name, n)
 
     const nodeDiff: any[] = []
     for (const na of nodesA) {
-      const key = na.busId || na.id || na.name
+      const key = na.busId || na.name
       const nb = nodeMap.get(key)
       if (!nb) { nodeDiff.push({ name: na.name || key, voltageLevel: na.voltageLevel, note: '仅A版本存在' }); continue }
       nodeDiff.push({
         name: na.name || key,
         voltageLevel: na.voltageLevel,
-        phaseADiff: (na.phaseA ?? 0) - (nb.phaseA ?? 0),
-        phaseBDiff: (na.phaseB ?? 0) - (nb.phaseB ?? 0),
-        phaseCDiff: (na.phaseC ?? 0) - (nb.phaseC ?? 0),
-        vufDiff: (na.vuf ?? 0) - (nb.vuf ?? 0),
+        voltagePuDiff: (na.voltagePu ?? 0) - (nb.voltagePu ?? 0),
+        angleDegDiff: (na.angleDeg ?? 0) - (nb.angleDeg ?? 0),
+        marginDiff: (na.stabilityMargin ?? 0) - (nb.stabilityMargin ?? 0),
+        phaseADiff: isThreePhase ? (na.phaseA ?? 0) - (nb.phaseA ?? 0) : null,
+        phaseBDiff: isThreePhase ? (na.phaseB ?? 0) - (nb.phaseB ?? 0) : null,
+        phaseCDiff: isThreePhase ? (na.phaseC ?? 0) - (nb.phaseC ?? 0) : null,
+        vufDiff: isThreePhase ? (na.vuf ?? 0) - (nb.vuf ?? 0) : null,
       })
     }
     for (const nb of nodesB) {
-      if (!nodesA.find((na: any) => (na.busId || na.id || na.name) === (nb.busId || nb.id || nb.name))) {
-        nodeDiff.push({ name: nb.name || nb.busId || nb.id, voltageLevel: nb.voltageLevel, note: '仅B版本存在' })
+      if (!nodesA.find((na: any) => (na.busId || na.name) === (nb.busId || nb.name))) {
+        nodeDiff.push({ name: nb.name || nb.busId, voltageLevel: nb.voltageLevel, note: '仅B版本存在' })
       }
     }
 
+    // 支路功率对比
     const branchMap = new Map<string, any>()
-    for (const b of branchesB) branchMap.set(b.id || `${b.fromBusId}-${b.toBusId}`, b)
+    for (const b of branchesB) {
+      branchMap.set(b.branchId || b.id || `${b.fromBus}-${b.toBus}`, b)
+    }
 
     const branchDiff: any[] = []
     for (const ba of branchesA) {
-      const key = ba.id || `${ba.fromBusId}-${ba.toBusId}`
+      const key = ba.branchId || ba.id || `${ba.fromBus}-${ba.toBus}`
       const bb = branchMap.get(key)
       if (!bb) { branchDiff.push({ fromBusName: ba.fromBusName, toBusName: ba.toBusName, voltageLevel: ba.voltageLevel, note: '仅A版本存在' }); continue }
       branchDiff.push({
-        fromBusName: ba.fromBusName, toBusName: ba.toBusName,
+        fromBusName: ba.fromBusName || ba.fromBus,
+        toBusName: ba.toBusName || ba.toBus,
         voltageLevel: ba.voltageLevel,
-        phaseAPDiff: (Number(ba.phaseAPFromMw) || 0) - (Number(bb.phaseAPFromMw) || 0),
-        phaseBPDiff: (Number(ba.phaseBPFromMw) || 0) - (Number(bb.phaseBPFromMw) || 0),
-        phaseCPDiff: (Number(ba.phaseCPFromMw) || 0) - (Number(bb.phaseCPFromMw) || 0),
+        pFromMwDiff: (Number(ba.pFromMw) || 0) - (Number(bb.pFromMw) || 0),
+        qFromMvarDiff: (Number(ba.qFromMvar) || 0) - (Number(bb.qFromMvar) || 0),
+        loadingPctDiff: (Number(ba.loadingPct) || 0) - (Number(bb.loadingPct) || 0),
+        lossMwDiff: (Number(ba.lossMw) || 0) - (Number(bb.lossMw) || 0),
       })
     }
 
     return {
       versionA: { taskId: taskA?.id, taskType: taskA?.task_type, createdAt: taskA?.created_at, operator: taskA?.created_by, summary: parseJson(resultA.summary) },
       versionB: { taskId: taskB?.id, taskType: taskB?.task_type, createdAt: taskB?.created_at, operator: taskB?.created_by, summary: parseJson(resultB.summary) },
+      isThreePhase,
       nodeDiff,
       branchDiff,
     }
@@ -1628,7 +1693,17 @@ export class PowerFlowService {
     return { taskId, deleted: true }
   }
 
+  async getHistoryRetentionDays(): Promise<number> {
+    const row = await db('system_config').where('key', 'history_retention_days').first()
+    return row ? parseInt(row.value) || 30 : 30
+  }
+
   async cleanupExpired(days: number) {
+    // 保存用户配置的保留天数
+    await db('system_config')
+      .where('key', 'history_retention_days')
+      .update({ value: String(days), updated_at: new Date().toISOString() })
+
     const cutoff = new Date()
     cutoff.setDate(cutoff.getDate() - days)
     const cutoffStr = cutoff.toISOString()
@@ -1641,7 +1716,7 @@ export class PowerFlowService {
       await db('calc_results').whereIn('task_id', ids).del()
       await db('calc_tasks').whereIn('id', ids).del()
     }
-    return { deletedCount: ids.length, cutoffBefore: cutoffStr }
+    return { deletedCount: ids.length, cutoffBefore: cutoffStr, retentionDays: days }
   }
 
   private deriveHistoryMeta(params: any): { sceneType: string | null; dataSource: string | null } {

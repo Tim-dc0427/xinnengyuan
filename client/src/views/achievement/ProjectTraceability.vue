@@ -22,6 +22,7 @@ import type {
   PlanAdjustment, ProjectDocument, AuditRecord, ArchiveCompleteness,
 } from '@/api/achievement'
 import { traceHistory } from '@/api/achievement'
+import { formatDateTime, formatDate } from '@/utils/time'
 
 // ==================== 项目检索 ====================
 const projects = ref<ProjectItem[]>([])
@@ -382,7 +383,9 @@ function handleUploadError() { ElMessage.error('上传失败') }
                     </el-tag>
                   </template>
                 </el-table-column>
-                <el-table-column prop="created_at" label="时间" width="160" />
+                <el-table-column label="时间" width="170">
+                  <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
+                </el-table-column>
                 <el-table-column label="操作" width="120" v-if="planAdjustments.some(a => a.approval_status === 'pending')">
                   <template #default="{ row }">
                     <template v-if="row.approval_status === 'pending'">
@@ -476,7 +479,7 @@ function handleUploadError() { ElMessage.error('上传失败') }
               <el-timeline v-if="filteredVersions.length > 0">
                 <el-timeline-item
                   v-for="v in filteredVersions" :key="v.id"
-                  :timestamp="v.created_at?.slice(0, 10)"
+                  :timestamp="formatDate(v.created_at)"
                   :type="v.stage === 'operation' ? 'success' : v.stage === 'construction' ? 'warning' : 'primary' as any"
                   :hollow="!v.changed_fields"
                 >
@@ -516,7 +519,9 @@ function handleUploadError() { ElMessage.error('上传失败') }
                 </div>
               </div>
               <el-table :data="filteredAuditRecords" stripe size="small" max-height="320">
-                <el-table-column prop="created_at" label="时间" width="160" />
+                <el-table-column label="时间" width="170">
+                  <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
+                </el-table-column>
                 <el-table-column prop="action" label="操作类型" width="110" />
                 <el-table-column label="阶段" width="80">
                   <template #default="{ row }">{{ stageLabel[row.stage] || row.stage || '-' }}</template>

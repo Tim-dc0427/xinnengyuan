@@ -2,6 +2,21 @@ import { db } from '../../config/database.js'
 import { v4 as uuid } from 'uuid'
 import type { PvGridTopology, TopoNode, TopoEdge } from '@new-energy/shared'
 
+/** 确保存在有效母线ID，无则使用已有母线或创建默认母线 */
+async function ensureBusId(busId?: string | null): Promise<string> {
+  if (busId) {
+    const exists = await db('grid_buses').where('id', busId).select('id').first()
+    if (exists) return busId
+  }
+  const first = await db('grid_buses').select('id').first()
+  if (first) return first.id
+  const id = uuid()
+  await db('grid_buses').insert({
+    id, name: '默认母线', zone: '', voltage_level: '10', bus_type: 'pq', base_kv: 10,
+  })
+  return id
+}
+
 // 根据 node_type + node_id 解析显示名称
 async function resolveNodeName(nodeType: string, nodeId: string): Promise<string> {
   switch (nodeType) {
@@ -212,10 +227,11 @@ export class TopologyService {
   async createSourceNode(data: any) {
     const id = uuid()
     const now = new Date().toISOString()
+    const busId = await ensureBusId(data.busId)
     await db('solar_pv_stations').insert({
       id,
       station_name: data.name,
-      bus_id: data.busId || null,
+      bus_id: busId,
       installed_capacity_mw: (data.capacityKw || 0) / 1000,
       grid_connection_voltage_kv: data.voltageLevel ? parseFloat(data.voltageLevel) : null,
       longitude: data.longitude || null,

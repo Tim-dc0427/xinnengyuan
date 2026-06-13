@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { fetchGridBuses, fetchGridBranches, submitBatchConfig } from '@/api/power-flow'
 import MapSelector from '@/components/common/MapSelector.vue'
 import { ElMessage } from 'element-plus'
+import dayjs from 'dayjs'
 
 const router = useRouter()
 
@@ -15,6 +16,18 @@ const loadGrowthFactor = ref(1.0)
 const pvOutputFactor = ref(1.0)
 const convergenceTolerance = ref(1e-5)
 const maxIterations = ref(50)
+const timeWindowStart = ref(defaultTimeStart())
+const timeWindowEnd = ref(defaultTimeEnd())
+
+function defaultTimeStart() {
+  const d = new Date()
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T00:00:00`
+}
+function defaultTimeEnd() {
+  const d = new Date()
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T23:59:59`
+}
+function pad(n: number) { return String(n).padStart(2, '0') }
 const zoneFilter = ref('')
 const voltageLevelFilter = ref('')
 const selectedBusIds = ref<string[]>([])
@@ -26,46 +39,101 @@ const zones = ref<string[]>([])
 const voltageLevels = ref<string[]>([])
 const activeTab = ref('map')
 const busTableRef = ref<any>(null)
+const branchTableRef = ref<any>(null)
+const busStatusFilter = ref<'all' | 'selected' | 'unselected'>('all')
+const branchStatusFilter = ref<'all' | 'selected' | 'unselected'>('all')
 
-const filteredBuses = computed(() => {
+// 基础筛选（区域 + 电压等级），不含选中状态筛选
+const baseFilteredBuses = computed(() => {
   let list = allBuses.value
   if (zoneFilter.value) list = list.filter((b: any) => b.zone === zoneFilter.value)
   if (voltageLevelFilter.value) list = list.filter((b: any) => b.voltage_level === voltageLevelFilter.value)
   return list
 })
 
-const filteredBranches = computed(() => {
+const baseFilteredBranches = computed(() => {
   let list = allBranches.value
   if (zoneFilter.value) list = list.filter((b: any) => b.zone === zoneFilter.value)
   if (voltageLevelFilter.value) list = list.filter((b: any) => b.voltage_level === voltageLevelFilter.value)
   return list
 })
 
+// 表格显示数据 = 基础筛选 + 选中状态筛选
+const filteredBuses = computed(() => {
+  let list = baseFilteredBuses.value
+  if (busStatusFilter.value === 'selected') list = list.filter((b: any) => selectedBusIds.value.includes(b.id))
+  if (busStatusFilter.value === 'unselected') list = list.filter((b: any) => !selectedBusIds.value.includes(b.id))
+  return list
+})
+
+const filteredBranches = computed(() => {
+  let list = baseFilteredBranches.value
+  if (branchStatusFilter.value === 'selected') list = list.filter((b: any) => selectedBranchIds.value.includes(b.id))
+  if (branchStatusFilter.value === 'unselected') list = list.filter((b: any) => !selectedBranchIds.value.includes(b.id))
+  return list
+})
+
 const busPoints = computed(() => {
-  return allBuses.value
-    .filter((b: any) => b.longitude != null && b.latitude != null)
-    .map((b: any) => ({
-      id: b.id,
-      name: b.name,
-      zone: b.zone,
-      voltageLevel: b.voltage_level,
-      baseKv: b.base_kv,
-      longitude: b.longitude,
-      latitude: b.latitude,
-    }))
+  let list = allBuses.value.filter((b: any) => b.longitude != null && b.latitude != null)
+  if (zoneFilter.value) list = list.filter((b: any) => b.zone === zoneFilter.value)
+  return list.map((b: any) => ({
+    id: b.id,
+    name: b.name,
+    zone: b.zone,
+    voltageLevel: b.voltage_level,
+    baseKv: b.base_kv,
+    longitude: b.longitude,
+    latitude: b.latitude,
+    physicalRole: b.physical_role || '',
+  }))
 })
 
 const selectedCount = computed(() => selectedBusIds.value.length + selectedBranchIds.value.length)
 
+const busNameById = computed(() => {
+  const map = new Map<string, string>()
+  for (const b of allBuses.value) map.set(b.id, b.name || b.id)
+  return map
+})
+
 let syncingTable = false
+let syncingBranch = false
+let filterChanging = false
+
+// 筛选切换时锁定，防止表格 data 变化触发 selection-change 清空选中
+watch([busStatusFilter, branchStatusFilter, zoneFilter, voltageLevelFilter], () => {
+  filterChanging = true
+  nextTick(() => { filterChanging = false })
+})
 
 function handleBusSelect(rows: any[]) {
-  if (syncingTable) return
+  if (syncingTable || filterChanging) return
   selectedBusIds.value = rows.map((r: any) => r.id)
 }
 
 function handleBranchSelect(rows: any[]) {
+  if (syncingBranch || filterChanging) return
   selectedBranchIds.value = rows.map((r: any) => r.id)
+}
+
+function selectAllBuses() {
+  const ids = baseFilteredBuses.value.map((b: any) => b.id)
+  selectedBusIds.value = [...new Set([...selectedBusIds.value, ...ids])]
+}
+
+function deselectAllBuses() {
+  const removeIds = new Set(baseFilteredBuses.value.map((b: any) => b.id))
+  selectedBusIds.value = selectedBusIds.value.filter(id => !removeIds.has(id))
+}
+
+function selectAllBranches() {
+  const ids = baseFilteredBranches.value.map((b: any) => b.id)
+  selectedBranchIds.value = [...new Set([...selectedBranchIds.value, ...ids])]
+}
+
+function deselectAllBranches() {
+  const removeIds = new Set(baseFilteredBranches.value.map((b: any) => b.id))
+  selectedBranchIds.value = selectedBranchIds.value.filter(id => !removeIds.has(id))
 }
 
 // 同步 selectedBusIds 到表格的 selection 状态
@@ -82,6 +150,22 @@ watch(selectedBusIds, async () => {
     }
   }
   syncingTable = false
+})
+
+// 同步 selectedBranchIds 到线路表格的 selection 状态
+watch(selectedBranchIds, async () => {
+  await nextTick()
+  if (!branchTableRef.value) return
+  syncingBranch = true
+  const table = branchTableRef.value
+  for (const row of filteredBranches.value) {
+    const shouldBeSelected = selectedBranchIds.value.includes(row.id)
+    const isSelected = (table as any).getSelectionRows?.()?.some((r: any) => r.id === row.id)
+    if (shouldBeSelected !== isSelected) {
+      ;(table as any).toggleRowSelection(row, shouldBeSelected)
+    }
+  }
+  syncingBranch = false
 })
 
 // 自动关联支路：选中节点后，自动选中与该节点相连的所有支路
@@ -123,13 +207,13 @@ async function loadData() {
 
 async function handleSubmit() {
   if (selectedCount.value === 0) {
-    ElMessage.warning('请选择至少一个设备')
+    ElMessage.warning('请选择至少一条母线或线路')
     return
   }
   submitting.value = true
   try {
     const res = await submitBatchConfig({
-      groupName: groupName.value || `批量计算 ${new Date().toLocaleString('zh-CN')}`,
+      groupName: groupName.value || `批量计算 ${dayjs().format('YYYY-MM-DD HH:mm:ss')}`,
       calcType: calcType.value,
       busIds: selectedBusIds.value,
       branchIds: selectedBranchIds.value,
@@ -138,6 +222,12 @@ async function handleSubmit() {
         pvOutputFactor: pvOutputFactor.value,
         convergenceTolerance: convergenceTolerance.value,
         maxIterations: maxIterations.value,
+        ...(timeWindowStart.value || timeWindowEnd.value ? {
+          timeWindow: {
+            start: timeWindowStart.value || undefined,
+            end: timeWindowEnd.value || undefined,
+          },
+        } : {}),
       },
     })
     router.push({ name: 'BatchTaskMonitor', query: { groupId: res.groupId } })
@@ -157,17 +247,16 @@ onMounted(loadData)
     <div class="config-grid">
       <div class="config-left">
         <div class="filter-row">
-          <el-select v-model="zoneFilter" placeholder="区域" clearable size="small" style="width:140px">
-            <el-option v-for="z in zones" :key="z" :label="z" :value="z" />
-          </el-select>
-          <el-select v-model="voltageLevelFilter" placeholder="电压等级" clearable size="small" style="width:140px">
-            <el-option v-for="v in voltageLevels" :key="v" :label="v" :value="v" />
-          </el-select>
-          <span class="selected-hint">已选 {{ selectedBusIds.length }} 节点 / {{ selectedBranchIds.length }} 支路</span>
+          <span class="selected-hint">已选 {{ selectedBusIds.length }} 母线 / {{ selectedBranchIds.length }} 线路</span>
         </div>
 
         <el-tabs v-model="activeTab">
           <el-tab-pane label="地图框选" name="map">
+            <div class="table-toolbar">
+              <el-select v-model="zoneFilter" placeholder="区域" clearable size="small" style="width:120px">
+                <el-option v-for="z in zones" :key="z" :label="z" :value="z" />
+              </el-select>
+            </div>
             <MapSelector
               v-if="busPoints.length > 0"
               :buses="busPoints"
@@ -176,13 +265,28 @@ onMounted(loadData)
             />
             <el-empty v-else description="加载中" />
           </el-tab-pane>
-          <el-tab-pane label="节点列表" name="buses">
+          <el-tab-pane label="母线列表" name="buses">
+            <div class="table-toolbar">
+              <el-radio-group v-model="busStatusFilter" size="small">
+                <el-radio-button value="all">全部</el-radio-button>
+                <el-radio-button value="selected">已选</el-radio-button>
+                <el-radio-button value="unselected">未选</el-radio-button>
+              </el-radio-group>
+              <el-select v-model="zoneFilter" placeholder="区域" clearable size="small" style="width:100px">
+                <el-option v-for="z in zones" :key="z" :label="z" :value="z" />
+              </el-select>
+              <el-select v-model="voltageLevelFilter" placeholder="电压等级" clearable size="small" style="width:100px">
+                <el-option v-for="v in voltageLevels" :key="v" :label="v" :value="v" />
+              </el-select>
+              <el-button size="small" @click="selectAllBuses">全选当前</el-button>
+              <el-button size="small" @click="deselectAllBuses">清空当前</el-button>
+            </div>
             <el-table
               ref="busTableRef"
               :data="filteredBuses"
               v-loading="loading"
               size="small"
-              max-height="420"
+              max-height="390"
               stripe
               @selection-change="handleBusSelect"
             >
@@ -193,19 +297,40 @@ onMounted(loadData)
               <el-table-column prop="bus_type" label="类型" width="70" />
             </el-table>
           </el-tab-pane>
-          <el-tab-pane label="支路列表" name="branches">
+          <el-tab-pane label="线路列表" name="branches">
+            <div class="table-toolbar">
+              <el-radio-group v-model="branchStatusFilter" size="small">
+                <el-radio-button value="all">全部</el-radio-button>
+                <el-radio-button value="selected">已选</el-radio-button>
+                <el-radio-button value="unselected">未选</el-radio-button>
+              </el-radio-group>
+              <el-select v-model="zoneFilter" placeholder="区域" clearable size="small" style="width:100px">
+                <el-option v-for="z in zones" :key="z" :label="z" :value="z" />
+              </el-select>
+              <el-select v-model="voltageLevelFilter" placeholder="电压等级" clearable size="small" style="width:100px">
+                <el-option v-for="v in voltageLevels" :key="v" :label="v" :value="v" />
+              </el-select>
+              <el-button size="small" @click="selectAllBranches">全选当前</el-button>
+              <el-button size="small" @click="deselectAllBranches">清空当前</el-button>
+            </div>
             <el-table
+              ref="branchTableRef"
               :data="filteredBranches"
               size="small"
-              max-height="420"
+              max-height="390"
               stripe
               @selection-change="handleBranchSelect"
             >
               <el-table-column type="selection" width="40" />
-              <el-table-column prop="from_bus_id" label="起始节点" width="140" show-overflow-tooltip />
-              <el-table-column prop="to_bus_id" label="终止节点" width="140" show-overflow-tooltip />
+              <el-table-column label="送端母线" min-width="110" show-overflow-tooltip>
+                <template #default="{ row }">{{ busNameById.get(row.from_bus_id) || row.from_bus_id }}</template>
+              </el-table-column>
+              <el-table-column label="受端母线" min-width="110" show-overflow-tooltip>
+                <template #default="{ row }">{{ busNameById.get(row.to_bus_id) || row.to_bus_id }}</template>
+              </el-table-column>
               <el-table-column prop="branch_type" label="类型" width="80" />
-              <el-table-column prop="voltage_level" label="电压等级" width="90" />
+              <el-table-column prop="voltage_level" label="电压等级" width="80" />
+              <el-table-column prop="remark" label="备注" min-width="100" show-overflow-tooltip />
             </el-table>
           </el-tab-pane>
         </el-tabs>
@@ -230,6 +355,28 @@ onMounted(loadData)
           </el-form-item>
           <el-form-item label="光伏出力系数">
             <el-input-number v-model="pvOutputFactor" :step="0.05" :precision="2" :min="0" :max="1.5" style="width:100%" />
+          </el-form-item>
+          <el-form-item label="时间窗口起">
+            <el-date-picker
+              v-model="timeWindowStart"
+              type="datetime"
+              placeholder="开始时间"
+              format="YYYY-MM-DD HH:mm"
+              value-format="YYYY-MM-DDTHH:mm:ss"
+              size="small"
+              style="width:100%"
+            />
+          </el-form-item>
+          <el-form-item label="时间窗口止">
+            <el-date-picker
+              v-model="timeWindowEnd"
+              type="datetime"
+              placeholder="结束时间"
+              format="YYYY-MM-DD HH:mm"
+              value-format="YYYY-MM-DDTHH:mm:ss"
+              size="small"
+              style="width:100%"
+            />
           </el-form-item>
           <el-form-item label="收敛精度">
             <el-select v-model="convergenceTolerance" style="width:100%">
@@ -259,4 +406,5 @@ onMounted(loadData)
 .section-title { font-size: 14px; font-weight: 600; color: #303133; margin-bottom: 12px; }
 .filter-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
 .selected-hint { font-size: 12px; color: #909399; margin-left: auto; }
+.table-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
 </style>

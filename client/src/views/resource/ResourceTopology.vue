@@ -24,7 +24,7 @@ const tabTypes: { type: TopoNodeType; label: string }[] = [
   { type: 'LOAD', label: '荷' },
   { type: 'STORAGE', label: '储' },
 ]
-const nodeTypeLabel: Record<string, string> = { SOURCE: '源(光伏电站)', GRID: '网(母线)', LOAD: '荷(负荷)', STORAGE: '储(储能)' }
+const nodeTypeLabel: Record<string, string> = { SOURCE: '源(光伏电站)', GRID: '网(母线)', LOAD: '荷(负荷节点)', STORAGE: '储(储能设备)' }
 const nodeTypeColor: Record<string, string> = { SOURCE: '#67C23A', GRID: '#267F7B', LOAD: '#F56C6C', STORAGE: '#E6A23C' }
 const edgeTypeLabel: Record<string, string> = { PHYSICAL: '物理连接', LOGICAL: '逻辑关联', CONTROL: '控制调度' }
 const flowLabel: Record<string, string> = { FORWARD: '正向', REVERSE: '反向', BIDIRECTIONAL: '双向' }
@@ -152,6 +152,80 @@ const topologyLoading = ref(false)
 const chartRef = ref<InstanceType<typeof VChart> | null>(null)
 const VOLTAGE_ORDER = ['220kV', '110kV', '35kV', '10kV']
 
+// ==================== 运行状态(伪实时) ====================
+const nodeStatuses = ref<Record<string, 'normal' | 'warning' | 'fault'>>({})
+const statusRefreshing = ref(false)
+function refreshRunningStatus() {
+  statusRefreshing.value = true
+  const statuses: Record<string, 'normal' | 'warning' | 'fault'> = {}
+  for (const n of topology.value.nodes) {
+    const r = Math.random()
+    statuses[n.id] = r < 0.1 ? 'fault' : r < 0.3 ? 'warning' : 'normal'
+  }
+  nodeStatuses.value = statuses
+  setTimeout(() => { statusRefreshing.value = false }, 600)
+  ElMessage.success('运行状态已刷新')
+}
+
+const statusColorMap: Record<string, string> = { normal: '#67C23A', warning: '#E6A23C', fault: '#F56C6C' }
+
+// ==================== 分层查看 ====================
+const layerVoltageLevels = ref<string[]>([])
+const allVoltageLevels = computed(() => {
+  const set = new Set<string>()
+  topology.value.nodes.forEach(n => { if (n.voltageLevel) set.add(n.voltageLevel) })
+  return [...set].sort((a, b) => VOLTAGE_ORDER.indexOf(b) - VOLTAGE_ORDER.indexOf(a))
+})
+
+function toggleLayer(vl: string) {
+  const idx = layerVoltageLevels.value.indexOf(vl)
+  if (idx >= 0) layerVoltageLevels.value.splice(idx, 1)
+  else layerVoltageLevels.value.push(vl)
+}
+
+const isLayerActive = computed(() => layerVoltageLevels.value.length > 0)
+
+// ==================== 故障影响范围 ====================
+const faultMode = ref(false)
+const faultNodeId = ref('')
+const faultSimulating = ref(false)
+
+function enterFaultMode() {
+  faultMode.value = true
+  faultNodeId.value = ''
+  ElMessage.info('请点击拓扑图中的节点模拟故障')
+}
+
+function exitFaultMode() {
+  faultMode.value = false
+  faultNodeId.value = ''
+}
+
+// 基于拓扑边 BFS 查找受影响节点（追溯2层）
+const affectedNodeIds = computed(() => {
+  if (!faultNodeId.value) return new Set<string>()
+  const affected = new Set<string>([faultNodeId.value])
+  const edgeMap = new Map<string, string[]>()
+  for (const e of topology.value.edges) {
+    if (!edgeMap.has(e.sourceNodeId)) edgeMap.set(e.sourceNodeId, [])
+    if (!edgeMap.has(e.targetNodeId)) edgeMap.set(e.targetNodeId, [])
+    edgeMap.get(e.sourceNodeId)!.push(e.targetNodeId)
+    edgeMap.get(e.targetNodeId)!.push(e.sourceNodeId)
+  }
+  let frontier = [faultNodeId.value]
+  for (let depth = 0; depth < 2; depth++) {
+    const next: string[] = []
+    for (const id of frontier) {
+      for (const neighbor of (edgeMap.get(id) || [])) {
+        if (!affected.has(neighbor)) { affected.add(neighbor); next.push(neighbor) }
+      }
+    }
+    frontier = next
+    if (frontier.length === 0) break
+  }
+  return affected
+})
+
 function buildLayout(nodes: TopoNode[]) {
   const coords: Record<string, { x: number; y: number }> = {}
   if (nodes.length === 0) return coords
@@ -204,24 +278,40 @@ function buildLayout(nodes: TopoNode[]) {
 }
 
 const chartOption = computed(() => {
-  const nodes = topology.value.nodes
-  const edges = topology.value.edges
+  let nodes = topology.value.nodes
+  let edges = topology.value.edges
   if (!nodes.length) return {}
 
-  const coords = buildLayout(nodes)
+  // 分层过滤
+  const layerSet = new Set(layerVoltageLevels.value)
+  if (isLayerActive.value) {
+    const visibleIds = new Set(nodes.filter(n => layerSet.has(n.voltageLevel || '')).map(n => n.id))
+    nodes = nodes.filter(n => visibleIds.has(n.id))
+    edges = edges.filter(e => visibleIds.has(e.sourceNodeId) && visibleIds.has(e.targetNodeId))
+    if (!nodes.length) return {}
+  }
 
-  const graphData = nodes.map(n => ({
-    id: n.id,
-    name: n.name,
-    x: coords[n.id]?.x ?? (n.posX || 0) * 5,
-    y: coords[n.id]?.y ?? (n.posY || 0) * 5,
-    symbolSize: n.nodeType === 'SOURCE' ? 28 : n.nodeType === 'STORAGE' ? 24 : 20,
-    symbol: n.nodeType === 'SOURCE' ? 'roundRect' : n.nodeType === 'STORAGE' ? 'diamond' : 'circle',
-    itemStyle: { color: nodeTypeColor[n.nodeType] || '#909399' },
-    category: (['SOURCE', 'GRID', 'LOAD', 'STORAGE'] as string[]).indexOf(n.nodeType),
-    label: { show: true, fontSize: 9, formatter: (p: any) => p.name.length > 6 ? p.name.slice(0, 6) + '..' : p.name },
-    _raw: n,
-  }))
+  const coords = buildLayout(nodes)
+  const affectedSet = affectedNodeIds.value
+
+  const graphData = nodes.map(n => {
+    let color = nodeTypeColor[n.nodeType] || '#909399'
+    if (nodeStatuses.value[n.id]) {
+      color = statusColorMap[nodeStatuses.value[n.id]]
+    }
+    return {
+      id: n.id,
+      name: n.name,
+      x: coords[n.id]?.x ?? (n.posX || 0) * 5,
+      y: coords[n.id]?.y ?? (n.posY || 0) * 5,
+      symbolSize: n.id === faultNodeId.value ? 34 : n.nodeType === 'SOURCE' ? 28 : n.nodeType === 'STORAGE' ? 24 : 20,
+      symbol: n.nodeType === 'SOURCE' ? 'roundRect' : n.nodeType === 'STORAGE' ? 'diamond' : 'circle',
+      itemStyle: { color },
+      category: (['SOURCE', 'GRID', 'LOAD', 'STORAGE'] as string[]).indexOf(n.nodeType),
+      label: { show: true, fontSize: 9, formatter: (p: any) => p.name.length > 6 ? p.name.slice(0, 6) + '..' : p.name },
+      _raw: n,
+    }
+  })
 
   const graphLinks = edges.map(e => ({
     source: e.sourceNodeId,
@@ -246,7 +336,7 @@ const chartOption = computed(() => {
         return `<b>${e.sourceName || e.sourceNodeId}</b> → <b>${e.targetName || e.targetNodeId}</b><br/>类型：${edgeTypeLabel[e.edgeType] || e.edgeType}<br/>方向：${flowLabel[e.flowDirection] || e.flowDirection}<br/>容量：${e.maxCapacityKw ? (e.maxCapacityKw >= 1000 ? (e.maxCapacityKw / 1000).toFixed(0) + 'MW' : e.maxCapacityKw + 'kW') : '-'}`
       },
     },
-    legend: { data: ['源(光伏)', '网(母线)', '荷(负荷)', '储(储能)'], bottom: 4 },
+    legend: { data: ['源(光伏电站)', '网(母线)', '荷(负荷节点)', '储(储能设备)'], bottom: 4 },
     series: [{
       type: 'graph',
       layout: 'none',
@@ -255,10 +345,10 @@ const chartOption = computed(() => {
       data: graphData,
       links: graphLinks,
       categories: [
-        { name: '源(光伏)', itemStyle: { color: '#67C23A' } },
+        { name: '源(光伏电站)', itemStyle: { color: '#67C23A' } },
         { name: '网(母线)', itemStyle: { color: '#267F7B' } },
-        { name: '荷(负荷)', itemStyle: { color: '#F56C6C' } },
-        { name: '储(储能)', itemStyle: { color: '#E6A23C' } },
+        { name: '荷(负荷节点)', itemStyle: { color: '#F56C6C' } },
+        { name: '储(储能设备)', itemStyle: { color: '#E6A23C' } },
       ],
       emphasis: { focus: 'adjacency', lineStyle: { width: 4 } },
       scaleLimit: { min: 0.3, max: 3 },
@@ -270,7 +360,38 @@ const detailVisible = ref(false)
 const detailItem = ref<any>(null)
 const detailType = ref<'node' | 'edge'>('node')
 
+const faultDialogVisible = ref(false)
+const faultDialogNodeName = ref('')
+const faultAffectedDirect = ref<any[]>([])
+const faultAffectedIndirect = ref<any[]>([])
+
 function handleChartClick(params: any) {
+  if (faultMode.value && params.dataType === 'node') {
+    faultNodeId.value = params.data._raw.id
+    faultDialogNodeName.value = params.data._raw.name
+    // 直接相连(1层)
+    const direct = new Set<string>()
+    const edgeMap = new Map<string, string[]>()
+    for (const e of topology.value.edges) {
+      if (!edgeMap.has(e.sourceNodeId)) edgeMap.set(e.sourceNodeId, [])
+      if (!edgeMap.has(e.targetNodeId)) edgeMap.set(e.targetNodeId, [])
+      edgeMap.get(e.sourceNodeId)!.push(e.targetNodeId)
+      edgeMap.get(e.targetNodeId)!.push(e.sourceNodeId)
+    }
+    const neighbors = edgeMap.get(params.data._raw.id) || []
+    neighbors.forEach(id => direct.add(id))
+    // 间接相连(2层)
+    const indirect = new Set<string>()
+    for (const nid of direct) {
+      (edgeMap.get(nid) || []).forEach(id => {
+        if (id !== params.data._raw.id && !direct.has(id)) indirect.add(id)
+      })
+    }
+    faultAffectedDirect.value = topology.value.nodes.filter(n => direct.has(n.id))
+    faultAffectedIndirect.value = topology.value.nodes.filter(n => indirect.has(n.id))
+    faultDialogVisible.value = true
+    return
+  }
   if (params.dataType === 'node') {
     detailType.value = 'node'
     detailItem.value = params.data._raw as TopoNode
@@ -520,7 +641,7 @@ watch(mainTab, async (t) => {
 
 <template>
   <div class="page-container" style="display:flex;flex-direction:column;gap:12px;height:calc(100vh - 100px)">
-    <div class="chart-panel-title">资源关联关系</div>
+    <div class="chart-panel-title">源网荷储关联建模</div>
     <el-tabs v-model="mainTab" style="margin-bottom:-8px">
       <el-tab-pane label="接入关系" name="relation" />
       <el-tab-pane label="模型管理" name="model" />
@@ -614,7 +735,29 @@ watch(mainTab, async (t) => {
 
       <!-- 拓扑图 -->
       <div v-if="topologyGenerated" class="chart-panel" style="flex:1;min-height:350px;display:flex;flex-direction:column">
-        <div class="chart-panel-title">光伏接入拓扑</div>
+        <div class="chart-panel-title">图形化拓扑展示</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+          <el-button size="small" :loading="statusRefreshing" @click="refreshRunningStatus">刷新运行状态</el-button>
+          <el-divider direction="vertical" />
+          <span style="font-size:12px;color:#606266">分层查看：</span>
+          <el-checkbox
+            v-for="vl in allVoltageLevels" :key="vl"
+            :model-value="layerVoltageLevels.includes(vl)"
+            size="small"
+            @change="toggleLayer(vl)"
+          >{{ vl }}</el-checkbox>
+          <el-divider direction="vertical" />
+          <el-button v-if="!faultMode" size="small" type="warning" @click="enterFaultMode">故障影响范围分析</el-button>
+          <template v-else>
+            <span style="font-size:12px;color:#E6A23C;font-weight:600">请点击拓扑图中的节点进行故障模拟</span>
+            <el-button size="small" @click="exitFaultMode">退出分析</el-button>
+          </template>
+        </div>
+        <div v-if="nodeStatuses && Object.keys(nodeStatuses).length" style="display:flex;gap:12px;font-size:11px;color:#909399;margin-bottom:4px">
+          <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#67C23A;margin-right:3px" /> 正常</span>
+          <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#E6A23C;margin-right:3px" /> 预警</span>
+          <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#F56C6C;margin-right:3px" /> 异常</span>
+        </div>
         <div style="flex:1;min-height:300px;position:relative">
           <VChart ref="chartRef" :option="chartOption" style="width:100%;height:100%" autoresize @click="handleChartClick" />
         </div>
@@ -950,5 +1093,34 @@ watch(mainTab, async (t) => {
         </el-descriptions>
       </template>
     </el-drawer>
+
+    <!-- 故障影响范围分析结果 -->
+    <el-dialog v-model="faultDialogVisible" title="故障影响范围分析" width="550px">
+      <div style="margin-bottom:16px">
+        <span style="font-weight:600">故障节点：</span>
+        <el-tag type="danger" size="small" style="margin-left:8px">{{ faultDialogNodeName }}</el-tag>
+      </div>
+      <div style="margin-bottom:12px">
+        <div style="font-weight:600;margin-bottom:8px">直接影响（1层相邻节点，{{ faultAffectedDirect.length }} 个）</div>
+        <div v-if="faultAffectedDirect.length" style="display:flex;flex-wrap:wrap;gap:4px">
+          <el-tag v-for="n in faultAffectedDirect" :key="n.id" size="small" :color="nodeTypeColor[n.nodeType]" style="color:#fff;border:none">
+            {{ n.name }} · {{ nodeTypeLabel[n.nodeType] || n.nodeType }}
+          </el-tag>
+        </div>
+        <div v-else style="color:#909399;font-size:12px">无直接相连节点</div>
+      </div>
+      <div>
+        <div style="font-weight:600;margin-bottom:8px">间接影响（2层相邻节点，{{ faultAffectedIndirect.length }} 个）</div>
+        <div v-if="faultAffectedIndirect.length" style="display:flex;flex-wrap:wrap;gap:4px">
+          <el-tag v-for="n in faultAffectedIndirect" :key="n.id" size="small" :color="nodeTypeColor[n.nodeType]" style="color:#fff;border:none">
+            {{ n.name }} · {{ nodeTypeLabel[n.nodeType] || n.nodeType }}
+          </el-tag>
+        </div>
+        <div v-else style="color:#909399;font-size:12px">无间接影响节点</div>
+      </div>
+      <template #footer>
+        <el-button @click="faultDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>

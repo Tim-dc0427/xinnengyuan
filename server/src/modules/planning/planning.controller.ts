@@ -1,5 +1,6 @@
 import { Request, Response } from 'express'
 import { PlanningService } from './planning.service.js'
+import { audit } from '../../common/audit.service.js'
 
 export class PlanningController {
   private service = new PlanningService()
@@ -12,11 +13,13 @@ export class PlanningController {
 
   createPlan = async (req: Request, res: Response) => {
     const data = await this.service.createPlan(req.body, req.user!.id)
+    audit(req, 'CREATE', 'plan', data.id, `创建规划方案「${req.body.name || data.id}」`, null, req.body)
     res.json({ code: 200, message: 'ok', data })
   }
 
   updatePlan = async (req: Request, res: Response) => {
     const data = await this.service.updatePlan(req.params.id, req.body)
+    audit(req, 'UPDATE', 'plan', req.params.id, '修改规划方案', null, req.body)
     res.json({ code: 200, message: 'ok', data })
   }
 
@@ -28,16 +31,19 @@ export class PlanningController {
 
   createInvestmentPlan = async (req: Request, res: Response) => {
     const data = await this.service.createInvestmentPlan(req.body)
+    audit(req, 'CREATE', 'investment_plan', data.id, `创建投资方案「${req.body.name || data.id}」`, null, req.body)
     res.json({ code: 200, message: 'ok', data })
   }
 
   updateInvestmentPlan = async (req: Request, res: Response) => {
     const data = await this.service.updateInvestmentPlan(req.params.id, req.body)
+    audit(req, 'UPDATE', 'investment_plan', req.params.id, '修改投资方案', null, req.body)
     res.json({ code: 200, message: 'ok', data })
   }
 
   deleteInvestmentPlan = async (req: Request, res: Response) => {
     await this.service.deleteInvestmentPlan(req.params.id)
+    audit(req, 'DELETE', 'investment_plan', req.params.id, '删除投资方案', null, null)
     res.json({ code: 200, message: 'ok' })
   }
 
@@ -49,16 +55,19 @@ export class PlanningController {
 
   createPvStation = async (req: Request, res: Response) => {
     const data = await this.service.createPvStation(req.body)
+    audit(req, 'CREATE', 'pv_station', data.id, `创建光伏电站「${req.body.name || data.id}」`, null, req.body)
     res.json({ code: 200, message: 'ok', data })
   }
 
   updatePvStation = async (req: Request, res: Response) => {
     const data = await this.service.updatePvStation(req.params.id, req.body)
+    audit(req, 'UPDATE', 'pv_station', req.params.id, '修改光伏电站', null, req.body)
     res.json({ code: 200, message: 'ok', data })
   }
 
   deletePvStation = async (req: Request, res: Response) => {
     const data = await this.service.deletePvStation(req.params.id)
+    audit(req, 'DELETE', 'pv_station', req.params.id, '删除光伏电站', null, null)
     res.json({ code: 200, message: 'ok', data })
   }
 
@@ -172,6 +181,7 @@ export class PlanningController {
   // ==================== Absorption Plans (2.1.3) ====================
   generateAbsorptionPlan = async (req: Request, res: Response) => {
     const data = await this.service.generateAbsorptionPlan(req.body)
+    audit(req, 'EXECUTE', 'absorption_plan', data.id, '生成消纳方案', null, req.body)
     res.json({ code: 200, message: 'ok', data })
   }
 
@@ -271,16 +281,19 @@ export class PlanningController {
 
   createEquipmentItem = async (req: Request, res: Response) => {
     const data = await this.service.createEquipmentItem(req.body)
+    audit(req, 'CREATE', 'equipment_ledger', data.id, '创建设备台账', null, req.body)
     res.json({ code: 200, message: 'ok', data })
   }
 
   updateEquipmentItem = async (req: Request, res: Response) => {
     const data = await this.service.updateEquipmentItem(req.params.id, req.body)
+    audit(req, 'UPDATE', 'equipment_ledger', req.params.id, '修改设备台账', null, req.body)
     res.json({ code: 200, message: 'ok', data })
   }
 
   deleteEquipmentItem = async (req: Request, res: Response) => {
     const data = await this.service.deleteEquipmentItem(req.params.id)
+    audit(req, 'DELETE', 'equipment_ledger', req.params.id, '删除设备台账', null, null)
     res.json({ code: 200, message: 'ok', data })
   }
 
