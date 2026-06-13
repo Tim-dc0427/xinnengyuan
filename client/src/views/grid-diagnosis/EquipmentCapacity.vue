@@ -27,7 +27,7 @@ const typeLabelMap: Record<string, string> = { TRANSFORMER: '变压器', BREAKER
 
 fetchStations().then((data) => { stations.value = data })
 
-const selectedStation = computed(() => stations.value.find((s) => s.id === selectedStationId.value))
+const selectedStation = computed(() => stations.value.find((s: StationOption) => s.id === selectedStationId.value))
 
 async function loadData() {
   if (!selectedStationId.value) {

@@ -115,17 +115,17 @@ const highTempChartOption = computed(() => {
   return {
     tooltip: { trigger: 'axis' },
     legend: { data: ['正常出力', '极端出力', '本地负荷', '供需缺口', '环境温度'] },
-    xAxis: { type: 'category', data: d.map(p => p.time), name: '时间' },
+    xAxis: { type: 'category', data: d.map((p: any) => p.time), name: '时间' },
     yAxis: [
       { type: 'value', name: 'MW' },
       { type: 'value', name: '℃', min: 10, max: 60 },
     ],
     series: [
-      { name: '正常出力', type: 'line', smooth: true, data: d.map(p => p.outputKw), lineStyle: { width: 1, type: 'dashed' }, itemStyle: { color: '#91cc75' } },
-      { name: '极端出力', type: 'line', smooth: true, data: d.map(p => p.degradedOutputKw), areaStyle: { opacity: 0.08 }, itemStyle: { color: '#ee6666' } },
-      { name: '本地负荷', type: 'line', smooth: true, data: d.map(p => p.loadMw), itemStyle: { color: '#5470c6' } },
-      { name: '供需缺口', type: 'bar', data: d.map(p => p.supplyGapMw > 0 ? +p.supplyGapMw.toFixed(2) : 0), itemStyle: { color: '#fc8452' }, barWidth: '60%' },
-      { name: '环境温度', type: 'line', yAxisIndex: 1, smooth: true, data: d.map(p => p.temperatureC), itemStyle: { color: '#fac858' } },
+      { name: '正常出力', type: 'line', smooth: true, data: d.map((p: any) => p.outputKw), lineStyle: { width: 1, type: 'dashed' }, itemStyle: { color: '#91cc75' } },
+      { name: '极端出力', type: 'line', smooth: true, data: d.map((p: any) => p.degradedOutputKw), areaStyle: { opacity: 0.08 }, itemStyle: { color: '#ee6666' } },
+      { name: '本地负荷', type: 'line', smooth: true, data: d.map((p: any) => p.loadMw), itemStyle: { color: '#5470c6' } },
+      { name: '供需缺口', type: 'bar', data: d.map((p: any) => p.supplyGapMw > 0 ? +p.supplyGapMw.toFixed(2) : 0), itemStyle: { color: '#fc8452' }, barWidth: '60%' },
+      { name: '环境温度', type: 'line', yAxisIndex: 1, smooth: true, data: d.map((p: any) => p.temperatureC), itemStyle: { color: '#fac858' } },
     ],
   }
 })
@@ -137,17 +137,17 @@ const rainstormChartOption = computed(() => {
   return {
     tooltip: { trigger: 'axis' },
     legend: { data: ['正常出力', '极端出力', '本地负荷', '供需缺口', '降雨强度'] },
-    xAxis: { type: 'category', data: d.map(p => p.time), name: '时间' },
+    xAxis: { type: 'category', data: d.map((p: any) => p.time), name: '时间' },
     yAxis: [
       { type: 'value', name: 'MW' },
       { type: 'value', name: 'mm/h', min: 0, max: 50 },
     ],
     series: [
-      { name: '正常出力', type: 'line', smooth: true, data: d.map(p => p.outputKw), lineStyle: { width: 1, type: 'dashed' }, itemStyle: { color: '#91cc75' } },
-      { name: '极端出力', type: 'line', smooth: true, data: d.map(p => p.degradedOutputKw), areaStyle: { opacity: 0.08 }, itemStyle: { color: '#ee6666' } },
-      { name: '本地负荷', type: 'line', smooth: true, data: d.map(p => p.loadMw), itemStyle: { color: '#5470c6' } },
-      { name: '供需缺口', type: 'bar', data: d.map(p => p.supplyGapMw > 0 ? +p.supplyGapMw.toFixed(2) : 0), itemStyle: { color: '#fc8452' }, barWidth: '60%' },
-      { name: '降雨强度', type: 'line', yAxisIndex: 1, smooth: true, data: d.map(p => p.rainfallIntensityMmh ?? 0), itemStyle: { color: '#73c0de' } },
+      { name: '正常出力', type: 'line', smooth: true, data: d.map((p: any) => p.outputKw), lineStyle: { width: 1, type: 'dashed' }, itemStyle: { color: '#91cc75' } },
+      { name: '极端出力', type: 'line', smooth: true, data: d.map((p: any) => p.degradedOutputKw), areaStyle: { opacity: 0.08 }, itemStyle: { color: '#ee6666' } },
+      { name: '本地负荷', type: 'line', smooth: true, data: d.map((p: any) => p.loadMw), itemStyle: { color: '#5470c6' } },
+      { name: '供需缺口', type: 'bar', data: d.map((p: any) => p.supplyGapMw > 0 ? +p.supplyGapMw.toFixed(2) : 0), itemStyle: { color: '#fc8452' }, barWidth: '60%' },
+      { name: '降雨强度', type: 'line', yAxisIndex: 1, smooth: true, data: d.map((p: any) => p.rainfallIntensityMmh ?? 0), itemStyle: { color: '#73c0de' } },
     ],
   }
 })

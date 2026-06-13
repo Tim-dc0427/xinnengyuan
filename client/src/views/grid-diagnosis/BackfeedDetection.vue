@@ -62,8 +62,8 @@ onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)
 })
 
-const activeStation = computed(() => stations.value.find((s) => s.id === activeStationId.value))
-const activeSnapshot = computed(() => snapshots.value.find((s) => s.stationId === activeStationId.value))
+const activeStation = computed(() => stations.value.find((s: StationOption) => s.id === activeStationId.value))
+const activeSnapshot = computed(() => snapshots.value.find((s: StationSnapshot) => s.stationId === activeStationId.value))
 
 // ==================== 倒送事件（点击电站后加载极端数据） ====================
 async function loadBackfeedEvents(stationId: string) {
@@ -121,10 +121,10 @@ const snapshotStats = computed(() => {
   const list = snapshots.value
   if (!list.length) return { forward: 0, reverse: 0, backfeedCount: 0, maxP: 0 }
   return {
-    forward: list.filter((s) => s.direction === 'forward').length,
-    reverse: list.filter((s) => s.direction === 'reverse').length,
-    backfeedCount: list.filter((s) => s.isBackfeed).length,
-    maxP: Math.max(...list.map((s) => Math.abs(s.activePowerKw))),
+    forward: list.filter((s: StationSnapshot) => s.direction === 'forward').length,
+    reverse: list.filter((s: StationSnapshot) => s.direction === 'reverse').length,
+    backfeedCount: list.filter((s: StationSnapshot) => s.isBackfeed).length,
+    maxP: Math.max(...list.map((s: StationSnapshot) => Math.abs(s.activePowerKw))),
   }
 })
 
@@ -163,7 +163,7 @@ async function openEquipmentDrawer() {
 async function loadEquipmentPower(stationId: string, time: string) {
   try {
     const data = await fetchEquipmentPower(stationId, time)
-    const map = new Map(data.items.map((i: EquipmentPowerItem) => [i.equipmentId, i]))
+    const map = new Map<string, EquipmentPowerItem>(data.items.map((i: EquipmentPowerItem) => [i.equipmentId, i]))
     for (const eq of equipmentList.value) {
       const p = map.get(eq.id)
       if (p) {

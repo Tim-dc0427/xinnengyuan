@@ -27,7 +27,7 @@ export class ResourceController {
   listPowerPlants = async (_req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.listPowerPlants() }) }
   createPowerPlant = async (req: Request, res: Response) => {
     const data = await this.service.createPowerPlant(req.body)
-    audit(req, 'CREATE', 'power_plant', data.id, `创建电站「${req.body.name}」`, null, { name: req.body.name, plantType: req.body.plant_type, capacityKw: req.body.capacity_kw })
+    audit(req, 'CREATE', 'power_plant', data.id, `创建电站「${req.body.name}」`, null, { name: req.body.name, capacityMw: req.body.capacityMw || (req.body.capacityKw ? req.body.capacityKw / 1000 : 0) })
     res.json({ code: 200, message: 'ok', data })
   }
   batchImportPowerPlants = async (req: Request, res: Response) => {

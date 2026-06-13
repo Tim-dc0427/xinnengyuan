@@ -175,6 +175,38 @@ cd client && npm run build
 4. 计算完成 → 前端 `GET /api/power-flow/tasks/:taskId/result` 获取结果
 5. 结果包含: `summary` (概要), `node_results` (节点数据), `branch_results` (支路数据)
 
+## 开发铁律：前后端接口字段先对齐再写功能
+
+**任何涉及前后端数据交互的开发，第一步是字段对齐，第二步才是写逻辑。** 字段名不一致是所有 Bug 的根源——前端传 `camelCase`，后端接 `snake_case`，不显式声明映射就一定会出问题。
+
+### 开发流程（强制顺序）
+
+1. **定义接口契约**：在 `packages/shared/src/` 中声明 DTO 类型，明确每个字段的名称、类型、必填性
+2. **后端落库字段**：数据库列名 = shared 类型中的字段名（snake_case），迁移文件中列的命名必须与 shared 类型一致
+3. **后端 API 响应**：Controller 返回的 `data` 对象字段名必须与 shared 类型一致，**禁止** Knex 查出来什么字段名就原样返回（DB 的 snake_case 在 Service 层映射为 shared 类型）
+4. **前端 API 封装**：`client/src/api/*.ts` 中的函数参数和返回值类型必须引用 shared 类型，**禁止**用 `any` 蒙混
+5. **前端视图调用**：视图层只通过 API 封装函数访问后端，**禁止**绕过 API 层直接调 `apiClient`
+
+### 检查清单（每新增/修改一个接口时必须自查）
+
+- [ ] 后端迁移中的列名和 shared 类型中的字段名是否一致？
+- [ ] 后端 Service 层是否做了 snake_case → shared 类型的字段映射？
+- [ ] 前端 API 函数入参和返回值是否引用了 shared 类型（非 `any`）？
+- [ ] 前端视图是否通过 API 封装函数调用（非直接 `apiClient`）？
+- [ ] `npm run build` in `packages/shared` 是否通过？
+
+### 字段命名规范
+
+| 层 | 命名风格 | 示例 |
+|------|----------|------|
+| 数据库列 | snake_case | `installed_capacity_mw` |
+| Shared 类型 | snake_case | `installed_capacity_mw` |
+| 后端 Service 输出 | snake_case（与 Shared 一致） | `{ installed_capacity_mw: 50 }` |
+| 前端 API 函数参数 | snake_case（与 Shared 一致） | `fetchStations({ station_id: '...' })` |
+| 前端视图本地变量 | camelCase | `station.installedCapacityMw` |
+
+> 前后端统一用 shared 类型中的 snake_case，前端视图层可以做本地 camelCase 转换，但 API 边界必须严格一致。
+
 ## 编码约定
 
 - **禁止自作主张添加未要求的功能**：只做用户明确要求的事，不擅自扩展范围。用户说改A就只改A，不顺手改B、C、D。

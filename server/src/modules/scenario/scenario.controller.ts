@@ -112,9 +112,11 @@ export class ScenarioController {
   }
 
   generateStrategy = async (req: Request, res: Response) => {
-    const data = await this.service.generateStrategy(req.body.scenario_id)
-    audit(req, 'EXECUTE', 'scenario', req.body.scenario_id, '生成策略', null, req.body)
-    res.json({ code: 200, message: '策略生成成功', data })
+    try {
+      const data = await this.service.generateStrategy(req.body.scenario_id)
+      audit(req, 'EXECUTE', 'scenario', req.body.scenario_id, '生成策略', null, req.body)
+      res.json({ code: 200, message: '策略生成成功', data })
+    } catch (e: any) { res.status(e.statusCode || 400).json({ code: e.statusCode || 400, message: e.message || '生成策略失败' }) }
   }
 
   // ==================== 模拟与验证 ====================
@@ -152,15 +154,19 @@ export class ScenarioController {
   }
 
   pauseSimulation = async (req: Request, res: Response) => {
-    const data = await this.service.pauseSimulation(req.params.id)
-    audit(req, 'EXECUTE', 'simulation', req.params.id, '暂停模拟', null, null)
-    res.json({ code: 200, message: '模拟已暂停', data })
+    try {
+      const data = await this.service.pauseSimulation(req.params.id)
+      audit(req, 'EXECUTE', 'simulation', req.params.id, '暂停模拟', null, null)
+      res.json({ code: 200, message: '模拟已暂停', data })
+    } catch (e: any) { res.status(e.statusCode || 400).json({ code: e.statusCode || 400, message: e.message || '暂停失败' }) }
   }
 
   resumeSimulation = async (req: Request, res: Response) => {
-    const data = await this.service.resumeSimulation(req.params.id)
-    audit(req, 'EXECUTE', 'simulation', req.params.id, '恢复模拟', null, null)
-    res.json({ code: 200, message: '模拟已恢复', data })
+    try {
+      const data = await this.service.resumeSimulation(req.params.id)
+      audit(req, 'EXECUTE', 'simulation', req.params.id, '恢复模拟', null, null)
+      res.json({ code: 200, message: '模拟已恢复', data })
+    } catch (e: any) { res.status(e.statusCode || 400).json({ code: e.statusCode || 400, message: e.message || '恢复失败' }) }
   }
 
   updateSimulationParams = async (req: Request, res: Response) => {

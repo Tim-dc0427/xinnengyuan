@@ -47,7 +47,6 @@ async function openEquipDialog(plant: any) {
 }
 
 // ==================== 角色标签映射 ====================
-const plantTypeLabel: Record<string, string> = { PV: '光伏电站', STORAGE: '储能电站', HYBRID: '混合电站', WIND: '风电场' }
 const equipmentTypeLabel: Record<string, string> = { TRANSFORMER: '变压器', INVERTER: '逆变器', BATTERY: '电池组', SWITCHGEAR: '开关柜' }
 
 interface EquipParamDef { field: string; label: string; unit: string }
@@ -348,7 +347,7 @@ async function openVersionHistory(plant: any) {
 
 function fieldLabel(key: string) {
   const map: Record<string, string> = {
-    name: '电站名称', plant_type: '类型', capacity_kw: '装机容量(kW)',
+    name: '电站名称', capacity_kw: '装机容量(kW)',
     installed_date: '并网时间', address: '地址', longitude: '经度', latitude: '纬度', status: '状态',
   }
   return map[key] || key
@@ -357,7 +356,6 @@ function fieldLabel(key: string) {
 function formatVersionVal(key: string, val: any) {
   if (val === null || val === undefined) return '-'
   if (key === 'capacity_kw') return (Number(val) / 1000).toFixed(1) + ' MW'
-  if (key === 'plant_type') return plantTypeLabel[val] || val
   if (key === 'status') return val === 'active' ? '运行中' : val === 'maintenance' ? '维护中' : '已停用'
   return String(val)
 }
@@ -367,7 +365,7 @@ const versionDiffFields = computed(() => {
   const latest = versionList.value[0] // 最新版本
   const prev = versionList.value[1]   // 上一版本
   const changed: Array<{ label: string; prevVal: any; curVal: any }> = []
-  for (const key of ['name', 'plant_type', 'capacity_kw', 'installed_date', 'address', 'longitude', 'latitude', 'status']) {
+  for (const key of ['name', 'capacity_kw', 'installed_date', 'address', 'longitude', 'latitude', 'status']) {
     if (latest[key] !== prev[key]) {
       changed.push({ label: fieldLabel(key), prevVal: prev[key], curVal: latest[key] })
     }
@@ -381,7 +379,7 @@ const editDialogTitle = ref('')
 const editType = ref<'plant' | 'equipment'>('plant')
 const editingId = ref('')
 const editingEquipType = ref('TRANSFORMER')
-const plantForm = ref({ name: '', plantType: 'PV', capacityKw: 0, installedDate: '', address: '', longitude: 0, latitude: 0, status: 'active' })
+const plantForm = ref({ name: '', capacityMw: 0, installedDate: '', address: '', longitude: 0, latitude: 0, status: 'active' })
 const allModels = ref<any[]>([])
 const boundModelIds = ref<string[]>([])
 const equipForm = ref({ modelNumber: '', ratedCapacityKva: 0, ratedVoltageKv: 0, ratedCurrentA: 0, installationDate: '', status: 'operational', grade: 'A' })
@@ -389,14 +387,14 @@ const equipForm = ref({ modelNumber: '', ratedCapacityKva: 0, ratedVoltageKv: 0,
 // ==================== 新增电站 ====================
 const createDialogVisible = ref(false)
 const createForm = ref({
-  name: '', plantType: 'PV', capacityKw: 0, installedDate: '',
+  name: '', capacityMw: 0, installedDate: '',
   longitude: 0, latitude: 0, address: '', status: 'active',
 })
 const createBoundModelIds = ref<string[]>([])
 const createAllModels = ref<any[]>([])
 
 async function openCreatePlant() {
-  createForm.value = { name: '', plantType: 'PV', capacityKw: 0, installedDate: '', longitude: 0, latitude: 0, address: '', status: 'active' }
+  createForm.value = { name: '', capacityMw: 0, installedDate: '', longitude: 0, latitude: 0, address: '', status: 'active' }
   createBoundModelIds.value = []
   try { createAllModels.value = await fetchModels() } catch { createAllModels.value = [] }
   createDialogVisible.value = true
@@ -405,7 +403,15 @@ async function openCreatePlant() {
 async function handlePlantCreate() {
   if (!createForm.value.name.trim()) { ElMessage.warning('请输入电站名称'); return }
   try {
-    const plant = await createPowerPlant(createForm.value)
+    const plant = await createPowerPlant({
+      name: createForm.value.name,
+      capacityMw: createForm.value.capacityMw,
+      installedDate: createForm.value.installedDate,
+      longitude: createForm.value.longitude,
+      latitude: createForm.value.latitude,
+      address: createForm.value.address,
+      status: createForm.value.status,
+    })
     if (createBoundModelIds.value.length > 0) {
       await bindModelsToPlant(plant.id, createBoundModelIds.value)
     }
@@ -430,8 +436,7 @@ async function handleFileImport(event: Event) {
     // 兼容导出格式（snake_case）和手动格式（camelCase）
     const plants: CreatePowerPlantPayload[] = raw.map((item: any) => ({
       name: item.name || item.station_name || '',
-      plantType: item.plantType || item.plant_type || 'PV',
-      capacityKw: item.capacityKw ?? item.capacity_kw ?? 0,
+      capacityMw: item.capacityMw ?? item.capacity_mw ?? (item.capacityKw ? item.capacityKw / 1000 : (item.capacity_kw ? item.capacity_kw / 1000 : 0)),
       installedDate: item.installedDate || item.installed_date || '',
       longitude: item.longitude ?? 0,
       latitude: item.latitude ?? 0,
@@ -509,8 +514,7 @@ async function openPlantEdit(row: any) {
   editDialogTitle.value = '编辑电站 — ' + row.name
   plantForm.value = {
     name: row.name || '',
-    plantType: row.plant_type || 'PV',
-    capacityKw: row.capacity_kw || 0,
+    capacityMw: row.capacity_kw ? +(row.capacity_kw / 1000).toFixed(3) : 0,
     installedDate: row.installed_date || '',
     address: row.address || '',
     longitude: row.longitude || 0,
@@ -552,7 +556,15 @@ function openEquipmentEdit(eq: any) {
 async function handlePlantSave() {
   try {
     await Promise.all([
-      updatePowerPlant(editingId.value, plantForm.value),
+      updatePowerPlant(editingId.value, {
+        name: plantForm.value.name,
+        capacityMw: plantForm.value.capacityMw,
+        installedDate: plantForm.value.installedDate,
+        address: plantForm.value.address,
+        longitude: plantForm.value.longitude,
+        latitude: plantForm.value.latitude,
+        status: plantForm.value.status,
+      }),
       bindModelsToPlant(editingId.value, boundModelIds.value),
     ])
     ElMessage.success('电站信息已更新')
@@ -816,9 +828,9 @@ onUnmounted(() => {
         <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#E6A23C">最新变更对比 (v{{ versionList[0]?.version }} vs v{{ versionList[1]?.version }})</div>
         <div v-for="d in versionDiffFields" :key="d.label" style="display:flex;align-items:center;font-size:13px;margin-bottom:4px">
           <span style="font-weight:500;min-width:110px">{{ d.label }}：</span>
-          <span style="color:#909399;text-decoration:line-through;margin-right:8px">{{ formatVersionVal(d.label === '电站名称' ? 'name' : d.label === '类型' ? 'plant_type' : d.label === '装机容量(kW)' ? 'capacity_kw' : d.label === '并网时间' ? 'installed_date' : d.label === '地址' ? 'address' : d.label === '经度' ? 'longitude' : d.label === '纬度' ? 'latitude' : 'status', d.prevVal) }}</span>
+          <span style="color:#909399;text-decoration:line-through;margin-right:8px">{{ formatVersionVal(d.label === '电站名称' ? 'name' : d.label === '装机容量(kW)' ? 'capacity_kw' : d.label === '并网时间' ? 'installed_date' : d.label === '地址' ? 'address' : d.label === '经度' ? 'longitude' : d.label === '纬度' ? 'latitude' : 'status', d.prevVal) }}</span>
           <span style="color:#909399;margin-right:4px">→</span>
-          <span style="color:#267F7B;font-weight:600">{{ formatVersionVal(d.label === '电站名称' ? 'name' : d.label === '类型' ? 'plant_type' : d.label === '装机容量(kW)' ? 'capacity_kw' : d.label === '并网时间' ? 'installed_date' : d.label === '地址' ? 'address' : d.label === '经度' ? 'longitude' : d.label === '纬度' ? 'latitude' : 'status', d.curVal) }}</span>
+          <span style="color:#267F7B;font-weight:600">{{ formatVersionVal(d.label === '电站名称' ? 'name' : d.label === '装机容量(kW)' ? 'capacity_kw' : d.label === '并网时间' ? 'installed_date' : d.label === '地址' ? 'address' : d.label === '经度' ? 'longitude' : d.label === '纬度' ? 'latitude' : 'status', d.curVal) }}</span>
         </div>
       </div>
       <el-table :data="versionList" stripe size="small" v-loading="versionLoading" max-height="400">
@@ -830,9 +842,6 @@ onUnmounted(() => {
           </template>
         </el-table-column>
         <el-table-column prop="name" label="电站名称" min-width="160" />
-        <el-table-column label="类型" width="100">
-          <template #default="{ row }">{{ plantTypeLabel[row.plant_type] || row.plant_type }}</template>
-        </el-table-column>
         <el-table-column label="装机容量" width="120">
           <template #default="{ row }">{{ row.capacity_kw ? (row.capacity_kw / 1000).toFixed(1) + ' MW' : '-' }}</template>
         </el-table-column>
@@ -863,13 +872,8 @@ onUnmounted(() => {
         <el-form-item label="电站名称">
           <el-input v-model="plantForm.name" />
         </el-form-item>
-        <el-form-item label="类型">
-          <el-select v-model="plantForm.plantType" style="width:200px">
-            <el-option v-for="(label, val) in plantTypeLabel" :key="val" :label="label" :value="val" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="装机容量 (kW)">
-          <el-input-number v-model="plantForm.capacityKw" :min="0" :max="10000000" :step="100" controls-position="right" style="width:220px" />
+        <el-form-item label="装机容量 (MW)">
+          <el-input-number v-model="plantForm.capacityMw" :min="0" :max="10000" :step="0.1" :precision="3" controls-position="right" style="width:220px" />
         </el-form-item>
         <el-form-item label="并网时间">
           <el-input v-model="plantForm.installedDate" placeholder="YYYY-MM-DD" />
@@ -939,13 +943,8 @@ onUnmounted(() => {
         <el-form-item label="电站名称" required>
           <el-input v-model="createForm.name" placeholder="例如：萧山光伏电站" />
         </el-form-item>
-        <el-form-item label="电站类型" required>
-          <el-select v-model="createForm.plantType" style="width:220px">
-            <el-option v-for="(label, val) in plantTypeLabel" :key="val" :label="label" :value="val" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="装机容量 (kW)">
-          <el-input-number v-model="createForm.capacityKw" :min="0" :max="10000000" :step="100" controls-position="right" style="width:220px" />
+        <el-form-item label="装机容量 (MW)">
+          <el-input-number v-model="createForm.capacityMw" :min="0" :max="10000" :step="0.1" :precision="3" controls-position="right" style="width:220px" />
         </el-form-item>
         <el-form-item label="并网时间">
           <el-input v-model="createForm.installedDate" placeholder="YYYY-MM-DD" />

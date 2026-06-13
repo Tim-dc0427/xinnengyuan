@@ -6,6 +6,9 @@ import { fetchStations, fetchEquipmentCapacity, fetchEquipmentReliability } from
 import type { StationOption, EquipmentCapacityResult } from '@new-energy/shared'
 
 interface ReliabilityRow extends EquipmentCapacityResult {
+  stationId?: string
+  equipmentId: string
+  grade?: string
   reliability?: number
   failureRate?: number
   reliabilityGrade?: string
@@ -36,7 +39,7 @@ async function initAllReliability() {
 
 fetchStations().then((data) => { stations.value = data }).then(() => initAllReliability())
 
-const selectedStation = computed(() => stations.value.find((s) => s.id === selectedStationId.value))
+const selectedStation = computed(() => stations.value.find((s: StationOption) => s.id === selectedStationId.value))
 
 // 地图选站 → 筛选明细
 function onMapSelect(id: string | null) {

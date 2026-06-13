@@ -140,9 +140,15 @@ export class ResourceService {
   }
 
   async getPowerPlantVersions(stationId: string) {
-    return db('station_versions')
+    const rows = await db('station_versions')
       .where('station_id', stationId)
       .orderBy('version', 'desc')
+    // 映射字段名，匹配前端期望的 name / capacity_kw
+    return rows.map((r: any) => ({
+      ...r,
+      name: r.station_name,
+      capacity_kw: r.installed_capacity_mw ? r.installed_capacity_mw * 1000 : 0,
+    }))
   }
 
   async bindModelsToPlant(stationId: string, modelIds: string[]) {
@@ -159,11 +165,12 @@ export class ResourceService {
     const id = uuid()
     const now = new Date().toISOString()
     const busId = await this.ensureBusId(data.busId)
+    const capacityMw = data.capacityMw ?? (data.capacityKw ? data.capacityKw / 1000 : 0)
     await db('solar_pv_stations').insert({
       id,
       station_name: data.name,
       bus_id: busId,
-      installed_capacity_mw: data.capacityKw ? data.capacityKw / 1000 : 0,
+      installed_capacity_mw: capacityMw,
       grid_connection_voltage_kv: data.voltageLevel ? parseFloat(data.voltageLevel) : null,
       installed_date: data.installedDate || null,
       longitude: data.longitude || null,
@@ -178,7 +185,7 @@ export class ResourceService {
       station_id: id,
       version: 1,
       station_name: data.name,
-      installed_capacity_mw: data.capacityKw ? data.capacityKw / 1000 : 0,
+      installed_capacity_mw: capacityMw,
       installed_date: data.installedDate || null,
       longitude: data.longitude || null,
       latitude: data.latitude || null,
@@ -196,7 +203,7 @@ export class ResourceService {
       id: uuid(),
       station_name: p.name,
       bus_id: p.busId ? p.busId : defaultBusId,
-      installed_capacity_mw: p.capacityKw ? p.capacityKw / 1000 : 0,
+      installed_capacity_mw: p.capacityMw ?? (p.capacityKw ? p.capacityKw / 1000 : 0),
       grid_connection_voltage_kv: p.voltageLevel ? parseFloat(p.voltageLevel) : null,
       installed_date: p.installedDate || null,
       longitude: p.longitude || null,
@@ -217,10 +224,15 @@ export class ResourceService {
 
     // 保存旧版本快照
     const now = new Date().toISOString()
+    const maxVer = await db('station_versions')
+      .where('station_id', id)
+      .max('version as max_version')
+      .first()
+    const nextVersion = (maxVer?.max_version ?? 0) + 1
     await db('station_versions').insert({
       id: uuid(),
       station_id: id,
-      version: 1,
+      version: nextVersion,
       station_name: current.station_name,
       installed_capacity_mw: current.installed_capacity_mw,
       installed_date: current.installed_date,
@@ -235,7 +247,8 @@ export class ResourceService {
       updated_at: now,
     }
     if (data.name !== undefined) updateData.station_name = data.name
-    if (data.capacityKw !== undefined) updateData.installed_capacity_mw = data.capacityKw / 1000
+    if (data.capacityMw !== undefined) updateData.installed_capacity_mw = data.capacityMw
+    else if (data.capacityKw !== undefined) updateData.installed_capacity_mw = data.capacityKw / 1000
     if (data.installedDate !== undefined) updateData.installed_date = data.installedDate
     if (data.address !== undefined) updateData.address = data.address
     if (data.longitude !== undefined) updateData.longitude = data.longitude

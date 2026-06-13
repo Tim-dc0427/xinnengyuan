@@ -58,7 +58,7 @@ export const CONSTRAINT_CATEGORIES: ConstraintCategoryMeta[] = [
 export function getDefaultCategoryValues() {
   return CONSTRAINT_CATEGORIES.map((cat) => {
     const paramValues: Record<string, any> = {}
-    cat.params.forEach((p) => { paramValues[p.key] = p.defaultValue })
+    cat.params.forEach((p: { key: string; defaultValue: unknown }) => { paramValues[p.key] = p.defaultValue })
     return {
       categoryType: cat.type,
       paramValues,

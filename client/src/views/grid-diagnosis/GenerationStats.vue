@@ -40,7 +40,7 @@ async function loadData() {
 // ========== 按区域统计 图表 ==========
 // 装机容量
 const capacityBarOption = computed(() => {
-  const names = stats.value.map((r) => r.stationName || r.groupKey)
+  const names = stats.value.map((r: AggregatedOutputStats) => r.stationName || r.groupKey)
   return {
     tooltip: { trigger: 'axis' },
     legend: { data: ['装机容量(MW)'] },
@@ -48,14 +48,14 @@ const capacityBarOption = computed(() => {
     xAxis: { type: 'category', data: names, axisLabel: { rotate: 20 } },
     yAxis: { type: 'value', name: 'MW' },
     series: [
-      { name: '装机容量(MW)', type: 'bar', data: stats.value.map((r) => +(r.installedCapacityMw || 0).toFixed(1)), barGap: '10%' },
+      { name: '装机容量(MW)', type: 'bar', data: stats.value.map((r: AggregatedOutputStats) => +(r.installedCapacityMw || 0).toFixed(1)), barGap: '10%' },
     ],
   }
 })
 
 // 发电量 + 实际发电小时数（双Y轴）
 const outputBarOption = computed(() => {
-  const names = stats.value.map((r) => r.stationName || r.groupKey)
+  const names = stats.value.map((r: AggregatedOutputStats) => r.stationName || r.groupKey)
   return {
     tooltip: { trigger: 'axis' },
     legend: { data: ['发电量(万kWh)', '实际发电小时数(h)'] },
@@ -66,8 +66,8 @@ const outputBarOption = computed(() => {
       { type: 'value', name: '实际发电小时数(h)' },
     ],
     series: [
-      { name: '发电量(万kWh)', type: 'bar', data: stats.value.map((r) => +((r.totalOutputKwh || 0) / 10000).toFixed(1)) },
-      { name: '实际发电小时数(h)', type: 'bar', yAxisIndex: 1, data: stats.value.map((r) => r.generationHours || 0) },
+      { name: '发电量(万kWh)', type: 'bar', data: stats.value.map((r: AggregatedOutputStats) => +((r.totalOutputKwh || 0) / 10000).toFixed(1)) },
+      { name: '实际发电小时数(h)', type: 'bar', yAxisIndex: 1, data: stats.value.map((r: AggregatedOutputStats) => r.generationHours || 0) },
     ],
   }
 })
@@ -75,15 +75,15 @@ const outputBarOption = computed(() => {
 // ========== 按电压等级统计 图表 ==========
 // 堆叠柱状图：X轴=装机容量+发电效率，堆叠段=各电压等级
 const voltageStackOption = computed(() => {
-  const levels = stats.value.map((r) => r.groupKey + ' 电压等级')
-  const capacityData = stats.value.map((r) => +(r.installedCapacityMw || 0).toFixed(1))
-  const hoursData = stats.value.map((r) => r.generationHours || 0)
+  const levels = stats.value.map((r: AggregatedOutputStats) => r.groupKey + ' 电压等级')
+  const capacityData = stats.value.map((r: AggregatedOutputStats) => +(r.installedCapacityMw || 0).toFixed(1))
+  const hoursData = stats.value.map((r: AggregatedOutputStats) => r.generationHours || 0)
   return {
     tooltip: { trigger: 'axis' },
     legend: { data: levels },
     xAxis: { type: 'category', data: ['装机容量(MW)', '等效利用小时数(h)'] },
     yAxis: { type: 'value' },
-    series: levels.map((name, i) => ({
+    series: levels.map((name: string, i: number) => ({
       name,
       type: 'bar',
       stack: 'total',
@@ -94,14 +94,14 @@ const voltageStackOption = computed(() => {
 
 // 发电量柱状图
 const voltageOutputOption = computed(() => {
-  const names = stats.value.map((r) => r.groupKey + ' 电压等级')
+  const names = stats.value.map((r: AggregatedOutputStats) => r.groupKey + ' 电压等级')
   return {
     tooltip: { trigger: 'axis' },
     legend: { data: ['发电量(万kWh)'] },
     xAxis: { type: 'category', data: names, axisLabel: { rotate: 20 } },
     yAxis: { type: 'value', name: '万kWh' },
     series: [
-      { name: '发电量(万kWh)', type: 'bar', data: stats.value.map((r) => +((r.totalOutputKwh || 0) / 10000).toFixed(1)) },
+      { name: '发电量(万kWh)', type: 'bar', data: stats.value.map((r: AggregatedOutputStats) => +((r.totalOutputKwh || 0) / 10000).toFixed(1)) },
     ],
   }
 })
