@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { fetchPowerPlants, fetchPowerPlant, createPowerPlant, deletePowerPlant, batchImportPowerPlants, updatePowerPlant, fetchEquipment, createEquipment, updateEquipment, fetchModels, bindModelsToPlant, fetchPowerPlantVersions } from '@/api/resource'
+import { fetchSolarStations, fetchSolarStation, createSolarStation, deleteSolarStation, batchImportSolarStations, updateSolarStation, fetchEquipment, createEquipment, updateEquipment, fetchModels, bindModelsToStation, fetchSolarStationVersions } from '@/api/resource'
 import { fetchEquipmentReliability, predictLife, generateReplacementPlan } from '@/api/grid-diagnosis'
-import type { CreatePowerPlantPayload } from '@/api/resource'
+import type { CreateSolarStationPayload } from '@/api/resource'
 import { formatDateTime, formatRelativeTime, todayStr } from '@/utils/time'
 import dayjs from 'dayjs'
 
@@ -135,7 +135,7 @@ function generateVirtualLife(eq: any) {
 async function loadAll() {
   loading.value = true
   try {
-    plants.value = await fetchPowerPlants()
+    plants.value = await fetchSolarStations()
     // 自动加载所有电站的设备 + 健康数据
     const allEqs = await fetchEquipment()
     const eqByPlant: Record<string, any[]> = {}
@@ -337,7 +337,7 @@ async function openVersionHistory(plant: any) {
   versionDialogVisible.value = true
   versionLoading.value = true
   try {
-    versionList.value = await fetchPowerPlantVersions(plant.id)
+    versionList.value = await fetchSolarStationVersions(plant.id)
   } catch {
     versionList.value = []
   } finally {
@@ -403,7 +403,7 @@ async function openCreatePlant() {
 async function handlePlantCreate() {
   if (!createForm.value.name.trim()) { ElMessage.warning('请输入电站名称'); return }
   try {
-    const plant = await createPowerPlant({
+    const plant = await createSolarStation({
       name: createForm.value.name,
       capacityMw: createForm.value.capacityMw,
       installedDate: createForm.value.installedDate,
@@ -413,7 +413,7 @@ async function handlePlantCreate() {
       status: createForm.value.status,
     })
     if (createBoundModelIds.value.length > 0) {
-      await bindModelsToPlant(plant.id, createBoundModelIds.value)
+      await bindModelsToStation(plant.id, createBoundModelIds.value)
     }
     ElMessage.success('电站创建成功')
     createDialogVisible.value = false
@@ -434,7 +434,7 @@ async function handleFileImport(event: Event) {
     const raw: any[] = JSON.parse(text)
     if (!Array.isArray(raw) || !raw.length) { ElMessage.warning('文件格式错误：应为电站数组'); return }
     // 兼容导出格式（snake_case）和手动格式（camelCase）
-    const plants: CreatePowerPlantPayload[] = raw.map((item: any) => ({
+    const plants: CreateSolarStationPayload[] = raw.map((item: any) => ({
       name: item.name || item.station_name || '',
       capacityMw: item.capacityMw ?? item.capacity_mw ?? (item.capacityKw ? item.capacityKw / 1000 : (item.capacity_kw ? item.capacity_kw / 1000 : 0)),
       installedDate: item.installedDate || item.installed_date || '',
@@ -448,7 +448,7 @@ async function handleFileImport(event: Event) {
       '批量导入',
       { confirmButtonText: '确认导入', cancelButtonText: '取消', type: 'info' }
     )
-    const result = await batchImportPowerPlants(plants)
+    const result = await batchImportSolarStations(plants)
     ElMessage.success(`成功导入 ${result.imported} 个电站`)
     await loadAll()
   } catch (e: any) {
@@ -499,7 +499,7 @@ async function handlePlantDelete(row: any) {
       '停用确认',
       { confirmButtonText: '确认停用', cancelButtonText: '取消', type: 'warning' }
     )
-    await deletePowerPlant(row.id)
+    await deleteSolarStation(row.id)
     ElMessage.success('电站已停用')
     await loadAll()
   } catch (e: any) {
@@ -525,7 +525,7 @@ async function openPlantEdit(row: any) {
   try {
     const [models, plantDetail] = await Promise.all([
       fetchModels(),
-      fetchPowerPlant(row.id),
+      fetchSolarStation(row.id),
     ])
     allModels.value = models
     boundModelIds.value = (plantDetail?.boundModels || []).map((m: any) => m.id)
@@ -556,7 +556,7 @@ function openEquipmentEdit(eq: any) {
 async function handlePlantSave() {
   try {
     await Promise.all([
-      updatePowerPlant(editingId.value, {
+      updateSolarStation(editingId.value, {
         name: plantForm.value.name,
         capacityMw: plantForm.value.capacityMw,
         installedDate: plantForm.value.installedDate,
@@ -565,7 +565,7 @@ async function handlePlantSave() {
         latitude: plantForm.value.latitude,
         status: plantForm.value.status,
       }),
-      bindModelsToPlant(editingId.value, boundModelIds.value),
+      bindModelsToStation(editingId.value, boundModelIds.value),
     ])
     ElMessage.success('电站信息已更新')
     editDialogVisible.value = false
@@ -598,7 +598,7 @@ function handleExport() {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `power-plants-${todayStr()}.json`
+  a.download = `solar-stations-${todayStr()}.json`
   a.click()
   URL.revokeObjectURL(url)
   ElMessage.success(`已导出 ${data.length} 个电站数据`)

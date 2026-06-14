@@ -11,7 +11,7 @@ import {
   fetchNodesByType, createSourceNode, createGridNode,
   fetchLoadEntities, createLoadEntity, updateLoadEntity, deleteLoadEntity,
   fetchStorageEntities, createStorageEntity, updateStorageEntity, deleteStorageEntity,
-  fetchPowerPlants,
+  fetchSolarStations,
 } from '@/api/resource'
 import type { PvGridTopology, TopoNode, TopoEdge, TopoNodeType } from '@new-energy/shared'
 
@@ -571,7 +571,7 @@ async function loadEntityData(type: TopoNodeType) {
   try {
     switch (type) {
       case 'SOURCE': {
-        const plants = await fetchPowerPlants()
+        const plants = await fetchSolarStations()
         // 只取有 solar_pv_stations 的
         sourceList.value = plants.filter((p: any) => p.plant_type === 'solar' || p.capacity_kw > 0)
         break

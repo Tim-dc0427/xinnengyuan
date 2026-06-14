@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { submitStandardPF, getTaskResult, fetchGridBranches, fetchSolarPVStations, reuseHistoryParams } from '@/api/power-flow'
+import { submitStandardPF, getTaskResult, fetchGridBranches, fetchSolarPVStations, fetchZones, reuseHistoryParams } from '@/api/power-flow'
 import { ElMessage } from 'element-plus'
 import CalcProgress from '@/components/calculation/CalcProgress.vue'
 import { useRoute } from 'vue-router'
@@ -16,6 +16,10 @@ const faultBranchId = ref('')
 // 光伏电站列表
 const solarStations = ref<any[]>([])
 const selectedSolarBusIds = ref<string[]>([])
+
+// 区域筛选
+const zones = ref<string[]>([])
+const selectedZone = ref('')
 
 // N-1 开断选项：仅 110kV 及以上线路/变压器
 const allBranches = ref<any[]>([])
@@ -41,6 +45,7 @@ onMounted(async () => {
     ...s,
     busId: s.bus_id,
   }))
+  zones.value = await fetchZones()
 
   const tid = route.query.taskId as string
   if (tid) {
@@ -122,6 +127,24 @@ function branchRowStyle({ row }: any) {
   if (row.loadingPct > 80) return { backgroundColor: '#fffbe6' }
   return {}
 }
+
+// 按区域过滤结果
+const filteredNodes = computed(() => {
+  if (!result.value || !selectedZone.value) return result.value.nodes
+  return result.value.nodes.filter((n: any) => n.zone === selectedZone.value)
+})
+
+const filteredBranches = computed(() => {
+  if (!result.value || !selectedZone.value) return result.value.branchRes
+  const zoneBusIds = new Set(
+    result.value.nodes
+      .filter((n: any) => n.zone === selectedZone.value)
+      .map((n: any) => n.busId)
+  )
+  return result.value.branchRes.filter(
+    (b: any) => zoneBusIds.has(b.fromBus) || zoneBusIds.has(b.toBus)
+  )
+})
 </script>
 
 <template>
@@ -148,6 +171,12 @@ function branchRowStyle({ row }: any) {
           <el-option v-for="s in solarStations" :key="s.busId" :label="`${s.station_name}（${s.installed_capacity_mw}MW / ${s.grid_connection_voltage_kv || '-'}kV）`" :value="s.busId" />
         </el-select>
       </div>
+      <div class="filter-group">
+        <span class="filter-label">区域：</span>
+        <el-select v-model="selectedZone" placeholder="全部区域" clearable size="small" style="width:160px">
+          <el-option v-for="z in zones" :key="z" :label="z" :value="z" />
+        </el-select>
+      </div>
       <el-button type="primary" :loading="loading" @click="startCalculation">
         {{ result ? '重新计算' : '开始计算' }}
       </el-button>
@@ -168,7 +197,7 @@ function branchRowStyle({ row }: any) {
           <el-icon color="#267F7B"><List /></el-icon>
           <span>节点潮流结果 — 电压幅值/相角、有功/无功功率</span>
         </div>
-        <el-table :data="result.nodes" stripe size="small" max-height="500" style="width: 100%">
+        <el-table :data="filteredNodes" stripe size="small" max-height="500" style="width: 100%">
           <el-table-column label="节点名称" min-width="110">
             <template #default="{ row }">{{ row.name }}</template>
           </el-table-column>
@@ -224,7 +253,7 @@ function branchRowStyle({ row }: any) {
           <el-icon color="#267F7B"><Connection /></el-icon>
           <span>线路/变压器潮流 — 有功/无功功率、潮流方向、网损</span>
         </div>
-        <el-table :data="result.branchRes" stripe size="small" max-height="500" style="width: 100%" :row-style="branchRowStyle">
+        <el-table :data="filteredBranches" stripe size="small" max-height="500" style="width: 100%" :row-style="branchRowStyle">
           <el-table-column label="线路/变压器名称" min-width="130">
             <template #default="{ row }">{{ row.remark || `${row.fromBusName}→${row.toBusName}` }}</template>
           </el-table-column>

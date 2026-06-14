@@ -10,7 +10,7 @@ import {
   fetchLifecycleRecords,
   createLifecycleRecord,
 } from '@/api/planning'
-import { fetchPowerPlants } from '@/api/resource'
+import { fetchSolarStations } from '@/api/resource'
 import type { EquipmentLedgerItem, EquipmentLifecycleRecord } from '@new-energy/shared'
 import { todayStr } from '@/utils/time'
 import {
@@ -132,11 +132,11 @@ watch(() => formData.value?.equipmentType, (newType) => {
 
 async function loadStations() {
   try {
-    const rows = await fetchPowerPlants()
+    const rows = await fetchSolarStations()
     stations.value = rows.map((r: any) => ({
       id: r.id,
       name: r.station_name || r.name,
-      capacityKw: (r.installed_capacity_mw || 0) * 1000,
+      capacityKw: r.capacity_kw || 0,
     }))
     if (stations.value.length > 0 && !selectedStationId.value) {
       selectedStationId.value = stations.value[0].id

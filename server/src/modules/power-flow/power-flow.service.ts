@@ -2223,6 +2223,15 @@ export class PowerFlowService {
     })
   }
 
+  // ==================== 区域 ====================
+  async getZones() {
+    const rows = await db('grid_buses')
+      .distinct('zone')
+      .whereNotNull('zone')
+      .orderBy('zone')
+    return rows.map((r: any) => r.zone)
+  }
+
   // 根据馈线ID解析光伏电站（供 power-flow 计算使用）
   async resolvePVStationsByFeederIds(feederIds: string[]) {
     const fbRows = await db('feeder_buses')

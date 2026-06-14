@@ -82,6 +82,7 @@ powerFlowRoutes.get('/grid/generators', auth(['admin', 'planner', 'operator', 'v
 powerFlowRoutes.get('/grid/branches', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getGridBranches)
 powerFlowRoutes.get('/solar-stations', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getSolarStations)
 powerFlowRoutes.get('/feeders', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getFeeders)
+powerFlowRoutes.get('/zones', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getZones)
 
 // ==================== 4.3 Online Calculation ====================
 powerFlowRoutes.post('/calculate/standard', auth(['admin', 'planner', 'operator']), ctrl.submitStandardPF)

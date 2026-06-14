@@ -206,6 +206,12 @@ export async function fetchFeeders() {
   return res.data?.data as any[]
 }
 
+// 获取区域列表
+export async function fetchZones() {
+  const res = await apiClient.get('/api/v1/power-flow/zones')
+  return res.data?.data as string[]
+}
+
 export interface TaskListItem {
   id: string
   task_type: string

@@ -302,6 +302,17 @@ const complaintChartOption = computed(() => ({
             <el-table-column prop="sagCount" label="故障次数" width="100" />
             <el-table-column prop="noramlTemp" label="正常(°C)" width="90" />
             <el-table-column prop="surgeTemp" label="骤升(°C)" width="90" />
+            <el-table-column prop="sagTemp" label="骤降(°C)" width="90" />
+            <el-table-column label="温升(°C)" width="80">
+              <template #default="{ row }">
+                {{ +(row.surgeTemp - row.noramlTemp).toFixed(1) }}
+              </template>
+            </el-table-column>
+            <el-table-column label="温降(°C)" width="80">
+              <template #default="{ row }">
+                {{ +(row.sagTemp - row.noramlTemp).toFixed(1) }}
+              </template>
+            </el-table-column>
             <el-table-column label="薄弱设备" width="90">
               <template #default="{ row }">
                 <el-tag :type="row.risk === '薄弱' ? 'danger' : row.risk === '关注' ? 'warning' : 'success'" size="small">{{ row.risk }}</el-tag>

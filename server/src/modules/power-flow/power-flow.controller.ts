@@ -177,6 +177,7 @@ export class PowerFlowController {
   getGridBranches = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getGridBranches(req.query as any) }) }
   getSolarStations = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getSolarStations() }) }
   getFeeders = async (_req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getFeeders() }) }
+  getZones = async (_req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getZones() }) }
 
   // ==================== 4.3 在线计算 ====================
   submitStandardPF = async (req: Request, res: Response) => {

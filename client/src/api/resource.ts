@@ -49,38 +49,38 @@ export async function getStorageLife(modelId: string) {
   return res?.data?.data as { modelId: string; currentSoh: number; remainingCycleLife: number; remainingCalendarLifeYears: number; degradationRatePerCycle: number; recommendedReplacementDate: string }
 }
 
-// ==================== Power Plants (层2实体) ====================
-export async function fetchPowerPlants() {
-  const res = await apiClient.get('/api/v1/resource/power-plants')
+// ==================== Solar Stations (集中式光伏电站) ====================
+export async function fetchSolarStations() {
+  const res = await apiClient.get('/api/v1/resource/solar-stations')
   return res?.data?.data as any[]
 }
 
-export async function fetchPowerPlant(id: string) {
-  const res = await apiClient.get(`/api/v1/resource/power-plants/${id}`)
+export async function fetchSolarStation(id: string) {
+  const res = await apiClient.get(`/api/v1/resource/solar-stations/${id}`)
   return res?.data?.data as any
 }
 
-export async function updatePowerPlant(id: string, data: { name?: string; capacityMw?: number; installedDate?: string; address?: string; longitude?: number; latitude?: number; status?: string }) {
-  const res = await apiClient.put(`/api/v1/resource/power-plants/${id}`, data)
+export async function updateSolarStation(id: string, data: { name?: string; capacityMw?: number; installedDate?: string; address?: string; longitude?: number; latitude?: number; status?: string }) {
+  const res = await apiClient.put(`/api/v1/resource/solar-stations/${id}`, data)
   return res?.data?.data
 }
 
-export async function deletePowerPlant(id: string) {
-  const res = await apiClient.delete(`/api/v1/resource/power-plants/${id}`)
+export async function deleteSolarStation(id: string) {
+  const res = await apiClient.delete(`/api/v1/resource/solar-stations/${id}`)
   return res?.data?.data
 }
 
-export async function fetchPowerPlantVersions(plantId: string) {
-  const res = await apiClient.get(`/api/v1/resource/power-plants/${plantId}/versions`)
+export async function fetchSolarStationVersions(stationId: string) {
+  const res = await apiClient.get(`/api/v1/resource/solar-stations/${stationId}/versions`)
   return res?.data?.data as any[]
 }
 
-export async function bindModelsToPlant(plantId: string, modelIds: string[]) {
-  const res = await apiClient.post(`/api/v1/resource/power-plants/${plantId}/bind-models`, { modelIds })
+export async function bindModelsToStation(stationId: string, modelIds: string[]) {
+  const res = await apiClient.post(`/api/v1/resource/solar-stations/${stationId}/bind-models`, { modelIds })
   return res?.data?.data as any[]
 }
 
-export interface CreatePowerPlantPayload {
+export interface CreateSolarStationPayload {
   name: string
   capacityMw: number
   installedDate?: string
@@ -90,13 +90,13 @@ export interface CreatePowerPlantPayload {
   status?: string
 }
 
-export async function createPowerPlant(data: CreatePowerPlantPayload) {
-  const res = await apiClient.post('/api/v1/resource/power-plants', data)
+export async function createSolarStation(data: CreateSolarStationPayload) {
+  const res = await apiClient.post('/api/v1/resource/solar-stations', data)
   return res?.data?.data
 }
 
-export async function batchImportPowerPlants(plants: CreatePowerPlantPayload[]) {
-  const res = await apiClient.post('/api/v1/resource/power-plants/batch-import', { plants })
+export async function batchImportSolarStations(plants: CreateSolarStationPayload[]) {
+  const res = await apiClient.post('/api/v1/resource/solar-stations/batch-import', { plants })
   return res?.data?.data as { imported: number }
 }
 

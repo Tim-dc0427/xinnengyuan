@@ -24,32 +24,32 @@ export class ResourceController {
   getHealth = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getHealth(req.params.id) }) }
   getStorageLife = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getStorageLife(req.params.id) }) }
 
-  listPowerPlants = async (_req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.listPowerPlants() }) }
-  createPowerPlant = async (req: Request, res: Response) => {
-    const data = await this.service.createPowerPlant(req.body)
-    audit(req, 'CREATE', 'power_plant', data.id, `创建电站「${req.body.name}」`, null, { name: req.body.name, capacityMw: req.body.capacityMw || (req.body.capacityKw ? req.body.capacityKw / 1000 : 0) })
+  listSolarStations = async (_req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.listSolarStations() }) }
+  createSolarStation = async (req: Request, res: Response) => {
+    const data = await this.service.createSolarStation(req.body)
+    audit(req, 'CREATE', 'solar_station', data.id, `创建电站「${req.body.name}」`, null, { name: req.body.name, capacityMw: req.body.capacityMw || (req.body.capacityKw ? req.body.capacityKw / 1000 : 0) })
     res.json({ code: 200, message: 'ok', data })
   }
-  batchImportPowerPlants = async (req: Request, res: Response) => {
-    const data = await this.service.batchImportPowerPlants(req.body.plants || [])
-    audit(req, 'CREATE', 'power_plant', null, `批量导入 ${(req.body.plants || []).length} 个电站`, null, null)
+  batchImportSolarStations = async (req: Request, res: Response) => {
+    const data = await this.service.batchImportSolarStations(req.body.plants || [])
+    audit(req, 'CREATE', 'solar_station', null, `批量导入 ${(req.body.plants || []).length} 个电站`, null, null)
     res.json({ code: 200, message: 'ok', data })
   }
-  getPowerPlant = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getPowerPlant(req.params.id) }) }
-  updatePowerPlant = async (req: Request, res: Response) => {
-    const data = await this.service.updatePowerPlant(req.params.id, req.body)
-    audit(req, 'UPDATE', 'power_plant', req.params.id, `修改电站「${req.body.name || req.params.id}」`, null, req.body)
+  getSolarStation = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getSolarStation(req.params.id) }) }
+  updateSolarStation = async (req: Request, res: Response) => {
+    const data = await this.service.updateSolarStation(req.params.id, req.body)
+    audit(req, 'UPDATE', 'solar_station', req.params.id, `修改电站「${req.body.name || req.params.id}」`, null, req.body)
     res.json({ code: 200, message: 'ok', data })
   }
-  deletePowerPlant = async (req: Request, res: Response) => {
-    const data = await this.service.deletePowerPlant(req.params.id)
-    audit(req, 'DELETE', 'power_plant', req.params.id, '删除电站', null, null)
+  deleteSolarStation = async (req: Request, res: Response) => {
+    const data = await this.service.deleteSolarStation(req.params.id)
+    audit(req, 'DELETE', 'solar_station', req.params.id, '删除电站', null, null)
     res.json({ code: 200, message: 'ok', data })
   }
-  getPowerPlantVersions = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getPowerPlantVersions(req.params.id) }) }
-  bindModelsToPlant = async (req: Request, res: Response) => {
-    const data = await this.service.bindModelsToPlant(req.params.id, req.body.modelIds || [])
-    audit(req, 'UPDATE', 'power_plant', req.params.id, '绑定设备型号', null, req.body)
+  getSolarStationVersions = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getSolarStationVersions(req.params.id) }) }
+  bindModelsToStation = async (req: Request, res: Response) => {
+    const data = await this.service.bindModelsToStation(req.params.id, req.body.modelIds || [])
+    audit(req, 'UPDATE', 'solar_station', req.params.id, '绑定设备型号', null, req.body)
     res.json({ code: 200, message: 'ok', data })
   }
   listEquipment = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.listEquipment(req.query as any) }) }

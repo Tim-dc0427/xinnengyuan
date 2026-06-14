@@ -100,7 +100,7 @@ export class ResourceService {
   }
 
   // ==================== 集中式光伏电站 CRUD（唯一数据源：solar_pv_stations） ====================
-  async listPowerPlants() {
+  async listSolarStations() {
     const plants = await db('solar_pv_stations')
       .leftJoin('equipment', 'solar_pv_stations.id', 'equipment.station_id')
       .leftJoin('resource_models', function () {
@@ -128,7 +128,7 @@ export class ResourceService {
     return plants
   }
 
-  async getPowerPlant(id: string) {
+  async getSolarStation(id: string) {
     const station = await db('solar_pv_stations').where('id', id).first()
     if (!station) return null
     const equipment = await db('equipment').where('station_id', id)
@@ -139,7 +139,7 @@ export class ResourceService {
     return { ...station, equipment, boundModels }
   }
 
-  async getPowerPlantVersions(stationId: string) {
+  async getSolarStationVersions(stationId: string) {
     const rows = await db('station_versions')
       .where('station_id', stationId)
       .orderBy('version', 'desc')
@@ -151,7 +151,7 @@ export class ResourceService {
     }))
   }
 
-  async bindModelsToPlant(stationId: string, modelIds: string[]) {
+  async bindModelsToStation(stationId: string, modelIds: string[]) {
     // 先解绑该电站所有已关联的模型
     await db('resource_models').where('station_id', stationId).update({ station_id: null })
     // 再绑定新选中的模型
@@ -161,7 +161,7 @@ export class ResourceService {
     return db('resource_models').where('station_id', stationId).select('id', 'model_name', 'model_type')
   }
 
-  async createPowerPlant(data: any) {
+  async createSolarStation(data: any) {
     const id = uuid()
     const now = new Date().toISOString()
     const busId = await this.ensureBusId(data.busId)
@@ -196,7 +196,7 @@ export class ResourceService {
     return db('solar_pv_stations').where('id', id).first()
   }
 
-  async batchImportPowerPlants(plants: any[]) {
+  async batchImportSolarStations(plants: any[]) {
     const now = new Date().toISOString()
     const defaultBusId = await this.ensureBusId()
     const rows = plants.map((p) => ({
@@ -218,7 +218,7 @@ export class ResourceService {
     return { imported: rows.length }
   }
 
-  async updatePowerPlant(id: string, data: any) {
+  async updateSolarStation(id: string, data: any) {
     const current = await db('solar_pv_stations').where('id', id).first()
     if (!current) return null
 
@@ -259,7 +259,7 @@ export class ResourceService {
     return db('solar_pv_stations').where('id', id).first()
   }
 
-  async deletePowerPlant(id: string) {
+  async deleteSolarStation(id: string) {
     await db('solar_pv_stations').where('id', id).update({ status: 'inactive' })
     return { deleted: true }
   }
