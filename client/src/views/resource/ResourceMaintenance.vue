@@ -501,9 +501,9 @@ async function handleToggleStatus(row: any) {
       `${action}确认`,
       { confirmButtonText: `确认${action}`, cancelButtonText: '取消', type: 'warning' }
     )
-    await toggleStationStatus(row.id)
+    const updated = await toggleStationStatus(row.id)
+    if (updated) row.status = updated.status
     ElMessage.success(`电站已${action}`)
-    await loadAll()
   } catch (e: any) {
     if (e === 'cancel') return
     ElMessage.error(e?.message || '操作失败')

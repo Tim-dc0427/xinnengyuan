@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getUsers, createUser, updateUser, deleteUser } from '@/api/system'
 import { getRoles, getDepartments } from '@/api/system'
-import type { UserManageItem, RoleItem, Department } from '@new-energy/shared'
+import { validatePassword } from '@new-energy/shared'
+import type { UserManageItem, RoleItem, Department, PasswordCheckResult } from '@new-energy/shared'
 import { formatDateTime } from '@/utils/time'
 
 const list = ref<UserManageItem[]>([])
@@ -15,6 +16,25 @@ const dialogTitle = ref('新增用户')
 const editingId = ref<string | null>(null)
 const form = ref({ username: '', password: '', displayName: '', roleId: '', departmentId: null as string | null, isActive: 1 })
 const roles = ref<RoleItem[]>([])
+
+// 密码校验状态
+const pwdCheck = ref<PasswordCheckResult>({ valid: false, errors: [], checks: [] })
+const pwdTouched = ref(false)
+
+watch(() => form.value.password, (val) => {
+  if (pwdTouched.value && val) {
+    pwdCheck.value = validatePassword(val)
+  } else if (!val) {
+    pwdCheck.value = { valid: false, errors: [], checks: [] }
+  }
+})
+
+function onPwdBlur() {
+  pwdTouched.value = true
+  if (form.value.password) {
+    pwdCheck.value = validatePassword(form.value.password)
+  }
+}
 
 function flattenDepts(items: Department[]): { id: string; name: string }[] {
   const result: { id: string; name: string }[] = []
@@ -45,6 +65,8 @@ function openCreate() {
   dialogTitle.value = '新增用户'
   editingId.value = null
   form.value = { username: '', password: '', displayName: '', roleId: '', departmentId: null, isActive: 1 }
+  pwdCheck.value = { valid: false, errors: [], checks: [] }
+  pwdTouched.value = false
   dialogVisible.value = true
 }
 
@@ -52,12 +74,27 @@ function openEdit(item: UserManageItem) {
   dialogTitle.value = '编辑用户'
   editingId.value = item.id
   form.value = { username: item.username, password: '', displayName: item.displayName, roleId: item.roleId, departmentId: item.departmentId, isActive: item.isActive }
+  pwdCheck.value = { valid: false, errors: [], checks: [] }
+  pwdTouched.value = false
   dialogVisible.value = true
 }
 
 async function submit() {
   if (!form.value.username.trim()) { ElMessage.warning('请输入用户名'); return }
   if (!editingId.value && !form.value.password) { ElMessage.warning('请输入密码'); return }
+
+  // 密码校验：新增时必验，编辑时仅当密码非空时校验
+  if (form.value.password) {
+    const result = validatePassword(form.value.password)
+    if (!result.valid) {
+      ElMessage.warning('密码不符合要求：' + result.errors.join('，'))
+      return
+    }
+  } else if (!editingId.value) {
+    ElMessage.warning('请输入密码')
+    return
+  }
+
   try {
     if (editingId.value) {
       const payload = { ...form.value }
@@ -131,13 +168,30 @@ onMounted(() => { loadOptions(); load() })
       @current-change="handlePageChange"
     />
 
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="480px">
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="500px">
       <el-form :model="form" label-width="80px">
         <el-form-item label="用户名">
           <el-input v-model="form.username" placeholder="请输入用户名" />
         </el-form-item>
         <el-form-item label="密码">
-          <el-input v-model="form.password" type="password" :placeholder="editingId ? '留空则不修改' : '请输入密码'" show-password />
+          <el-input
+            v-model="form.password"
+            type="password"
+            :placeholder="editingId ? '留空则不修改' : '请输入密码'"
+            show-password
+            @blur="onPwdBlur"
+          />
+          <!-- 密码规则实时校验 -->
+          <div v-if="pwdTouched && form.password" class="pwd-rules">
+            <div
+              v-for="c in pwdCheck.checks"
+              :key="c.label"
+              :class="['pwd-rule-item', c.passed ? 'passed' : 'failed']"
+            >
+              <span class="pwd-rule-icon">{{ c.passed ? '✓' : '✗' }}</span>
+              <span>{{ c.label }}</span>
+            </div>
+          </div>
         </el-form-item>
         <el-form-item label="显示名">
           <el-input v-model="form.displayName" placeholder="请输入显示名" />
@@ -170,4 +224,24 @@ onMounted(() => { loadOptions(); load() })
 <style scoped>
 .panel-body { background: #fff; padding: 16px; border-radius: 4px; }
 .toolbar { margin-bottom: 12px; }
+
+.pwd-rules {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+}
+.pwd-rule-item {
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.pwd-rule-icon {
+  font-weight: bold;
+  width: 14px;
+  text-align: center;
+}
+.pwd-rule-item.passed { color: #67c23a; }
+.pwd-rule-item.failed { color: #f56c6c; }
 </style>

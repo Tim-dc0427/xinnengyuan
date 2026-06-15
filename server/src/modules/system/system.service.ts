@@ -1,6 +1,29 @@
 import bcrypt from 'bcryptjs'
 import { v4 as uuid } from 'uuid'
 import { db } from '../../config/database.js'
+import { validatePassword } from '@new-energy/shared'
+
+function parsePermissions(raw: string): { menus: string[]; actions: string[] } {
+  try {
+    const parsed = JSON.parse(raw || '[]')
+    // 兼容旧格式：string[] → { menus: ["*"], actions: [...] }
+    if (Array.isArray(parsed)) {
+      const arr = parsed as string[]
+      if (arr.includes('*')) return { menus: ['*'], actions: ['*'] }
+      return { menus: ['*'], actions: arr }
+    }
+    // 新格式：{ menus: [...], actions: [...] }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return {
+        menus: Array.isArray(parsed.menus) ? parsed.menus : ['*'],
+        actions: Array.isArray(parsed.actions) ? parsed.actions : [],
+      }
+    }
+    return { menus: [], actions: [] }
+  } catch {
+    return { menus: [], actions: [] }
+  }
+}
 
 export class SystemService {
   // ==================== 部门管理 ====================
@@ -61,7 +84,7 @@ export class SystemService {
       result.push({
         id: r.id,
         name: r.name,
-        permissions: JSON.parse(r.permissions || '[]') as string[],
+        permissions: parsePermissions(r.permissions),
         userCount: Number(cnt?.cnt || 0),
         createdAt: r.created_at,
       })
@@ -69,7 +92,7 @@ export class SystemService {
     return result
   }
 
-  async createRole(body: { name: string; permissions: string[] }) {
+  async createRole(body: { name: string; permissions: { menus: string[]; actions: string[] } }) {
     const exists = await db('roles').where('name', body.name).first()
     if (exists) throw new Error('角色名已存在')
     const id = uuid()
@@ -82,7 +105,7 @@ export class SystemService {
     return { id }
   }
 
-  async updateRole(id: string, body: { name: string; permissions: string[] }) {
+  async updateRole(id: string, body: { name: string; permissions: { menus: string[]; actions: string[] } }) {
     const existing = await db('roles').where('name', body.name).whereNot('id', id).first()
     if (existing) throw new Error('角色名已存在')
     await db('roles').where('id', id).update({
@@ -148,6 +171,8 @@ export class SystemService {
   async createUser(body: { username: string; password: string; displayName: string; roleId: string; departmentId: string | null; isActive: number }) {
     const exists = await db('users').where('username', body.username).first()
     if (exists) throw new Error('用户名已存在')
+    const pwdCheck = validatePassword(body.password)
+    if (!pwdCheck.valid) throw new Error('密码不符合要求：' + pwdCheck.errors.join('，'))
     const id = uuid()
     const passwordHash = await bcrypt.hash(body.password, 10)
     await db('users').insert({
@@ -166,6 +191,11 @@ export class SystemService {
   async updateUser(id: string, body: { username?: string; password?: string; displayName?: string; roleId?: string; departmentId?: string | null; isActive?: number }) {
     const existing = await db('users').where('username', body.username).whereNot('id', id).first()
     if (existing) throw new Error('用户名已存在')
+
+    if (body.password) {
+      const pwdCheck = validatePassword(body.password)
+      if (!pwdCheck.valid) throw new Error('密码不符合要求：' + pwdCheck.errors.join('，'))
+    }
 
     const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() }
     if (body.username !== undefined) updateData.username = body.username

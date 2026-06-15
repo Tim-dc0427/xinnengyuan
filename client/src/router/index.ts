@@ -489,12 +489,17 @@ router.beforeEach(async (to, _from, next) => {
 
   const authStore = useAuthStore()
 
+  // 白名单路由始终放行
+  if (to.meta.noAuth || to.name === 'NotFound') {
+    next()
+    return
+  }
+
   // 有 token 但无用户信息时，恢复用户信息（页面刷新后）
-  if (authStore.token && !authStore.user && !to.meta.noAuth) {
+  if (authStore.token && !authStore.user) {
     try {
       await authStore.fetchUser()
     } catch {
-      // fetchUser 失败（token 无效），清空 token 跳登录页
       authStore.logout()
       if (to.name !== 'Login') {
         next({ name: 'Login' })
@@ -503,12 +508,22 @@ router.beforeEach(async (to, _from, next) => {
     }
   }
 
-  // 路由角色权限校验
-  const allowedRoles = to.meta.roles as string[] | undefined
-  if (allowedRoles && allowedRoles.length > 0 && !to.meta.noAuth) {
-    const userRole = authStore.user?.role
-    if (userRole) {
-      if (userRole !== 'admin' && !allowedRoles.includes(userRole)) {
+  if (!authStore.token) {
+    next({ name: 'Login' })
+    return
+  }
+
+  // 菜单权限校验
+  const menus = authStore.permissions.menus
+  if (menus.length > 0 && !menus.includes('*')) {
+    const targetPath = to.path
+    // 检查目标路径是否在 menus 中，或者其各级父路径在 menus 中
+    const matched = menus.some(m => targetPath === m || targetPath.startsWith(m + '/'))
+    if (!matched) {
+      // 检查匹配到的路由链中是否有 Hub 路由（其子路由在 menus 中）
+      const parentPaths = to.matched.slice(0, -1).map(r => r.path).filter(p => p && p !== '/')
+      const hasAccessibleChild = menus.some(m => parentPaths.some(p => m.startsWith(p + '/')))
+      if (!hasAccessibleChild) {
         next('/')
         return
       }

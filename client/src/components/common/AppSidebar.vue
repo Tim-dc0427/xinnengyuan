@@ -2,9 +2,13 @@
 import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Monitor, Edit, Collection, DataAnalysis, Connection, Setting, ArrowDown } from '@element-plus/icons-vue'
+import { useAuthStore } from '@/stores/auth.store'
+import { MENU_TREE } from '@new-energy/shared'
+import type { MenuTreeNode } from '@new-energy/shared'
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 const expandedGroup = ref<string | null>(null)
 
 interface MenuItem {
@@ -14,7 +18,7 @@ interface MenuItem {
   children?: MenuItem[]
 }
 
-const menuItems: MenuItem[] = [
+const allMenuItems: MenuItem[] = [
   {
     title: '电网诊断', icon: Monitor,
     children: [
@@ -64,10 +68,58 @@ const menuItems: MenuItem[] = [
   },
 ]
 
+// 建立侧边栏二级 path → MENU_TREE 中对应节点的映射，用于收集其下所有叶子 path
+function buildLeafMap(): Map<string, string[]> {
+  const map = new Map<string, string[]>()
+  function collectLeaves(node: MenuTreeNode): string[] {
+    if (!node.children || node.children.length === 0) {
+      return node.path ? [node.path] : []
+    }
+    const leaves: string[] = []
+    for (const c of node.children) {
+      leaves.push(...collectLeaves(c))
+    }
+    return leaves
+  }
+  for (const group of MENU_TREE) {
+    if (group.children) {
+      for (const child of group.children) {
+        if (child.path) {
+          map.set(child.path, collectLeaves(child))
+        }
+      }
+    }
+  }
+  return map
+}
+const hubToLeaves = buildLeafMap()
+
+// 判断某个二级菜单 path 是否有权限访问（至少一个叶子在 menus 中）
+function hasAccessToHub(hubPath: string): boolean {
+  const menus = authStore.permissions.menus
+  if (menus.includes('*')) return true
+  const leaves = hubToLeaves.get(hubPath)
+  if (!leaves || leaves.length === 0) return menus.includes(hubPath)
+  return leaves.some(p => menus.includes(p))
+}
+
+// 过滤后的菜单
+function buildFilteredMenu(): MenuItem[] {
+  const result: MenuItem[] = []
+  for (const group of allMenuItems) {
+    const filteredChildren = (group.children || []).filter(c => hasAccessToHub(c.path || ''))
+    if (filteredChildren.length > 0) {
+      result.push({ ...group, children: filteredChildren })
+    }
+  }
+  return result
+}
+const menuItems = computed<MenuItem[]>(() => buildFilteredMenu())
+
 // 当前展开的一级菜单项
 const activeGroupItem = computed(() => {
   if (!expandedGroup.value) return null
-  return menuItems.find(m => m.title === expandedGroup.value) || null
+  return menuItems.value.find(m => m.title === expandedGroup.value) || null
 })
 
 // 判断路径是否属于某菜单组
@@ -92,7 +144,7 @@ function isItemActive(path: string | undefined): boolean {
 
 // 根据当前路由自动展开对应的一级菜单
 function syncExpandedGroup() {
-  for (const item of menuItems) {
+  for (const item of menuItems.value) {
     if (isGroupActive(item)) {
       expandedGroup.value = item.title
       return
@@ -109,7 +161,7 @@ function handleGroupClick(item: MenuItem) {
   }
 }
 
-// 点击二级菜单项（直接跳转 Hub 页面）
+// 点击二级菜单项（跳转 Hub，如有权限则跳第一个有权限的子页面）
 function handleItemClick(it: MenuItem) {
   if (it.path) {
     router.push(it.path)

@@ -45,7 +45,7 @@ export class AuthService {
     return { accessToken, refreshToken, user: userInfo }
   }
 
-  async refresh(token: string): Promise<{ accessToken: string }> {
+  async refresh(token: string): Promise<{ accessToken: string; refreshToken: string }> {
     try {
       const payload = jwt.verify(token, authConfig.refreshTokenSecret) as { id: string }
       const user = await db('users')
@@ -69,7 +69,14 @@ export class AuthService {
         expiresIn: authConfig.accessTokenExpiresIn,
       } as jwt.SignOptions)
 
-      return { accessToken }
+      // 轮换 refresh token：每次刷新签发新的 refresh token
+      const newRefreshToken = jwt.sign(
+        { id: user.id },
+        authConfig.refreshTokenSecret,
+        { expiresIn: authConfig.refreshTokenExpiresIn } as jwt.SignOptions,
+      )
+
+      return { accessToken, refreshToken: newRefreshToken }
     } catch {
       throw new Error('刷新令牌无效')
     }

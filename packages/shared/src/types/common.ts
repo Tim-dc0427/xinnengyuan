@@ -88,17 +88,29 @@ export interface UserManageForm {
 }
 
 // 角色管理
+export interface RolePermissions {
+  menus: string[]
+  actions: string[]
+}
+
 export interface RoleItem {
   id: string
   name: string
-  permissions: string[]
+  permissions: RolePermissions
   userCount: number
   createdAt: string
 }
 
 export interface RoleForm {
   name: string
-  permissions: string[]
+  permissions: RolePermissions
+}
+
+export interface MenuTreeNode {
+  key: string
+  path?: string
+  title: string
+  children?: MenuTreeNode[]
 }
 
 // 操作日志

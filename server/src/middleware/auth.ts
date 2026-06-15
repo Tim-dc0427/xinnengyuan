@@ -37,7 +37,7 @@ export function auth(allowedRoles: UserRole[]) {
     // 角色权限校验
     if (req.user && allowedRoles.length > 0) {
       const userRole = req.user.role
-      if (userRole !== 'admin' && !allowedRoles.includes(userRole)) {
+      if (!allowedRoles.includes(userRole)) {
         return res.status(403).json({ code: 403, message: '无权限访问', data: null })
       }
     }
