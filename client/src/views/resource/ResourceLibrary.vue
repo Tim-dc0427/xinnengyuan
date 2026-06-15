@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { fetchModels, createModel, updateModel, deleteModel } from '@/api/resource'
+import { fetchModels, createModel, updateModel, deleteModel, toggleModelStatus, hardDeleteModel } from '@/api/resource'
 import type { ResourceModelType } from '@new-energy/shared'
 
 const activeTab = ref<ResourceModelType>('PV_ABSORPTION')
@@ -211,15 +211,41 @@ async function handleSave() {
   }
 }
 
-async function handleDelete(row: any) {
+async function handleToggleStatus(row: any) {
+  const isActive = row.is_active === 1
+  const action = isActive ? '停用' : '启用'
   try {
     await ElMessageBox.confirm(
-      `确认删除模型"${row.model_name}"？删除后不可恢复。`,
-      '删除确认',
-      { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning' }
+      `确认${action}模型"${row.model_name}"？`,
+      `${action}确认`,
+      { confirmButtonText: `确认${action}`, cancelButtonText: '取消', type: 'warning' }
     )
-    await deleteModel(row.id)
-    ElMessage.success('已删除')
+    await toggleModelStatus(row.id)
+    ElMessage.success(`模型已${action}`)
+    await loadModels()
+  } catch (e: any) {
+    if (e === 'cancel') return
+    ElMessage.error(e?.message || '操作失败')
+  }
+}
+
+async function handleHardDelete(row: any) {
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `请输入模型名称"${row.model_name}"以确认硬删除。此操作不可恢复。`,
+      '硬删除确认',
+      { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning', inputPlaceholder: '输入模型名称确认' }
+    )
+    if (value !== row.model_name) {
+      ElMessage.warning('名称不匹配，操作已取消')
+      return
+    }
+    const res = await hardDeleteModel(row.id)
+    if (res?.code === 200) {
+      ElMessage.success('模型已彻底删除')
+    } else {
+      ElMessage.error(res?.message || '删除失败')
+    }
     await loadModels()
   } catch (e: any) {
     if (e === 'cancel') return
@@ -325,10 +351,19 @@ onMounted(() => { loadModels() })
         <template #default="{ row }"><span v-html="fmtInterface(row)" /></template>
       </el-table-column>
       <el-table-column label="版本" width="60" prop="version" />
-      <el-table-column label="操作" width="160" fixed="right">
+      <el-table-column label="状态" width="70">
+        <template #default="{ row }">
+          <el-tag size="small" :type="row.is_active === 1 ? 'success' : 'info'">{{ row.is_active === 1 ? '启用' : '停用' }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="200" fixed="right">
         <template #default="{ row }">
           <el-button size="small" link type="primary" @click="openEdit(row)">编辑</el-button>
-          <el-button size="small" link type="danger" @click="handleDelete(row)">删除</el-button>
+          <el-button v-if="row.is_active === 1" size="small" link type="danger" @click="handleToggleStatus(row)">停用</el-button>
+          <template v-else>
+            <el-button size="small" link type="success" @click="handleToggleStatus(row)">启用</el-button>
+            <el-button size="small" link type="danger" @click="handleHardDelete(row)">硬删除</el-button>
+          </template>
         </template>
       </el-table-column>
     </el-table>

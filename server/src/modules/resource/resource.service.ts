@@ -28,7 +28,9 @@ export class ResourceService {
   async listModels(query: any) {
     return db('resource_models').modify((qb) => {
       if (query.modelType) qb.where('model_type', query.modelType)
-      qb.where('is_active', query.isActive !== undefined ? query.isActive : true)
+      if (query.isActive !== undefined && query.isActive !== '') {
+        qb.where('is_active', query.isActive === 'true' || query.isActive === '1' ? 1 : 0)
+      }
     }).orderBy('created_at', 'desc')
   }
 
@@ -75,6 +77,30 @@ export class ResourceService {
 
   async deleteModel(id: string) {
     await db('resource_models').where('id', id).update({ is_active: false })
+    return { deleted: true }
+  }
+
+  async toggleModelStatus(id: string) {
+    const current = await db('resource_models').where('id', id).select('is_active').first()
+    if (!current) return null
+    const newActive = current.is_active === 1 ? 0 : 1
+    await db('resource_models').where('id', id).update({ is_active: newActive, updated_at: new Date().toISOString() })
+    return db('resource_models').where('id', id).first()
+  }
+
+  async hardDeleteModel(id: string) {
+    const current = await db('resource_models').where('id', id).select('is_active', 'model_name').first()
+    if (!current) return { deleted: false, reason: '模型不存在' }
+    if (current.is_active === 1) return { deleted: false, reason: '模型仍在启用状态，请先停用' }
+
+    // 删除关联关系
+    await db('resource_relationships').where('source_model_id', id).orWhere('target_model_id', id).delete()
+    // 删除场景资源分配
+    await db('scenario_resources').where('resource_model_id', id).delete()
+    // 解除电站绑定
+    await db('resource_models').where('id', id).update({ station_id: null })
+    // 物理删除
+    await db('resource_models').where('id', id).delete()
     return { deleted: true }
   }
 
@@ -261,6 +287,43 @@ export class ResourceService {
 
   async deleteSolarStation(id: string) {
     await db('solar_pv_stations').where('id', id).update({ status: 'inactive' })
+    return { deleted: true }
+  }
+
+  async toggleStationStatus(id: string) {
+    const current = await db('solar_pv_stations').where('id', id).select('status').first()
+    if (!current) return null
+    const newStatus = current.status === 'active' ? 'inactive' : 'active'
+    await db('solar_pv_stations').where('id', id).update({ status: newStatus, updated_at: new Date().toISOString() })
+    return db('solar_pv_stations').where('id', id).first()
+  }
+
+  async hardDeleteSolarStation(id: string) {
+    const current = await db('solar_pv_stations').where('id', id).select('status', 'station_name').first()
+    if (!current) return { deleted: false, reason: '电站不存在' }
+    if (current.status !== 'inactive') return { deleted: false, reason: '电站仍在运行状态，请先停用' }
+
+    // 解绑关联的模型
+    await db('resource_models').where('station_id', id).update({ station_id: null })
+    // 删除设备及其关联数据
+    const equipmentIds = (await db('equipment').where('station_id', id).select('id')).map((r: any) => r.id)
+    if (equipmentIds.length > 0) {
+      await db('equipment_lifecycle').whereIn('equipment_id', equipmentIds).delete()
+      await db('equipment_ledger').whereIn('equipment_id', equipmentIds).delete()
+      await db('battery_cycle_records').whereIn('equipment_id', equipmentIds).delete()
+      await db('equipment_temperature').whereIn('equipment_id', equipmentIds).delete()
+      await db('equipment').where('station_id', id).delete()
+    }
+    // 删除版本记录
+    await db('station_versions').where('station_id', id).delete()
+    // 解除 projects 的电站关联（projects 被多表引用，不能直接删）
+    await db('projects').where('station_id', id).update({ station_id: null })
+    // 删除可直接清除的关联业务记录
+    await db('outage_events').where('station_id', id).delete()
+    await db('complaint_stats').where('station_id', id).delete()
+    await db('complaint_tickets').where('station_id', id).delete()
+    // 物理删除电站
+    await db('solar_pv_stations').where('id', id).delete()
     return { deleted: true }
   }
 

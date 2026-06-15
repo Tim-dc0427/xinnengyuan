@@ -39,6 +39,16 @@ export async function deleteModel(id: string) {
   return res?.data?.data
 }
 
+export async function toggleModelStatus(id: string) {
+  const res = await apiClient.put(`/api/v1/resource/models/${id}/toggle-status`)
+  return res?.data?.data
+}
+
+export async function hardDeleteModel(id: string) {
+  const res = await apiClient.delete(`/api/v1/resource/models/${id}/hard`)
+  return res?.data
+}
+
 export async function getHealth(modelId: string) {
   const res = await apiClient.get(`/api/v1/resource/models/${modelId}/health`)
   return res?.data?.data as { modelId: string; healthScore: number; status: 'healthy' | 'warning' | 'critical'; anomalyList: Array<{ metric: string; value: number; threshold: number }>; lastUpdated: string }
@@ -68,6 +78,16 @@ export async function updateSolarStation(id: string, data: { name?: string; capa
 export async function deleteSolarStation(id: string) {
   const res = await apiClient.delete(`/api/v1/resource/solar-stations/${id}`)
   return res?.data?.data
+}
+
+export async function toggleStationStatus(id: string) {
+  const res = await apiClient.put(`/api/v1/resource/solar-stations/${id}/toggle-status`)
+  return res?.data?.data
+}
+
+export async function hardDeleteSolarStation(id: string) {
+  const res = await apiClient.delete(`/api/v1/resource/solar-stations/${id}/hard`)
+  return res?.data
 }
 
 export async function fetchSolarStationVersions(stationId: string) {

@@ -12,6 +12,8 @@ resourceRoutes.get('/models', auth(['admin', 'planner', 'operator', 'viewer']), 
 resourceRoutes.post('/models', auth(['admin', 'planner']), ctrl.createModel)
 resourceRoutes.put('/models/:id', auth(['admin', 'planner']), ctrl.updateModel)
 resourceRoutes.delete('/models/:id', auth(['admin', 'planner']), ctrl.deleteModel)
+resourceRoutes.put('/models/:id/toggle-status', auth(['admin', 'planner']), ctrl.toggleModelStatus)
+resourceRoutes.delete('/models/:id/hard', auth(['admin', 'planner']), ctrl.hardDeleteModel)
 
 // Health
 resourceRoutes.get('/models/:id/health', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getHealth)
@@ -24,6 +26,8 @@ resourceRoutes.post('/solar-stations', auth(['admin', 'planner']), ctrl.createSo
 resourceRoutes.post('/solar-stations/batch-import', auth(['admin', 'planner']), ctrl.batchImportSolarStations)
 resourceRoutes.put('/solar-stations/:id', auth(['admin', 'planner']), ctrl.updateSolarStation)
 resourceRoutes.delete('/solar-stations/:id', auth(['admin', 'planner']), ctrl.deleteSolarStation)
+resourceRoutes.put('/solar-stations/:id/toggle-status', auth(['admin', 'planner']), ctrl.toggleStationStatus)
+resourceRoutes.delete('/solar-stations/:id/hard', auth(['admin', 'planner']), ctrl.hardDeleteSolarStation)
 resourceRoutes.get('/solar-stations/:id/versions', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getSolarStationVersions)
 resourceRoutes.post('/solar-stations/:id/bind-models', auth(['admin', 'planner']), ctrl.bindModelsToStation)
 

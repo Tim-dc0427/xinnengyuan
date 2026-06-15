@@ -21,6 +21,19 @@ export class ResourceController {
     audit(req, 'DELETE', 'resource_model', req.params.id, '删除资源模型', null, null)
     res.json({ code: 200, message: 'ok', data })
   }
+  toggleModelStatus = async (req: Request, res: Response) => {
+    const data = await this.service.toggleModelStatus(req.params.id)
+    if (!data) return res.status(404).json({ code: 404, message: '模型不存在' })
+    const newStatus = data.is_active === 1 ? '启用' : '停用'
+    audit(req, 'UPDATE', 'resource_model', req.params.id, `${newStatus}资源模型`, null, null)
+    res.json({ code: 200, message: 'ok', data })
+  }
+  hardDeleteModel = async (req: Request, res: Response) => {
+    const data = await this.service.hardDeleteModel(req.params.id)
+    if (!data.deleted) return res.status(400).json({ code: 400, message: data.reason })
+    audit(req, 'DELETE', 'resource_model', req.params.id, '硬删除资源模型', null, null)
+    res.json({ code: 200, message: '模型已彻底删除', data })
+  }
   getHealth = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getHealth(req.params.id) }) }
   getStorageLife = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getStorageLife(req.params.id) }) }
 
@@ -45,6 +58,19 @@ export class ResourceController {
     const data = await this.service.deleteSolarStation(req.params.id)
     audit(req, 'DELETE', 'solar_station', req.params.id, '删除电站', null, null)
     res.json({ code: 200, message: 'ok', data })
+  }
+  toggleStationStatus = async (req: Request, res: Response) => {
+    const data = await this.service.toggleStationStatus(req.params.id)
+    if (!data) return res.status(404).json({ code: 404, message: '电站不存在' })
+    const newStatus = data.status === 'active' ? '启用' : '停用'
+    audit(req, 'UPDATE', 'solar_station', req.params.id, `${newStatus}电站`, null, null)
+    res.json({ code: 200, message: 'ok', data })
+  }
+  hardDeleteSolarStation = async (req: Request, res: Response) => {
+    const data = await this.service.hardDeleteSolarStation(req.params.id)
+    if (!data.deleted) return res.status(400).json({ code: 400, message: data.reason })
+    audit(req, 'DELETE', 'solar_station', req.params.id, '硬删除电站', null, null)
+    res.json({ code: 200, message: '电站已彻底删除', data })
   }
   getSolarStationVersions = async (req: Request, res: Response) => { res.json({ code: 200, message: 'ok', data: await this.service.getSolarStationVersions(req.params.id) }) }
   bindModelsToStation = async (req: Request, res: Response) => {

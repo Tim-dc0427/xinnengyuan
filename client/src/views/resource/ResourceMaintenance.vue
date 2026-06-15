@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { fetchSolarStations, fetchSolarStation, createSolarStation, deleteSolarStation, batchImportSolarStations, updateSolarStation, fetchEquipment, createEquipment, updateEquipment, fetchModels, bindModelsToStation, fetchSolarStationVersions } from '@/api/resource'
+import { fetchSolarStations, fetchSolarStation, createSolarStation, deleteSolarStation, batchImportSolarStations, updateSolarStation, fetchEquipment, createEquipment, updateEquipment, fetchModels, bindModelsToStation, fetchSolarStationVersions, toggleStationStatus, hardDeleteSolarStation } from '@/api/resource'
 import { fetchEquipmentReliability, predictLife, generateReplacementPlan } from '@/api/grid-diagnosis'
 import type { CreateSolarStationPayload } from '@/api/resource'
 import { formatDateTime, formatRelativeTime, todayStr } from '@/utils/time'
@@ -491,20 +491,46 @@ async function handleEquipCreate() {
   } catch (e: any) { ElMessage.error(e?.message || '创建失败') }
 }
 
-// ==================== 删除电站 ====================
-async function handlePlantDelete(row: any) {
+// ==================== 停用/启用/硬删除电站 ====================
+async function handleToggleStatus(row: any) {
+  const isActive = row.status === 'active'
+  const action = isActive ? '停用' : '启用'
   try {
     await ElMessageBox.confirm(
-      `确认停用电站"${row.name}"？停用后不可恢复。`,
-      '停用确认',
-      { confirmButtonText: '确认停用', cancelButtonText: '取消', type: 'warning' }
+      `确认${action}电站"${row.name}"？`,
+      `${action}确认`,
+      { confirmButtonText: `确认${action}`, cancelButtonText: '取消', type: 'warning' }
     )
-    await deleteSolarStation(row.id)
-    ElMessage.success('电站已停用')
+    await toggleStationStatus(row.id)
+    ElMessage.success(`电站已${action}`)
     await loadAll()
   } catch (e: any) {
     if (e === 'cancel') return
     ElMessage.error(e?.message || '操作失败')
+  }
+}
+
+async function handleHardDelete(row: any) {
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `请输入电站名称"${row.name}"以确认硬删除。此操作不可恢复，将删除电站及所有关联数据。`,
+      '硬删除确认',
+      { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning', inputPlaceholder: '输入电站名称确认' }
+    )
+    if (value !== row.name) {
+      ElMessage.warning('名称不匹配，操作已取消')
+      return
+    }
+    const res = await hardDeleteSolarStation(row.id)
+    if (res?.code === 200) {
+      ElMessage.success('电站已彻底删除')
+    } else {
+      ElMessage.error(res?.message || '删除失败')
+    }
+    await loadAll()
+  } catch (e: any) {
+    if (e === 'cancel') return
+    ElMessage.error(e?.message || '删除失败')
   }
 }
 
@@ -663,12 +689,16 @@ onUnmounted(() => {
             </template>
           </el-table-column>
           <el-table-column label="版本" width="60" prop="version" />
-          <el-table-column label="操作" width="240" fixed="right">
+          <el-table-column label="操作" width="280" fixed="right">
             <template #default="{ row }">
               <el-button size="small" link type="primary" @click="openPlantEdit(row)">编辑</el-button>
               <el-button size="small" link type="primary" @click="openEquipDialog(row)">设备</el-button>
               <el-button size="small" link type="warning" @click="openVersionHistory(row)">版本</el-button>
-              <el-button size="small" link type="danger" @click="handlePlantDelete(row)">停用</el-button>
+              <el-button v-if="row.status === 'active'" size="small" link type="danger" @click="handleToggleStatus(row)">停用</el-button>
+              <template v-else>
+                <el-button size="small" link type="success" @click="handleToggleStatus(row)">启用</el-button>
+                <el-button size="small" link type="danger" @click="handleHardDelete(row)">硬删除</el-button>
+              </template>
             </template>
           </el-table-column>
 
