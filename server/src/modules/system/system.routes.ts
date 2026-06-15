@@ -11,8 +11,8 @@ systemRoutes.post('/departments', auth(['admin']), ctrl.createDepartment)
 systemRoutes.put('/departments/:id', auth(['admin']), ctrl.updateDepartment)
 systemRoutes.delete('/departments/:id', auth(['admin']), ctrl.deleteDepartment)
 
-// 角色管理
-systemRoutes.get('/roles', auth(['admin']), ctrl.getRoles)
+// 角色管理 — GET 对所有已认证用户开放（用于加载自身权限）
+systemRoutes.get('/roles', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getRoles)
 systemRoutes.post('/roles', auth(['admin']), ctrl.createRole)
 systemRoutes.put('/roles/:id', auth(['admin']), ctrl.updateRole)
 systemRoutes.delete('/roles/:id', auth(['admin']), ctrl.deleteRole)

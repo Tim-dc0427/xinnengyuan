@@ -16,8 +16,9 @@ async function handleLogin() {
     await authStore.login(form.value)
     ElMessage.success('登录成功')
     router.push('/')
-  } catch {
-    ElMessage.error('用户名或密码错误')
+  } catch (err: any) {
+    const msg = err?.response?.data?.message || '用户名或密码错误'
+    ElMessage.error(msg)
   } finally {
     loading.value = false
   }

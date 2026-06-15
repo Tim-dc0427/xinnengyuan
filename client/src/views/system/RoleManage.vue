@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getRoles, createRole, updateRole, deleteRole } from '@/api/system'
-import { MENU_TREE, ALL_ACTIONS } from '@new-energy/shared'
+import { MENU_TREE, collectLeafPaths } from '@new-energy/shared'
 import type { RoleItem, MenuTreeNode } from '@new-energy/shared'
 import { formatDateTime } from '@/utils/time'
+
+const ALL_LEAF_PATHS = collectLeafPaths(MENU_TREE)
 
 const list = ref<RoleItem[]>([])
 const dialogVisible = ref(false)
@@ -12,12 +14,19 @@ const dialogTitle = ref('新增角色')
 const editingId = ref<string | null>(null)
 const form = ref({ name: '', permissions: { menus: [] as string[], actions: [] as string[] } })
 
-// el-tree ref，用于获取半选节点
+// 每次弹窗重建 tree
+const treeKey = ref(0)
+// tree 的 ref
 const treeRef = ref<any>(null)
+
+// 手动维护的选中 key 列表（只含以 / 开头的叶子 key）
+const checkedMenuKeys = ref<string[]>([])
+// 弹窗打开时要设的初始 keys
+const initialCheckedKeys = ref<string[]>([])
 
 // 默认展开所有节点
 const defaultExpandedKeys = ref<string[]>([])
-function initExpandedKeys() {
+;(function initExpandedKeys() {
   const keys: string[] = []
   function walk(nodes: MenuTreeNode[]) {
     for (const n of nodes) {
@@ -27,12 +36,7 @@ function initExpandedKeys() {
   }
   walk(MENU_TREE)
   defaultExpandedKeys.value = keys
-}
-initExpandedKeys()
-
-// 当前选中的菜单权限 key（包括全选/半选的，el-tree v-model 在 check-strictly=false 时只返回叶子节点的 key）
-// 我们需要保存时过滤：只保留以 / 开头的（真实路由 path）
-const checkedMenuKeys = ref<string[]>([])
+})()
 
 async function load() {
   const { data } = await getRoles()
@@ -43,70 +47,43 @@ function openCreate() {
   dialogTitle.value = '新增角色'
   editingId.value = null
   form.value = { name: '', permissions: { menus: [], actions: [] } }
+  initialCheckedKeys.value = []
   checkedMenuKeys.value = []
+  treeKey.value++
   dialogVisible.value = true
-  nextTick(() => {
-    treeRef.value?.setCheckedKeys([])
-  })
 }
 
 function openEdit(item: RoleItem) {
   dialogTitle.value = '编辑角色'
   editingId.value = item.id
-  form.value = {
-    name: item.name,
-    permissions: {
-      menus: [...item.permissions.menus],
-      actions: item.permissions.actions.includes('*')
-        ? ALL_ACTIONS.map(a => a.value)
-        : [...item.permissions.actions],
-    },
-  }
+
+  const rawMenus = item.permissions.menus
+  const leafKeys = rawMenus.includes('*')
+    ? [...ALL_LEAF_PATHS]
+    : rawMenus.filter(k => ALL_LEAF_PATHS.includes(k))
+
+  form.value = { name: item.name, permissions: { menus: [...rawMenus], actions: [] } }
+  initialCheckedKeys.value = leafKeys
+  checkedMenuKeys.value = leafKeys
+  treeKey.value++
   dialogVisible.value = true
-  // el-tree 的 checked keys：如果是 * 则全选所有叶子，否则用存储的 menus
-  const keys = item.permissions.menus.includes('*')
-    ? collectAllLeafKeys()
-    : [...item.permissions.menus]
-  checkedMenuKeys.value = keys
-  nextTick(() => {
-    treeRef.value?.setCheckedKeys(keys)
-  })
 }
 
-function collectAllLeafKeys(): string[] {
-  const keys: string[] = []
-  function walk(nodes: MenuTreeNode[]) {
-    for (const n of nodes) {
-      if (n.children && n.children.length > 0) {
-        walk(n.children)
-      } else {
-        keys.push(n.key)
-      }
-    }
-  }
-  walk(MENU_TREE)
-  return keys
+// el-tree check 事件 — 手动维护 checkedMenuKeys
+function handleCheck(_node: any, info: { checkedKeys: string[] }) {
+  // 只保留叶子 key（以 / 开头），排除 _group_ 等内部 key
+  checkedMenuKeys.value = info.checkedKeys.filter(k => k.startsWith('/'))
 }
 
 async function submit() {
   if (!form.value.name.trim()) { ElMessage.warning('请输入角色名称'); return }
 
-  // 从 checkedMenuKeys 中提取实际路由 path（排除 _group_ 前缀的 key）
-  const selectedMenus = checkedMenuKeys.value.filter(k => k.startsWith('/'))
-
-  // 判断是否全选了所有菜单
-  const allLeafKeys = collectAllLeafKeys().filter(k => k.startsWith('/'))
-  const menuValue = selectedMenus.length >= allLeafKeys.length ? ['*'] : selectedMenus
-
-  // 判断是否全选了所有功能
-  const actionValue = form.value.permissions.actions.length >= ALL_ACTIONS.length ? ['*'] : form.value.permissions.actions
+  const selected = checkedMenuKeys.value
+  const menuValue = selected.length >= ALL_LEAF_PATHS.length ? ['*'] : selected
 
   const payload = {
     name: form.value.name,
-    permissions: {
-      menus: menuValue,
-      actions: actionValue,
-    },
+    permissions: { menus: menuValue, actions: [] },
   }
 
   try {
@@ -136,10 +113,8 @@ async function remove(item: RoleItem) {
 }
 
 function formatPerms(item: RoleItem): string {
-  const p = item.permissions
-  const menuCount = p.menus.includes('*') ? '全部' : `${p.menus.length} 项`
-  const actionCount = p.actions.includes('*') ? '全部' : `${p.actions.length} 项`
-  return `菜单 ${menuCount}，功能 ${actionCount}`
+  const m = item.permissions.menus
+  return m.includes('*') ? '全部菜单' : `${m.length} 个菜单`
 }
 
 onMounted(load)
@@ -179,13 +154,14 @@ onMounted(load)
           <div class="menu-tree-wrapper">
             <el-tree
               ref="treeRef"
-              v-model="checkedMenuKeys"
+              :key="treeKey"
               :data="MENU_TREE"
               show-checkbox
               node-key="key"
               :default-expanded-keys="defaultExpandedKeys"
+              :default-checked-keys="initialCheckedKeys"
               :expand-on-click-node="false"
-              :check-strictly="false"
+              @check="handleCheck"
               style="max-height: 360px; overflow-y: auto"
             >
               <template #default="{ data }">
@@ -193,13 +169,6 @@ onMounted(load)
               </template>
             </el-tree>
           </div>
-        </el-form-item>
-        <el-form-item label="功能权限">
-          <el-checkbox-group v-model="form.permissions.actions">
-            <el-checkbox v-for="a in ALL_ACTIONS" :key="a.value" :label="a.value" :value="a.value" style="margin-right: 16px; margin-bottom: 4px">
-              {{ a.label }}
-            </el-checkbox>
-          </el-checkbox-group>
         </el-form-item>
       </el-form>
       <template #footer>
