@@ -24,6 +24,18 @@ export class TopologyController {
     }
   }
 
+  async listAvailableNodesByTypeBatch(req: Request, res: Response) {
+    try {
+      const typesStr = req.query.types as string
+      if (!typesStr) return res.status(400).json({ code: 400, message: '缺少参数 types' })
+      const types = typesStr.split(',').map((t) => t.trim()).filter(Boolean)
+      const data = await service.listAvailableNodesByTypeBatch(types)
+      res.json({ code: 200, message: 'ok', data })
+    } catch (e: any) {
+      res.status(500).json({ code: 500, message: e.message || '批量获取节点列表失败' })
+    }
+  }
+
   async createSourceNode(req: Request, res: Response) {
     try {
       const data = await service.createSourceNode(req.body)

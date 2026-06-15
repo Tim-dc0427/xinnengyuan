@@ -138,12 +138,15 @@ const comparisonOption = computed(() => {
 })
 
 onMounted(async () => {
-  stations.value = (await fetchStations()) || []
+  const [stationData, ranges] = await Promise.all([
+    fetchStations().catch(() => null),
+    fetchDataRanges().catch(() => null),
+  ])
+  stations.value = stationData || []
   if (stations.value.length > 0) {
     dynamicStation.value = stations.value[0].id
   }
-  try {
-    const ranges = await fetchDataRanges()
+  if (ranges) {
     const pv = ranges.pv_output_measurements
     if (pv?.minTime && pv?.maxTime) {
       const today = todayStr()
@@ -151,7 +154,7 @@ onMounted(async () => {
       dateRange.value = [pv.minTime.slice(0, 10), endDate]
       dynamicDate.value = endDate
     }
-  } catch { /* 兜底 */ }
+  }
   await loadStats()
   if (dynamicStation.value) await loadDynamic()
 })

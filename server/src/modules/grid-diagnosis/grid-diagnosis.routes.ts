@@ -31,8 +31,10 @@ gridDiagnosisRoutes.get('/equipment/capacity', auth(['admin', 'planner', 'operat
 gridDiagnosisRoutes.get('/equipment/power', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getEquipmentPower)
 gridDiagnosisRoutes.get('/equipment/power-hours', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getAvailableHours)
 gridDiagnosisRoutes.get('/equipment/reliability/:id', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.assessReliability)
+gridDiagnosisRoutes.post('/equipment/reliability/batch', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.assessReliabilityBatch)
 gridDiagnosisRoutes.get('/equipment/lifecycle/:id', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getLifecycle)
 gridDiagnosisRoutes.post('/equipment/lifecycle/predict', auth(['admin', 'planner']), ctrl.predictLife)
+gridDiagnosisRoutes.post('/equipment/lifecycle/predict-batch', auth(['admin', 'planner']), ctrl.predictLifeBatch)
 gridDiagnosisRoutes.post('/equipment/lifecycle/replacement-plan', auth(['admin', 'planner']), ctrl.generateReplacementPlan)
 
 // Voltage
@@ -51,6 +53,7 @@ gridDiagnosisRoutes.get('/events/:id/trace', auth(['admin', 'planner', 'operator
 gridDiagnosisRoutes.get('/power-quality/voltage-fluctuation', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getVoltageFluctuationDetail)
 gridDiagnosisRoutes.get('/power-quality/reliability', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getPowerReliabilityDetail)
 gridDiagnosisRoutes.get('/power-quality/qualification-rate', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getQualificationRateDetail)
+gridDiagnosisRoutes.get('/power-quality/voltage-impact/overview', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getVoltageImpactOverview)
 gridDiagnosisRoutes.get('/power-quality/equipment-impact', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getEquipmentImpact)
 gridDiagnosisRoutes.get('/power-quality/complaint-stats', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getComplaintStats)
 gridDiagnosisRoutes.get('/power-quality/hotspot-distribution', auth(['admin', 'planner', 'operator', 'viewer']), ctrl.getHotspotDistribution)

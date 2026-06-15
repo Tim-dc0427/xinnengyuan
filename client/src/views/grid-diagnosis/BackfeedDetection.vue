@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import StationMap from '@/components/common/StationMap.vue'
-import { fetchStations, fetchStationsSnapshot, detectBackfeed, fetchEquipmentCapacity, fetchEquipmentReliability, fetchEquipmentPower, fetchAvailableHours } from '@/api/grid-diagnosis'
+import { fetchStations, fetchStationsSnapshot, detectBackfeed, fetchEquipmentCapacity, fetchEquipmentReliability, fetchEquipmentReliabilityBatch, fetchEquipmentPower, fetchAvailableHours } from '@/api/grid-diagnosis'
 import type { StationOption, StationSnapshot, EquipmentPowerItem } from '@new-energy/shared'
 
 // ==================== 数据状态 ====================
@@ -146,14 +146,18 @@ async function openEquipmentDrawer() {
       id: e.equipmentId, name: e.equipmentName, type: e.equipmentType,
       capacityKva: e.ratedCapacityKva, voltageKv: e.ratedVoltageKv, currentA: e.ratedCurrentA || 0,
     }))
-    // 并行加载可靠性 + 设备功率
+    // 批量加载可靠性 + 设备功率
     const [, powerData] = await Promise.all([
-      Promise.allSettled(equipmentList.value.map(async (item) => {
+      (async () => {
         try {
-          const rel = await fetchEquipmentReliability(item.id)
-          item.reliability = rel.reliability; item.grade = rel.grade
+          const { items } = await fetchEquipmentReliabilityBatch(equipmentList.value.map((item) => item.id))
+          const relMap = new Map(items.map((r) => [r.equipmentId, r]))
+          equipmentList.value.forEach((item) => {
+            const rel = relMap.get(item.id)
+            if (rel) { item.reliability = rel.reliability; item.grade = rel.grade }
+          })
         } catch { /* 忽略 */ }
-      })),
+      })(),
       selectedStationHour.value ? loadEquipmentPower(stationId, selectedStationHour.value) : Promise.resolve(),
     ])
     await powerData

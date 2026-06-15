@@ -223,6 +223,15 @@ export class TopologyService {
     }
   }
 
+  /** 批量查询多种节点类型 — 1 次请求替代 N 次，避免前端 429 */
+  async listAvailableNodesByTypeBatch(types: string[]) {
+    const result: Record<string, any[]> = {}
+    await Promise.all(types.map(async (type) => {
+      result[type] = await this.listAvailableNodesByType(type)
+    }))
+    return result
+  }
+
   // ==================== 源(SOURCE)节点创建 ====================
   async createSourceNode(data: any) {
     const id = uuid()

@@ -79,8 +79,9 @@ const chartOption = computed(() => {
 })
 
 onMounted(async () => {
-  stations.value = (await fetchStations()) || []
-  storageList.value = (await fetchStorageList()) || []
+  const [stationData, storageData] = await Promise.all([fetchStations(), fetchStorageList()])
+  stations.value = stationData || []
+  storageList.value = storageData || []
   if (stations.value.length > 0) selectedStation.value = stations.value[0].id
   try {
     const ranges = await fetchDataRanges()

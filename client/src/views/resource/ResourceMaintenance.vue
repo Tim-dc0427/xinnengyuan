@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchSolarStations, fetchSolarStation, createSolarStation, deleteSolarStation, batchImportSolarStations, updateSolarStation, fetchEquipment, createEquipment, updateEquipment, fetchModels, bindModelsToStation, fetchSolarStationVersions, toggleStationStatus, hardDeleteSolarStation } from '@/api/resource'
-import { fetchEquipmentReliability, predictLife, generateReplacementPlan } from '@/api/grid-diagnosis'
+import { fetchEquipmentReliability, fetchEquipmentReliabilityBatch, predictLife, fetchPredictLifeBatch, generateReplacementPlan } from '@/api/grid-diagnosis'
 import type { CreateSolarStationPayload } from '@/api/resource'
 import { formatDateTime, formatRelativeTime, todayStr } from '@/utils/time'
 import dayjs from 'dayjs'
@@ -146,25 +146,25 @@ async function loadAll() {
       eqByPlant[key].push(eq)
     })
     equipmentMap.value = eqByPlant
-    // 并行获取可靠性评分（失败则用虚拟数据）
-    const relResults = await Promise.allSettled(
-      allEqs.map((eq: any) => fetchEquipmentReliability(eq.id))
-    )
-    relResults.forEach((r, i) => {
-      if (r.status === 'fulfilled' && r.value) {
-        reliabilityMap.value[allEqs[i].id] = r.value
-      } else {
-        reliabilityMap.value[allEqs[i].id] = generateVirtualReliability(allEqs[i])
-      }
+    // 批量获取可靠性评分（1 次请求替代 N 次，避免 429）
+    try {
+      const equipmentIds = allEqs.map((eq: any) => eq.id)
+      const { items } = await fetchEquipmentReliabilityBatch(equipmentIds)
+      items.forEach((item) => { reliabilityMap.value[item.equipmentId] = item })
+    } catch { /* 失败则对缺失设备用虚拟数据兜底 */ }
+    allEqs.forEach((eq: any) => {
+      if (!reliabilityMap.value[eq.id]) reliabilityMap.value[eq.id] = generateVirtualReliability(eq)
     })
-    // 为储能设备生成寿命数据
+    // 为储能设备批量生成寿命数据（1 次请求替代 M 次，避免 429）
     const storageEqs = allEqs.filter((eq: any) => eq.equipment_type === 'BATTERY')
+    if (storageEqs.length > 0) {
+      try {
+        const { items } = await fetchPredictLifeBatch(storageEqs.map((eq: any) => eq.id))
+        items.forEach((item) => { if (item) lifePredictMap.value[item.equipmentId] = item })
+      } catch { /* 对缺失设备用虚拟数据兜底 */ }
+    }
     storageEqs.forEach((eq: any) => {
-      if (!lifePredictMap.value[eq.id]) {
-        predictLife({ equipmentId: eq.id })
-          .then(data => { if (data) lifePredictMap.value[eq.id] = data })
-          .catch(() => { lifePredictMap.value[eq.id] = generateVirtualLife(eq) })
-      }
+      if (!lifePredictMap.value[eq.id]) lifePredictMap.value[eq.id] = generateVirtualLife(eq)
     })
   } catch { /* ignore */ }
   finally { loading.value = false }
@@ -311,14 +311,11 @@ async function refreshHealthData() {
   healthRefreshing.value = true
   try {
     const allEqs = Object.values(equipmentMap.value).flat()
-    const results = await Promise.allSettled(
-      allEqs.map((eq: any) => fetchEquipmentReliability(eq.id))
-    )
-    results.forEach((r, i) => {
-      if (r.status === 'fulfilled' && r.value) {
-        reliabilityMap.value[allEqs[i].id] = r.value
-      }
-    })
+    if (allEqs.length > 0) {
+      const equipmentIds = allEqs.map((eq: any) => eq.id)
+      const { items } = await fetchEquipmentReliabilityBatch(equipmentIds)
+      items.forEach((item) => { reliabilityMap.value[item.equipmentId] = item })
+    }
     // 同时刷新异常时间基准
     anomalyRefreshKey.value++
     ElMessage.success('健康数据已刷新')

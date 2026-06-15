@@ -139,6 +139,12 @@ export async function fetchEquipmentReliability(equipmentId: string) {
   return res.data?.data as { equipmentId: string; reliability: number; failureRate: number; grade: string }
 }
 
+/** 批量设备可靠性 — 1 次请求替代 N 次单条查询，避免 429 */
+export async function fetchEquipmentReliabilityBatch(equipmentIds: string[]) {
+  const res = await apiClient.post('/api/v1/grid-diagnosis/equipment/reliability/batch', { equipment_ids: equipmentIds })
+  return res.data?.data as { items: Array<{ equipmentId: string; reliability: number; failureRate: number; grade: string }> }
+}
+
 // ==================== 设备级功率（按时段） ====================
 export async function fetchEquipmentPower(stationId: string, time: string) {
   const res = await apiClient.get('/api/v1/grid-diagnosis/equipment/power', { params: { stationId, time } })
@@ -172,6 +178,17 @@ export async function predictLife(params: { equipmentId: string }) {
     replacementDate?: string
     monthlyHistory?: Array<{ month: string; sohPct: number; cycleCount: number; cumulativeCycles: number }>
   }
+}
+
+/** 批量设备寿命预测 — 1 次请求替代 M 次单条查询，避免 429 */
+export async function fetchPredictLifeBatch(equipmentIds: string[]) {
+  const res = await apiClient.post('/api/v1/grid-diagnosis/equipment/lifecycle/predict-batch', { equipment_ids: equipmentIds })
+  return res.data?.data as { items: Array<{
+    equipmentId: string; currentAgeYears: number; designLifeYears: number; remainingLifeYears: number
+    degradationRate: number; isBattery: boolean; sohPct?: number; failureThresholdPct?: number
+    cumulativeCycles?: number; estimatedRemainingMonths?: number; replacementDate?: string
+    monthlyHistory?: Array<{ month: string; sohPct: number; cycleCount: number; cumulativeCycles: number }>
+  }> }
 }
 
 export async function generateReplacementPlan(params: { plantId?: string; stationId?: string }) {
@@ -213,6 +230,17 @@ export async function fetchHotspotDistribution(query: { startDate: string; endDa
 export async function fetchComplaintTickets(query?: { isVoltageRelated?: string; industry?: string; zone?: string }) {
   const res = await apiClient.get('/api/v1/grid-diagnosis/power-quality/complaint-tickets', { params: query })
   return res.data?.data as ComplaintTicketItem[]
+}
+
+/** BFF 聚合：电压影响概览 — 1 次请求替代 4 次，避免 429 */
+export async function fetchVoltageImpactOverview(query: { startDate: string; endDate: string }) {
+  const res = await apiClient.get('/api/v1/grid-diagnosis/power-quality/voltage-impact/overview', { params: query })
+  return res.data?.data as {
+    equipmentImpact: EquipmentImpactItem[]
+    complaintStats: ComplaintStatsItem[]
+    hotspotDistribution: HotspotItem[]
+    complaintTickets: ComplaintTicketItem[]
+  }
 }
 
 export async function fetchEquipmentEvents(equipmentId: string) {

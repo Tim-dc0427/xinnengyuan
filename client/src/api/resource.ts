@@ -168,6 +168,12 @@ export async function fetchNodesByType(nodeType: string) {
   return res?.data?.data as any[]
 }
 
+/** 批量查询多种节点类型 — 1 次请求替代 N 次，避免 429 */
+export async function fetchNodesByTypeBatch(types: string[]) {
+  const res = await apiClient.get('/api/v1/resource/topology/nodes-by-type/batch', { params: { types: types.join(',') } })
+  return res?.data?.data as Record<string, any[]>
+}
+
 export async function createSourceNode(data: { name: string; capacityKw?: number; voltageLevel?: string; zone?: string; longitude?: number; latitude?: number }) {
   const res = await apiClient.post('/api/v1/resource/topology/source-nodes', data)
   return res?.data?.data

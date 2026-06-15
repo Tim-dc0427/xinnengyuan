@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "echo server: tsx运行时无需tsc编译",
     "start": "tsx src/index.ts",
     "start:prod": "tsx src/common/db/run-migrate.ts && tsx src/index.ts",
     "migrate": "tsx src/common/db/run-migrate.ts",

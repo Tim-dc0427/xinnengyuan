@@ -7,7 +7,7 @@ import {
   batchDeleteScenarios, copyScenario, fetchScenarioVersions, restoreVersion, exportScenarios,
   previewScenario as callPreviewScenario, batchCopyScenarios,
 } from '@/api/scenario'
-import { fetchNodesByType } from '@/api/resource'
+import { fetchNodesByType, fetchNodesByTypeBatch } from '@/api/resource'
 import type { ScenarioTopology } from '@new-energy/shared'
 import GridEditorTab from './components/GridEditorTab.vue'
 import PreviewTopology from './components/PreviewTopology.vue'
@@ -182,12 +182,10 @@ async function loadData() {
 }
 
 async function loadResources() {
-  await Promise.all([
-    loadNodesByType('SOURCE'),
-    loadNodesByType('GRID'),
-    loadNodesByType('LOAD'),
-    loadNodesByType('STORAGE'),
-  ])
+  const result = await fetchNodesByTypeBatch(['SOURCE', 'GRID', 'LOAD', 'STORAGE'])
+  for (const type of ['SOURCE', 'GRID', 'LOAD', 'STORAGE']) {
+    if (result[type]) nodesByType.value[type] = result[type]
+  }
 }
 
 function addAccessPoint() {

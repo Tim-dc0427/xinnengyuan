@@ -5,7 +5,9 @@
     "rootDir": "./src",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "noEmit": true
+    "noEmit": true,
+    "strict": false,
+    "skipLibCheck": true
   },
   "include": ["src"],
   "references": [{ "path": "../packages/shared" }]

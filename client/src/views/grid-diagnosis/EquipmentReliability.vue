@@ -2,7 +2,7 @@
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import StationMap from '@/components/common/StationMap.vue'
-import { fetchStations, fetchEquipmentCapacity, fetchEquipmentReliability } from '@/api/grid-diagnosis'
+import { fetchStations, fetchEquipmentCapacity, fetchEquipmentReliability, fetchEquipmentReliabilityBatch } from '@/api/grid-diagnosis'
 import type { StationOption, EquipmentCapacityResult } from '@new-energy/shared'
 
 interface ReliabilityRow extends EquipmentCapacityResult {
@@ -23,13 +23,27 @@ const filteredList = ref<ReliabilityRow[]>([])         // 按电站筛选
 
 const typeLabelMap: Record<string, string> = { TRANSFORMER: '变压器', BREAKER: '断路器', CABLE: '电缆', SWITCH: '开关设备', INVERTER: '逆变器', BATTERY: '储能电池' }
 
-// 页面加载：获取全部设备并评估可靠性
+// 页面加载：获取全部设备并批量评估可靠性
 async function initAllReliability() {
   loading.value = true
   try {
     const data = await fetchEquipmentCapacity({})
     allEquipment.value = data.map((e) => ({ ...e, reliabilityGrade: e.grade || '?' }))
-    for (const eq of allEquipment.value) assessOne(eq)
+    // 批量评估可靠性（1 次请求替代 N 次，避免 429）
+    if (allEquipment.value.length > 0) {
+      const equipmentIds = allEquipment.value.map((e) => e.equipmentId)
+      const { items } = await fetchEquipmentReliabilityBatch(equipmentIds)
+      const relMap = new Map(items.map((r) => [r.equipmentId, r]))
+      allEquipment.value.forEach((eq) => {
+        const rel = relMap.get(eq.equipmentId)
+        if (rel) {
+          eq.reliability = rel.reliability
+          eq.failureRate = rel.failureRate
+          eq.reliabilityGrade = rel.grade
+          eq.assessing = false
+        }
+      })
+    }
   } catch {
     ElMessage.error('加载设备数据失败')
   } finally {

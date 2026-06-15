@@ -98,7 +98,7 @@
   * 这是最常用的便捷方法
   */
  export function audit(
-   req: { user?: { id?: string; username?: string }; ip?: string; headers?: Record<string, string> },
+   req: { user?: { id?: string; username?: string }; ip?: string; headers?: Record<string, string | string[] | undefined> },
    action: string,
    resourceType: string,
    resourceId?: string | null,

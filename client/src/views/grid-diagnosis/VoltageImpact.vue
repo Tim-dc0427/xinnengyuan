@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import 'echarts-gl'
 import ChartContainer from '@/components/common/ChartContainer.vue'
-import { fetchEquipmentImpact, fetchComplaintStats, fetchHotspotDistribution, fetchStations, fetchComplaintTickets, fetchEquipmentEvents } from '@/api/grid-diagnosis'
+import { fetchEquipmentImpact, fetchComplaintStats, fetchHotspotDistribution, fetchStations, fetchComplaintTickets, fetchEquipmentEvents, fetchVoltageImpactOverview } from '@/api/grid-diagnosis'
 import { fetchDataRanges } from '@/api/system'
 import type { ComplaintTicketItem } from '@new-energy/shared'
 import { todayStr } from '@/utils/time'
@@ -82,27 +82,34 @@ async function loadData() {
   loading.value = true
   const list = await fetchStations()
   stations.value = list || []
-  const [equip, complain, hotspot, ticketList] = await Promise.all([
-    fetchEquipmentImpact({ startDate: dateRange.value[0], endDate: dateRange.value[1] }),
-    fetchComplaintStats({ startDate: dateRange.value[0], endDate: dateRange.value[1] }),
-    fetchHotspotDistribution({ startDate: dateRange.value[0], endDate: dateRange.value[1] }),
-    fetchComplaintTickets(),
-  ])
-  equipmentImpact.value = equip || []
-  complaintStats.value = complain || []
-  hotspotData.value = hotspot || []
-  tickets.value = ticketList || []
-  if (equip?.length && !selectedEquip.value) { selectedEquip.value = equip[0].id; await loadEquipEvents() }
+  // BFF 聚合：1 次请求替代 4 次，避免 429
+  const overview = await fetchVoltageImpactOverview({ startDate: dateRange.value[0], endDate: dateRange.value[1] })
+  equipmentImpact.value = overview.equipmentImpact || []
+  complaintStats.value = overview.complaintStats || []
+  hotspotData.value = overview.hotspotDistribution || []
+  tickets.value = overview.complaintTickets || []
+  if (overview.equipmentImpact?.length && !selectedEquip.value) { selectedEquip.value = overview.equipmentImpact[0].id; await loadEquipEvents() }
   loading.value = false
 }
 
 async function loadEquipEvents() {
-  if (!selectedEquip.value) return
+  if (!selectedEquip.value) {
+    equipEvents.value = []
+    typeAvgRise.value = 0
+    isWeak.value = false
+    noEquipData.value = false
+    return
+  }
   const data = await fetchEquipmentEvents(selectedEquip.value) || {}
   equipEvents.value = data.events || []
   typeAvgRise.value = data.typeAvgRise || 0
   isWeak.value = data.isWeak || false
   noEquipData.value = data.noData || false
+}
+
+function onFilterChange() {
+  selectedEquip.value = filteredEquip.value[0]?.id || ''
+  loadEquipEvents()
 }
 
 function renderHotspot3D() {
@@ -256,13 +263,13 @@ const complaintChartOption = computed(() => ({
     <div class="filter-bar">
       <div class="filter-group" v-if="activeTab === 'equipment'">
         <span class="filter-label">电站</span>
-        <el-select v-model="filterStation" size="small" style="width:160px" clearable placeholder="全部电站" @change="filterType = ''; selectedEquip = ''">
+        <el-select v-model="filterStation" size="small" style="width:160px" clearable placeholder="全部电站" @change="filterType = ''; onFilterChange()">
           <el-option v-for="s in stations" :key="s.id" :label="s.stationName" :value="s.stationName" />
         </el-select>
       </div>
       <div class="filter-group" v-if="activeTab === 'equipment'">
         <span class="filter-label">设备分类</span>
-        <el-select v-model="filterType" size="small" style="width:120px" clearable placeholder="全部分类" @change="selectedEquip = ''">
+        <el-select v-model="filterType" size="small" style="width:120px" clearable placeholder="全部分类" @change="onFilterChange()">
           <el-option v-for="t in equipTypes" :key="t" :label="t" :value="t" />
         </el-select>
       </div>

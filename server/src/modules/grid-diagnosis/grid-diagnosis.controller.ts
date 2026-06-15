@@ -80,6 +80,15 @@ export class GridDiagnosisController {
     res.json({ code: 200, message: 'ok', data })
   }
 
+  assessReliabilityBatch = async (req: Request, res: Response) => {
+    const { equipment_ids } = req.body
+    if (!equipment_ids || !Array.isArray(equipment_ids) || equipment_ids.length === 0) {
+      return res.status(400).json({ code: 400, message: '缺少参数 equipment_ids' })
+    }
+    const data = await this.service.assessReliabilityBatch(equipment_ids)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
   getLifecycle = async (req: Request, res: Response) => {
     const data = await this.service.getLifecycle(req.params.id)
     res.json({ code: 200, message: 'ok', data })
@@ -87,6 +96,15 @@ export class GridDiagnosisController {
 
   predictLife = async (req: Request, res: Response) => {
     const data = await this.service.predictLife(req.body)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
+  predictLifeBatch = async (req: Request, res: Response) => {
+    const { equipment_ids } = req.body
+    if (!equipment_ids || !Array.isArray(equipment_ids) || equipment_ids.length === 0) {
+      return res.status(400).json({ code: 400, message: '缺少参数 equipment_ids' })
+    }
+    const data = await this.service.predictLifeBatch(equipment_ids)
     res.json({ code: 200, message: 'ok', data })
   }
 
@@ -139,6 +157,11 @@ export class GridDiagnosisController {
 
   getQualificationRateDetail = async (req: Request, res: Response) => {
     const data = await this.service.getQualificationRateDetail(req.query as any)
+    res.json({ code: 200, message: 'ok', data })
+  }
+
+  getVoltageImpactOverview = async (req: Request, res: Response) => {
+    const data = await this.service.getVoltageImpactOverview(req.query as any)
     res.json({ code: 200, message: 'ok', data })
   }
 

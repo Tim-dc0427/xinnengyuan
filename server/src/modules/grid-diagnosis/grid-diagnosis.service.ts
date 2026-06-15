@@ -1542,6 +1542,25 @@ export class GridDiagnosisService {
     return { equipmentId, reliability, failureRate, grade }
   }
 
+  /** 批量设备可靠性评估 — 一次查询替代 N 次单条查询，避免前端 429 */
+  async assessReliabilityBatch(equipmentIds: string[]) {
+    if (!equipmentIds.length) return { items: [] }
+    const rows = await db('equipment')
+      .whereIn('id', equipmentIds)
+      .select('id', 'failure_rate')
+    const resultMap = new Map(rows.map((r) => [r.id, r.failure_rate]))
+    const items = equipmentIds.map((id) => {
+      const failureRate = resultMap.get(id) ?? 0.02
+      const reliability = Math.exp(-failureRate)
+      let grade: string
+      if (reliability >= 0.99) grade = 'A'
+      else if (reliability >= 0.97) grade = 'B'
+      else grade = 'C'
+      return { equipmentId: id, reliability, failureRate, grade }
+    })
+    return { items }
+  }
+
   /** 获取指定小时设备级功率（按额定容量比例分配） */
   async getEquipmentPower(stationId: string, hourTime: string) {
     // 获取该电站所有运行中设备
@@ -1681,6 +1700,98 @@ export class GridDiagnosisService {
         cumulativeCycles: r.cumulative_cycles,
       })),
     }
+  }
+
+  /** 批量设备寿命预测 — 一次查询替代 N 次单条查询，避免前端 429 */
+  async predictLifeBatch(equipmentIds: string[]) {
+    if (!equipmentIds.length) return { items: [] }
+    // 一次查全部设备
+    const equipmentRows = await db('equipment').whereIn('id', equipmentIds)
+    const eqMap = new Map(equipmentRows.map((e) => [e.id, e]))
+    // 一次查全部电池循环记录
+    const cycleRows = await db('battery_cycle_records')
+      .whereIn('equipment_id', equipmentIds)
+      .orderBy('record_month', 'asc')
+    // 按 equipment_id 分组
+    const cycleMap = new Map<string, any[]>()
+    cycleRows.forEach((r) => {
+      const arr = cycleMap.get(r.equipment_id) || []
+      arr.push(r)
+      cycleMap.set(r.equipment_id, arr)
+    })
+
+    const items = equipmentIds.map((id) => {
+      const equipment = eqMap.get(id)
+      if (!equipment) return null
+      const installDate = new Date(equipment.installation_date)
+      const ageYears = (Date.now() - installDate.getTime()) / (365.25 * 86400000)
+      const calendarLifeYears = Math.max(0, equipment.design_life_years - ageYears)
+
+      const cycleRecords = cycleMap.get(id) || []
+      if (!cycleRecords.length) {
+        return {
+          equipmentId: id,
+          currentAgeYears: +ageYears.toFixed(1),
+          designLifeYears: equipment.design_life_years,
+          remainingLifeYears: +calendarLifeYears.toFixed(1),
+          degradationRate: +(ageYears / equipment.design_life_years).toFixed(3),
+          isBattery: false,
+        }
+      }
+
+      const latest = cycleRecords[cycleRecords.length - 1]
+      const sohPct = latest.soh_pct
+      const cumulativeCycles = latest.cumulative_cycles
+      const cumulativeEnergyMwh = latest.cumulative_energy_mwh
+      const recentRecords = cycleRecords.slice(-6)
+      const degradationRates: number[] = []
+      for (let i = 1; i < recentRecords.length; i++) {
+        degradationRates.push(recentRecords[i - 1].soh_pct - recentRecords[i].soh_pct)
+      }
+      const avgMonthlyDegradation = degradationRates.length > 0
+        ? degradationRates.reduce((a, b) => a + b, 0) / degradationRates.length
+        : 0.15
+      const failureSoh = 80
+      const sohRemaining = Math.max(0, sohPct - failureSoh)
+      const estimatedRemainingMonths = avgMonthlyDegradation > 0 ? sohRemaining / avgMonthlyDegradation : 60
+      const estimatedRemainingYears = estimatedRemainingMonths / 12
+      const recentMonthlyCycles = recentRecords.map((r) => r.cycle_count)
+      const avgMonthlyCycles = recentMonthlyCycles.reduce((a, b) => a + b, 0) / recentMonthlyCycles.length
+      const estimatedRemainingCycles = Math.round(avgMonthlyCycles * estimatedRemainingMonths)
+      const avgDod = +(recentRecords.reduce((a, r) => a + r.avg_dod_pct, 0) / recentRecords.length).toFixed(1)
+      const avgTemp = +(recentRecords.reduce((a, r) => a + r.avg_temp_c, 0) / recentRecords.length).toFixed(1)
+      const replacementDate = new Date()
+      replacementDate.setMonth(replacementDate.getMonth() + Math.round(estimatedRemainingMonths))
+
+      return {
+        equipmentId: id,
+        currentAgeYears: +ageYears.toFixed(1),
+        designLifeYears: equipment.design_life_years,
+        remainingLifeYears: +Math.min(calendarLifeYears, estimatedRemainingYears).toFixed(1),
+        degradationRate: +avgMonthlyDegradation.toFixed(3),
+        isBattery: true,
+        sohPct: +sohPct.toFixed(1),
+        failureThresholdPct: failureSoh,
+        cumulativeCycles,
+        cumulativeEnergyMwh: +cumulativeEnergyMwh.toFixed(1),
+        avgMonthlyCycles: Math.round(avgMonthlyCycles),
+        estimatedRemainingCycles,
+        estimatedRemainingMonths: Math.round(estimatedRemainingMonths),
+        avgDodPct: avgDod,
+        avgTempC: avgTemp,
+        replacementDate: replacementDate.toISOString().split('T')[0],
+        monthlyHistory: cycleRecords.slice(-12).map((r) => ({
+          month: r.record_month,
+          cycleCount: r.cycle_count,
+          avgDodPct: r.avg_dod_pct,
+          avgTempC: r.avg_temp_c,
+          sohPct: r.soh_pct,
+          cumulativeCycles: r.cumulative_cycles,
+        })),
+      }
+    })
+
+    return { items: items.filter(Boolean) }
   }
 
   async generateReplacementPlan(params: { plantId?: string }) {
@@ -2348,6 +2459,17 @@ export class GridDiagnosisService {
     }
 
     return { hourlyLedger, trendData, trendKeys: allKeys, anomalyPoints: topAnomalies }
+  }
+
+  /** BFF 聚合：电压影响概览 — 1 次请求替代前端 4 次，避免 429 */
+  async getVoltageImpactOverview(query: { startDate: string; endDate: string }) {
+    const [equipmentImpact, complaintStats, hotspotDistribution, complaintTickets] = await Promise.all([
+      this.getEquipmentImpact(query),
+      this.getComplaintStats(query),
+      this.getHotspotDistribution(query),
+      this.getComplaintTickets({}),
+    ])
+    return { equipmentImpact, complaintStats, hotspotDistribution, complaintTickets }
   }
 
   async getEquipmentImpact(query: { startDate: string; endDate: string }) {

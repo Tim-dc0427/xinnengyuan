@@ -43,6 +43,7 @@ resourceRoutes.post('/relationships', auth(['admin', 'planner']), ctrl.createRel
 
 // Topology
 resourceRoutes.get('/topology', auth(['admin', 'planner', 'operator', 'viewer']), topoCtrl.getPvGridTopology)
+resourceRoutes.get('/topology/nodes-by-type/batch', auth(['admin', 'planner', 'operator', 'viewer']), topoCtrl.listAvailableNodesByTypeBatch)
 resourceRoutes.get('/topology/nodes-by-type/:type', auth(['admin', 'planner', 'operator', 'viewer']), topoCtrl.listAvailableNodesByType)
 resourceRoutes.post('/topology/source-nodes', auth(['admin', 'planner']), topoCtrl.createSourceNode)
 resourceRoutes.post('/topology/grid-nodes', auth(['admin', 'planner']), topoCtrl.createGridNode)

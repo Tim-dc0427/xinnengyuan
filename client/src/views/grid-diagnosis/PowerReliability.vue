@@ -15,19 +15,21 @@ const topoConn = ref('')
 const topoLine = ref('')
 
 onMounted(async () => {
-  const list = await fetchStations()
+  const [list, ranges] = await Promise.all([
+    fetchStations().catch(() => null),
+    fetchDataRanges().catch(() => null),
+  ])
   stations.value = list || []
   if (list?.length) {
     selectedPoint.value = list[0].id
-    try {
-      const ranges = await fetchDataRanges()
+    if (ranges) {
       const pv = ranges.pv_output_measurements
       if (pv?.minTime && pv?.maxTime) {
         const today = todayStr()
         const endDate = today < pv.maxTime.slice(0, 10) ? today : pv.maxTime.slice(0, 10)
         dateRange.value = [pv.minTime.slice(0, 10), endDate]
       }
-    } catch { /* 兜底 */ }
+    }
     await loadData()
   }
 })
