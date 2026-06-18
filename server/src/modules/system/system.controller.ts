@@ -1,9 +1,22 @@
 import { Request, Response } from 'express'
 import { SystemService } from './system.service.js'
 import { audit } from '../../common/audit.service.js'
+import { decryptPassword } from '../../common/services/auth.service.js'
 
 export class SystemController {
   private service = new SystemService()
+
+  /** 将请求体中的密码字段解密（RSA → 明文） */
+  private decryptBodyPassword(body: Record<string, unknown>): Record<string, unknown> {
+    if (body.password && typeof body.password === 'string') {
+      try {
+        body = { ...body, password: decryptPassword(body.password) }
+      } catch {
+        // 解密失败视为明文密码（兼容旧客户端）
+      }
+    }
+    return body
+  }
 
   // ==================== 部门 ====================
   getDepartments = async (_req: Request, res: Response) => {
@@ -73,16 +86,18 @@ export class SystemController {
 
   createUser = async (req: Request, res: Response) => {
     try {
-      const data = await this.service.createUser(req.body)
-      audit(req, 'CREATE', 'user', data.id, `创建用户「${req.body.username}」`, null, { username: req.body.username, displayName: req.body.displayName, roleId: req.body.roleId })
+      const body = this.decryptBodyPassword(req.body)
+      const data = await this.service.createUser(body)
+      audit(req, 'CREATE', 'user', data.id, `创建用户「${body.username}」`, null, { username: body.username, displayName: body.displayName, roleId: body.roleId })
       res.json({ code: 200, message: 'ok', data })
     } catch (e: any) { res.status(400).json({ code: 400, message: e.message }) }
   }
 
   updateUser = async (req: Request, res: Response) => {
     try {
-      await this.service.updateUser(req.params.id, req.body)
-      audit(req, 'UPDATE', 'user', req.params.id, `修改用户「${req.body.username || req.params.id}」`, null, req.body)
+      const body = this.decryptBodyPassword(req.body)
+      await this.service.updateUser(req.params.id, body)
+      audit(req, 'UPDATE', 'user', req.params.id, `修改用户「${body.username || req.params.id}」`, null, body)
       res.json({ code: 200, message: 'ok' })
     } catch (e: any) { res.status(400).json({ code: 400, message: e.message }) }
   }

@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { fetchAlerts, acknowledgeAlert } from '@/api/grid-diagnosis'
+import { fetchAlerts, acknowledgeAlert, fetchStations } from '@/api/grid-diagnosis'
 import { POWER_QUALITY_ALERT_TYPES } from '@new-energy/shared'
 
+const router = useRouter()
 const loading = ref(false)
 const alerts = ref<any[]>([])
+const stationMap = ref<Record<string, string>>({})
 const thresholds = reactive([
   { indicator: '电压波动率', key: 'voltage', level1: 3, level2: 5, level3: 7, unit: '%' },
   { indicator: '实际可靠性率', key: 'reliability', level1: 99.999, level2: 99.990, level3: 99.950, unit: '%' },
@@ -16,6 +19,11 @@ onMounted(async () => {
   if (saved) {
     try { const vals = JSON.parse(saved); thresholds.forEach((t, i) => { if (vals[i]) Object.assign(t, vals[i]) }) } catch {}
   }
+  // 加载电站映射表
+  try {
+    const list = await fetchStations()
+    if (list) list.forEach((s: any) => { stationMap.value[s.id] = s.stationName || s.station_name })
+  } catch {}
   await loadData()
 })
 
@@ -26,21 +34,35 @@ async function loadData() {
     (POWER_QUALITY_ALERT_TYPES as readonly string[]).includes(a.source_type)
   ).map((a: any, i: number) => {
     const meta = typeof a.metadata === 'string' ? JSON.parse(a.metadata || '{}') : (a.metadata || {})
+    // 关联设备：优先取metadata中的名称，否则从source_id查电站表
+    const stationName = meta.stationName || stationMap.value[a.source_id] || ''
     return {
       ...a,
       _no: `ALT-${(a.triggered_at || '').slice(0, 10).replace(/-/g, '')}-${String(i + 1).padStart(3, '0')}`,
       _levelLabel: a.alert_level === 'CRITICAL' ? '三级' : a.alert_level === 'WARN' ? '二级' : '一级',
       _sourceLabel: (({ VOLTAGE_FLUCTUATION: '电压波动率', POWER_SUPPLY_RELIABILITY: '实际可靠性率' }) as Record<string, string>)[a.source_type] || a.source_type,
-      _pvOutput: a.source_type === 'POWER_SUPPLY_RELIABILITY'
-        ? (meta.saifi != null ? `SAIFI ${meta.saifi}` : '-')
-        : (meta.activePowerKw != null ? `${meta.activePowerKw}kW` : '-'),
-      _load: a.source_type === 'POWER_SUPPLY_RELIABILITY'
-        ? (meta.saidi != null ? `SAIDI ${meta.saidi}h` : '-')
-        : (meta.loadKw != null ? `${meta.loadKw}kW` : '-'),
+      _stationName: stationName,
+      _pvOutput: meta.activePowerKw != null ? `${meta.activePowerKw} kW` : '-',
+      _load: meta.loadKw != null ? `${meta.loadKw} kW` : '-',
       _fluctuation: meta.fluctuationPct != null ? `${meta.fluctuationPct}%` : meta.reliabilityPct != null ? `${meta.reliabilityPct}%` : '-',
+      _hasCurve: a.source_type === 'VOLTAGE_FLUCTUATION' && meta.stationId,
+      _curveParams: {
+        pointId: meta.stationId || a.source_id,
+        date: (a.triggered_at || '').slice(0, 10),
+      },
     }
   })
   loading.value = false
+}
+
+function goVoltageCurve(row: any) {
+  const p = row._curveParams
+  if (p?.pointId) {
+    router.push({
+      path: '/grid-diagnosis/power-quality/fluctuation',
+      query: { pointId: p.pointId, date: p.date },
+    })
+  }
 }
 
 function saveThresholds() {
@@ -112,17 +134,19 @@ async function handleAck(row: any) {
           </template>
         </el-table-column>
         <el-table-column prop="_sourceLabel" label="指标" width="90" />
-        <el-table-column prop="title" label="告警内容" min-width="150" />
+        <el-table-column prop="_stationName" label="关联电站" width="150" show-overflow-tooltip />
+        <el-table-column prop="title" label="告警内容" min-width="180" show-overflow-tooltip />
         <el-table-column prop="_fluctuation" label="偏差值" width="90" />
-        <el-table-column prop="_pvOutput" label="并网参数" width="110" />
-        <el-table-column prop="_load" label="负荷/停电时长" width="120" />
+        <el-table-column prop="_pvOutput" label="光伏出力" width="110" />
+        <el-table-column prop="_load" label="负荷" width="100" />
         <el-table-column label="状态" width="90">
           <template #default="{ row }">
             <el-tag :type="row.acknowledged_at ? 'success' : 'danger'" size="small">{{ row.acknowledged_at ? '已确认' : '待处理' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="70" fixed="right">
+        <el-table-column label="操作" width="130" fixed="right">
           <template #default="{ row }">
+            <el-button v-if="row._hasCurve" type="primary" link size="small" @click="goVoltageCurve(row)">电压曲线</el-button>
             <el-button v-if="!row.acknowledged_at" type="primary" link size="small" @click="handleAck(row)">确认</el-button>
           </template>
         </el-table-column>

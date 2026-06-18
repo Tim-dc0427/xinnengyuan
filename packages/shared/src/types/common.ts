@@ -36,7 +36,7 @@ export interface UserInfo {
 // Auth
 export interface LoginRequest {
   username: string
-  password: string
+  encryptedPassword: string
 }
 
 export interface LoginResponse {

@@ -1,11 +1,58 @@
 import jwt from 'jsonwebtoken'
 import bcrypt from 'bcryptjs'
+import crypto from 'crypto'
 import { db } from '../../config/database.js'
 import { authConfig } from '../../config/auth.js'
 import type { LoginResponse, UserInfo, UserRole } from '@new-energy/shared'
 
+// ========== RSA 密钥对（启动时生成，进程生命周期内不变） ==========
+let rsaPublicKeyPem: string = ''
+let rsaPrivateKeyPem: string = ''
+
+function ensureKeyPair(): void {
+  if (rsaPrivateKeyPem && rsaPublicKeyPem) return
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  })
+  rsaPublicKeyPem = publicKey
+  rsaPrivateKeyPem = privateKey
+}
+
+/** 获取 RSA 公钥（PEM），供前端加密密码使用 */
+export function getPublicKey(): string {
+  ensureKeyPair()
+  return rsaPublicKeyPem
+}
+
+/** 用 RSA 私钥解密前端加密的密码（导出供其他控制器使用） */
+export function decryptPassword(encryptedBase64: string): string {
+  ensureKeyPair()
+  const buffer = Buffer.from(encryptedBase64, 'base64')
+  const decrypted = crypto.privateDecrypt(
+    { key: rsaPrivateKeyPem, padding: crypto.constants.RSA_PKCS1_PADDING },
+    buffer,
+  )
+  return decrypted.toString('utf8')
+}
+
 export class AuthService {
-  async login(username: string, password: string): Promise<LoginResponse> {
+  /**
+   * 登录
+   * @param username 用户名
+   * @param encryptedPassword 前端 RSA 加密后的密码（Base64），或明文密码（兼容过渡期）
+   */
+  async login(username: string, encryptedPassword: string): Promise<LoginResponse> {
+    // 解密密码：优先尝试 RSA 解密，失败则视为明文（兼容未升级的客户端）
+    let password: string
+    try {
+      password = decryptPassword(encryptedPassword)
+    } catch {
+      // 解密失败说明是明文密码（旧客户端），直接使用
+      password = encryptedPassword
+    }
+
     const user = await db('users')
       .join('roles', 'users.role_id', 'roles.id')
       .where('users.username', username)

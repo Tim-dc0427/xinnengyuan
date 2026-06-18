@@ -13,11 +13,11 @@ const loading = ref(false)
 async function handleLogin() {
   loading.value = true
   try {
-    await authStore.login(form.value)
+    await authStore.login({ username: form.value.username, encryptedPassword: form.value.password })
     ElMessage.success('登录成功')
     router.push('/')
   } catch (err: any) {
-    const msg = err?.response?.data?.message || '用户名或密码错误'
+    const msg = err?.response?.data?.message || err?.message || '用户名或密码错误'
     ElMessage.error(msg)
   } finally {
     loading.value = false

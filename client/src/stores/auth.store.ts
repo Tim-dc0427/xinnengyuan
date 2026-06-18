@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { UserInfo, LoginRequest, LoginResponse, RolePermissions } from '@new-energy/shared'
 import { apiClient } from '@/api/client'
+import { getPublicKey, login as loginApi } from '@/api/auth'
+import JSEncrypt from 'jsencrypt'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<UserInfo | null>(null)
@@ -28,8 +30,20 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function login(credentials: LoginRequest) {
-    const { data } = await apiClient.post<{ code: number; data: LoginResponse }>('/api/v1/auth/login', credentials)
-    const result = data.data
+    // 1. 获取 RSA 公钥
+    const publicKey = await getPublicKey()
+
+    // 2. 用公钥加密密码
+    const encrypt = new JSEncrypt()
+    encrypt.setPublicKey(publicKey)
+    const encryptedPassword = encrypt.encrypt(credentials.encryptedPassword)
+    if (!encryptedPassword) {
+      throw new Error('密码加密失败')
+    }
+
+    // 3. 发送加密后的密码
+    const result = await loginApi(credentials.username, encryptedPassword)
+
     accessToken.value = result.accessToken
     refreshToken.value = result.refreshToken
     user.value = result.user

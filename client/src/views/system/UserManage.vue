@@ -6,6 +6,8 @@ import { getRoles, getDepartments } from '@/api/system'
 import { validatePassword } from '@new-energy/shared'
 import type { UserManageItem, RoleItem, Department, PasswordCheckResult } from '@new-energy/shared'
 import { formatDateTime } from '@/utils/time'
+import { getPublicKey } from '@/api/auth'
+import JSEncrypt from 'jsencrypt'
 
 const list = ref<UserManageItem[]>([])
 const total = ref(0)
@@ -96,12 +98,26 @@ async function submit() {
   }
 
   try {
+    // 加密密码
+    let encryptedPwd = ''
+    if (form.value.password) {
+      const publicKey = await getPublicKey()
+      const encrypt = new JSEncrypt()
+      encrypt.setPublicKey(publicKey)
+      encryptedPwd = encrypt.encrypt(form.value.password) || ''
+      if (!encryptedPwd) { ElMessage.error('密码加密失败'); return }
+    }
+
     if (editingId.value) {
       const payload = { ...form.value }
-      if (!payload.password) delete (payload as any).password
+      if (!payload.password) {
+        delete (payload as any).password
+      } else {
+        payload.password = encryptedPwd
+      }
       await updateUser(editingId.value, payload)
     } else {
-      await createUser(form.value as any)
+      await createUser({ ...form.value, password: encryptedPwd } as any)
     }
     ElMessage.success(editingId.value ? '更新成功' : '创建成功')
     dialogVisible.value = false

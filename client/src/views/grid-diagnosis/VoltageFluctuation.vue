@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, shallowRef } from 'vue'
+import { useRoute } from 'vue-router'
 import ChartContainer from '@/components/common/ChartContainer.vue'
 import { fetchStations, fetchVoltageFluctuation } from '@/api/grid-diagnosis'
 import type { VoltageFluctuation } from '@new-energy/shared'
 import dayjs from 'dayjs'
+
+const route = useRoute()
 
 const selectedPoint = ref('')
 const selectedDate = ref('')
@@ -106,11 +109,14 @@ onMounted(async () => {
   try {
     const list = await fetchStations(); stations.value = list || []
     if (list?.length) {
-      selectedPoint.value = list[0].id
-      const d = dayjs().subtract(1, 'day'); selectedDate.value = d.format('YYYY-MM-DD')
+      // 从告警页面跳转时，通过 query 参数定位到具体电站和日期
+      const qPointId = route.query.pointId as string | undefined
+      const qDate = route.query.date as string | undefined
+      selectedPoint.value = qPointId || list[0].id
+      selectedDate.value = qDate || dayjs().subtract(1, 'day').format('YYYY-MM-DD')
       await loadData()
       if (!result.value?.timeSeries?.length) {
-        const d2 = d.subtract(1, 'day'); selectedDate.value = d2.format('YYYY-MM-DD'); await loadData()
+        const d2 = dayjs(selectedDate.value).subtract(1, 'day'); selectedDate.value = d2.format('YYYY-MM-DD'); await loadData()
       }
     }
   } catch { noData.value = true }

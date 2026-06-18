@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { usePlanningStore } from '@/stores/planning.store'
@@ -19,6 +19,41 @@ const potentialSites = ref<PotentialSite[]>([])
 const selectedCandidate = ref<CandidatePoint | null>(null)
 const selectedEval = ref<ComprehensiveEvaluation | null>(null)
 const evalDialogVisible = ref(false)
+const sortField = ref('comprehensiveScore')
+const sortOrder = ref(-1) // -1 降序, 1 升序
+const sortOptions = [
+  { value: 'comprehensiveScore', label: '综合评分' },
+  { value: 'recommendedCapacityKw', label: '推荐容量' },
+  { value: 'absorptionCapacityKw', label: '消纳能力' },
+  { value: 'transmissionLineLengthKm', label: '送出距离' },
+  { value: 'transmissionCost', label: '送出成本' },
+  { value: 'landCost', label: '土地成本' },
+  { value: 'scoresAbsorption', label: '消纳评分' },
+  { value: 'scoresTransmission', label: '通道评分' },
+  { value: 'scoresEconomic', label: '经济评分' },
+]
+function getSortVal(c: CandidatePoint, field: string): number {
+  switch (field) {
+    case 'comprehensiveScore': return c.comprehensiveScore
+    case 'recommendedCapacityKw': return c.recommendedCapacityKw
+    case 'absorptionCapacityKw': return c.absorptionCapacityKw
+    case 'transmissionLineLengthKm': return c.transmissionLineLengthKm
+    case 'transmissionCost': return c.transmissionCost
+    case 'landCost': return c.landCost
+    case 'scoresAbsorption': return c.scores?.absorption ?? 0
+    case 'scoresTransmission': return c.scores?.transmission ?? 0
+    case 'scoresEconomic': return c.scores?.economic ?? 0
+    default: return 0
+  }
+}
+const sortedCandidates = computed(() => {
+  const arr = [...candidates.value]
+  arr.sort((a, b) => (getSortVal(a, sortField.value) - getSortVal(b, sortField.value)) * sortOrder.value)
+  return arr
+})
+function toggleSort(field: string) {
+  if (sortField.value === field) { sortOrder.value *= -1 } else { sortField.value = field; sortOrder.value = -1 }
+}
 const constraintDialogVisible = ref(false)
 const LNG_MIN = 119.75, LNG_MAX = 120.25, LNG_SPAN = LNG_MAX - LNG_MIN
 const LAT_MIN = 30.15, LAT_MAX = 30.52, LAT_SPAN = LAT_MAX - LAT_MIN
@@ -211,37 +246,65 @@ onMounted(() => {
 
         <div class="chart-panel">
           <div class="chart-panel-title">候选接入点列表</div>
-          <el-table :data="candidates" stripe size="small" v-loading="loading">
+          <div class="sort-bar">
+            <span class="sort-label">优先级排序：</span>
+            <el-select v-model="sortField" size="small" style="width:130px" @change="sortOrder = -1">
+              <el-option v-for="o in sortOptions" :key="o.value" :label="o.label" :value="o.value" />
+            </el-select>
+            <el-button size="small" @click="sortOrder *= -1" style="margin-left:6px">
+              {{ sortOrder === -1 ? '降序 ↓' : '升序 ↑' }}
+            </el-button>
+            <span class="sort-hint">（点击列标题也可切换排序）</span>
+          </div>
+          <el-table :data="sortedCandidates" stripe size="small" v-loading="loading">
             <el-table-column prop="locationDesc" label="候选区域" min-width="150" />
             <el-table-column label="坐标" width="150">
               <template #default="{ row }">{{ row.longitude?.toFixed(2) }}, {{ row.latitude?.toFixed(2) }}</template>
             </el-table-column>
-            <el-table-column label="综合评分" width="90">
+            <el-table-column width="110">
+              <template #header>
+                <span class="sortable-header" :class="{ active: sortField === 'comprehensiveScore' }" @click="toggleSort('comprehensiveScore')">综合评分 {{ sortField === 'comprehensiveScore' ? (sortOrder === -1 ? '↓' : '↑') : '' }}</span>
+              </template>
               <template #default="{ row }">
                 <span :style="{ color: scoreColor(row.comprehensiveScore), fontWeight: 600 }">{{ row.comprehensiveScore }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="推荐容量" width="100">
+            <el-table-column width="120">
+              <template #header>
+                <span class="sortable-header" :class="{ active: sortField === 'recommendedCapacityKw' }" @click="toggleSort('recommendedCapacityKw')">推荐容量 {{ sortField === 'recommendedCapacityKw' ? (sortOrder === -1 ? '↓' : '↑') : '' }}</span>
+              </template>
               <template #default="{ row }">{{ (row.recommendedCapacityKw / 1000).toFixed(1) }} MW</template>
             </el-table-column>
-            <el-table-column label="消纳能力" width="100">
+            <el-table-column width="120">
+              <template #header>
+                <span class="sortable-header" :class="{ active: sortField === 'absorptionCapacityKw' }" @click="toggleSort('absorptionCapacityKw')">消纳能力 {{ sortField === 'absorptionCapacityKw' ? (sortOrder === -1 ? '↓' : '↑') : '' }}</span>
+              </template>
               <template #default="{ row }">{{ (row.absorptionCapacityKw / 1000).toFixed(1) }} MW</template>
             </el-table-column>
-            <el-table-column label="送出距离" width="90">
+            <el-table-column width="100">
+              <template #header>
+                <span class="sortable-header" :class="{ active: sortField === 'transmissionLineLengthKm' }" @click="toggleSort('transmissionLineLengthKm')">送出距离 {{ sortField === 'transmissionLineLengthKm' ? (sortOrder === -1 ? '↓' : '↑') : '' }}</span>
+              </template>
               <template #default="{ row }">{{ row.transmissionLineLengthKm }} km</template>
             </el-table-column>
-            <el-table-column label="送出成本" width="100">
+            <el-table-column width="120">
+              <template #header>
+                <span class="sortable-header" :class="{ active: sortField === 'transmissionCost' }" @click="toggleSort('transmissionCost')">送出成本 {{ sortField === 'transmissionCost' ? (sortOrder === -1 ? '↓' : '↑') : '' }}</span>
+              </template>
               <template #default="{ row }">{{ (row.transmissionCost / 10000).toFixed(0) }} 万元</template>
             </el-table-column>
-            <el-table-column label="土地成本" width="110">
+            <el-table-column width="120">
+              <template #header>
+                <span class="sortable-header" :class="{ active: sortField === 'landCost' }" @click="toggleSort('landCost')">土地成本 {{ sortField === 'landCost' ? (sortOrder === -1 ? '↓' : '↑') : '' }}</span>
+              </template>
               <template #default="{ row }">{{ (row.landCost / 10000).toFixed(0) }} 万元</template>
             </el-table-column>
             <el-table-column label="评分详情" width="180">
               <template #default="{ row }">
                 <el-space>
-                  <el-tag size="small" type="primary">消纳{{ row.scores?.absorption }}</el-tag>
-                  <el-tag size="small" type="success">通道{{ row.scores?.transmission }}</el-tag>
-                  <el-tag size="small" type="warning">经济{{ row.scores?.economic }}</el-tag>
+                  <el-tag size="small" type="primary" style="cursor:pointer" @click="toggleSort('scoresAbsorption')">消纳{{ row.scores?.absorption }}</el-tag>
+                  <el-tag size="small" type="success" style="cursor:pointer" @click="toggleSort('scoresTransmission')">通道{{ row.scores?.transmission }}</el-tag>
+                  <el-tag size="small" type="warning" style="cursor:pointer" @click="toggleSort('scoresEconomic')">经济{{ row.scores?.economic }}</el-tag>
                 </el-space>
               </template>
             </el-table-column>
@@ -436,6 +499,21 @@ onMounted(() => {
 .eval-row + .eval-row {
   border-top: 1px solid #f5f5f5;
 }
+
+.sort-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: #fafbfc;
+  border-bottom: 1px solid #ebeef5;
+}
+.sort-label { font-size: 13px; color: #606266; }
+.sort-hint { font-size: 12px; color: #c0c4cc; margin-left: 8px; }
+
+.sortable-header { cursor: pointer; user-select: none; color: #606266; }
+.sortable-header:hover { color: #267F7B; }
+.sortable-header.active { color: #267F7B; font-weight: 600; }
 .eval-label {
   color: #909399;
 }
